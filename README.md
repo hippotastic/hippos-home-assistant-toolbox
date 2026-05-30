@@ -91,11 +91,27 @@ Run ESLint:
 pnpm lint
 ```
 
+ESLint also checks YAML files and reports overly long lines as warnings. Use those warnings as a cue to split complex Jinja expressions or introduce local variables before publishing.
+
 Apply automatic ESLint fixes:
 
 ```sh
 pnpm lint:fix
 ```
+
+Format annotated Jinja template blocks in blueprints:
+
+```sh
+pnpm format:blueprints
+```
+
+Check blueprint formatting without writing files:
+
+```sh
+pnpm format:blueprints --check
+```
+
+The formatter acts on folded scalar blocks that contain `{#- ... #}` Jinja comments. See `tools/ha-blueprint-formatter` for the exact style rules.
 
 Run the lightweight YAML syntax check:
 

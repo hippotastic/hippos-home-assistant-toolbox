@@ -5,7 +5,9 @@ import tsParser from '@typescript-eslint/parser'
 import eslintConfigPrettier from 'eslint-config-prettier'
 import noOnlyTests from 'eslint-plugin-no-only-tests'
 import eslintPluginPrettier from 'eslint-plugin-prettier'
+import ymlPlugin from 'eslint-plugin-yml'
 import globals from 'globals'
+import * as yamlParser from 'yaml-eslint-parser'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -66,7 +68,7 @@ const tsRules = {
 
 export default [
 	{
-		ignores: ['**/node_modules/**'],
+		ignores: ['**/node_modules/**', 'pnpm-lock.yaml'],
 	},
 	js.configs.recommended,
 	eslintConfigPrettier,
@@ -89,6 +91,51 @@ export default [
 		files: ['**/.*.js', '**/.*.cjs', '**/.*.mjs'],
 		rules: {
 			indent: ['warn', 2, { SwitchCase: 1 }],
+		},
+	},
+	{
+		files: ['**/*.yaml', '**/*.yml'],
+		languageOptions: {
+			parser: yamlParser,
+		},
+		plugins: {
+			yml: ymlPlugin,
+		},
+		rules: {
+			'brace-style': 'off',
+			'comma-spacing': 'off',
+			'consistent-this': 'off',
+			'func-call-spacing': 'off',
+			indent: 'off',
+			'keyword-spacing': 'off',
+			'max-len': [
+				'warn',
+				{
+					code: 140,
+					ignoreComments: true,
+					ignorePattern: '^\\s*source_url:',
+					ignoreUrls: true,
+					tabWidth: 2,
+				},
+			],
+			'no-empty': 'off',
+			'no-invalid-this': 'off',
+			'no-irregular-whitespace': 'off',
+			'no-unused-vars': 'off',
+			'prettier/prettier': 'off',
+			quotes: 'off',
+			semi: 'off',
+			'space-before-blocks': 'off',
+			'space-before-function-paren': 'off',
+			'yml/block-mapping-colon-indicator-newline': 'warn',
+			'yml/block-mapping-question-indicator-newline': 'warn',
+			'yml/block-sequence-hyphen-indicator-newline': 'warn',
+			'yml/no-empty-document': 'warn',
+			'yml/no-empty-key': 'warn',
+			'yml/no-empty-mapping-value': 'off',
+			'yml/no-empty-sequence-entry': 'warn',
+			'yml/no-irregular-whitespace': 'off',
+			'yml/plain-scalar': 'off',
 		},
 	},
 	...tsTypeCheckedConfigs,

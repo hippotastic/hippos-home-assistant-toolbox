@@ -3,8 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "eslint . --max-warnings 0",
+    "format:blueprints": "node tools/ha-blueprint-formatter/format.ts",
+    "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "lint:strict": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "validate": "node tools/ha-blueprint-validator/validate.ts"
   },
@@ -21,8 +23,10 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-no-only-tests": "^3.4.0",
     "eslint-plugin-prettier": "^5.5.6",
+    "eslint-plugin-yml": "^3.4.0",
     "globals": "^17.6.0",
     "prettier": "^3.8.3",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "yaml-eslint-parser": "^2.0.0"
   }
 }
