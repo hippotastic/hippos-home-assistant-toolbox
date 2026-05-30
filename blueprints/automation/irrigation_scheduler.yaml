@@ -1,0 +1,369 @@
+blueprint:
+  name: Hippo's Irrigation Scheduler
+  description: >-
+    Automatically calculate an irrigation schedule for the given zones and perform watering when needed.
+    (V2)
+  domain: automation
+  author: Hippo
+  homeassistant:
+    min_version: 2024.6.0
+  input:
+    zone_section:
+      name: " 🌳 Irrigation scheduler settings"
+      collapsed: false
+      input:
+        zone_status_helper_entities:
+          name: Irrigation zone status helpers
+          description: |
+            All the irrigation zones to be controlled by this scheduler, represented by their the status helper entities.
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: input_text
+
+        master_pump_entity:
+          name: Master pump switch
+          description: |
+            An optional switch to control a master pump. If set, the pump will be turned on while any zones are watering and turned off afterwards.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain: switch
+
+        irrigation_start_time:
+          name: Irrigation start time
+          description: |
+            The time of day when watering should start, given that any zones need watering.
+          default: "23:00:00"
+          selector:
+            time:
+
+trigger_variables:
+  # Configuration inputs
+  zone_status_helper_entities: !input zone_status_helper_entities
+  master_pump_entity: !input master_pump_entity
+  irrigation_start_time: !input irrigation_start_time
+
+triggers:
+  # The automation was enabled or any settings were changed
+  - trigger: template
+    value_template: "{% if this is defined and this != None %}{{ is_state(this.entity_id, ['on', 'true']) }}{% endif %}"
+    id: "trigger_automation_enabled"
+  # Home Assistant was restarted
+  - trigger: homeassistant
+    event: start
+    id: "trigger_ha_restarted"
+  # Any of the configured zone status helpers changed its state value
+  - trigger: state
+    entity_id: !input zone_status_helper_entities
+    not_to:
+      - "unavailable"
+      - "unknown"
+      - "none"
+      - "query failed"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:05') }}"
+    id: "trigger_zone_calculation_changed"
+  # Any zone was started or stopped according to the zone template sensor
+  # The configured irrigation start time was reached
+  - trigger: time
+    at:
+      - !input irrigation_start_time
+    id: "trigger_start_time_reached"
+
+condition:
+  # If we were triggered by a zone status helper value change, ignore schedule changes coming from us
+  - >-
+      {{
+        not (
+          trigger.id == 'trigger_zone_calculation_changed' and
+          trigger.from_state.state and
+          trigger.to_state.state and
+          trigger.from_state.state | regex_replace('"next_.*?":".*?"', '') ==
+            trigger.to_state.state | regex_replace('"next_.*?":".*?"', '')
+        )
+      }}
+
+# If the automation is triggered again while still being executed, restart it
+mode: restart
+max_exceeded: silent
+
+variables:
+  event: >-
+    {%- if trigger.platform in ['state', 'template', 'time', 'homeassistant'] %}
+      Running due to {{ trigger.id }}
+    {%- else %}
+      Running manually (through UI)
+    {%- endif %}
+  # Load all zones from the configured status helper entities
+  all_zones: >-
+    {%- set ns = namespace(zones=[]) %}
+    {%- for zone_helper in zone_status_helper_entities %}
+      {%- set zone = states(zone_helper) | default('{}') | regex_replace('^(?!\{.*\}$).*', '{}') | from_json %}
+      {%- set zone = dict(zone, **{ 'helper_entity': zone_helper, 'helper_index': loop.index0 }) %}
+      {%- if zone.valve %}
+        {%- set ns.zones = ns.zones + [zone] %}
+      {%- endif %}
+    {%- endfor %}
+    {{ ns.zones }}
+  # If we were triggered by a Home Assistant restart, or any zone valve states are unavailable,
+  # add a small startup delay to allow everything to initialize
+  startup_delay: >-
+    {%- set ns = namespace(delay=0) %}
+    {%- if trigger.id == 'trigger_ha_restarted' %}
+      {%- set ns.delay = 30 %}
+    {%- endif %}
+    {%- for zone in all_zones %}
+      {%- if states(zone.valve) not in ['on', 'off'] %}
+        {%- set ns.delay = 30 %}
+      {%- endif %}
+    {%- endfor %}
+    {{ ns.delay }}
+  # Find the first zone (if any) where the current time is between the zone's next_start and next_end
+  currently_scheduled_zone: >-
+    {%- set ns = namespace(zone=None) %}
+    {%- for zone in all_zones %}
+      {%- if ns.zone == None and zone.next_start and zone.next_end and now() > zone.next_start | as_datetime and now() < zone.next_end | as_datetime %}
+        {%- set ns.zone = zone %}
+      {%- endif %}
+    {%- endfor %}
+    {{ ns.zone }}
+  # If there is a currently scheduled zone, calculate its remaining runtime in seconds
+  remaining_runtime_seconds: >-
+    {%- if currently_scheduled_zone != None %}
+      {{ [0, (currently_scheduled_zone.next_end | as_datetime - now()).total_seconds() | round(0, 'ceil')] | max }}
+    {%- else %}
+      0
+    {%- endif %}
+  # Check if we are currently responsible for controlling the watering zones
+  # - True if there is any zone where the current time is between the zone's next_start and next_end + 30min,
+  #   or last_end is less than 30min ago
+  is_controlling_zones: >-
+    {%- set ns = namespace(result=false) %}
+    {%- for zone in all_zones %}
+      {%- if ns.result == false and (
+        (zone.next_start and zone.next_end and now() > zone.next_start | as_datetime and now() < zone.next_end | as_datetime + timedelta(minutes=30)) or
+        (zone.last_end and now() < zone.last_end | as_datetime + timedelta(minutes=30))
+      ) %}
+        {%- set ns.result = true %}
+      {%- endif %}
+    {%- endfor %}
+    {{ ns.result }}
+  # Get the next possible irrigation start time, which is either today or tomorrow at the configured irrigation_start_time
+  next_irrigation_start_time: >-
+    {%- set todays_start_time = today_at(irrigation_start_time) %}
+    {%- if todays_start_time > now() %}
+      {{ todays_start_time }}
+    {%- else %}
+      {{ todays_start_time + timedelta(days=1) }}
+    {%- endif %}
+
+actions:
+  # Log why we are running
+  - action: logbook.log
+    data:
+      name: "Hippo's Irrigation Scheduler:"
+      message: "{{ event }}, is_controlling_zones={{ is_controlling_zones }}, has currently_scheduled_zone={{ currently_scheduled_zone != None }}, remaining_runtime_seconds={{ remaining_runtime_seconds }}"
+
+  # Optionally wait for a few seconds to allow zones to initialize
+  - delay:
+      seconds: "{{ startup_delay }}"
+
+  #region If we are currently responsible for controlling zones, stop all zones except currently_scheduled_zone
+  - if:
+      - condition: template
+        value_template: "{{ is_controlling_zones }}"
+    then:
+      - repeat:
+          for_each: "{{ all_zones }}"
+          sequence:
+            - if:
+                - condition: template
+                  value_template: "{{ states(repeat.item.valve) == 'on' and repeat.item != currently_scheduled_zone }}"
+              then:
+                - action: logbook.log
+                  data:
+                    name: "Hippo's Irrigation Scheduler:"
+                    message: "Stopped watering of zone {{ repeat.item.helper_entity }}"
+                # Stop the zone
+                - action: switch.turn_off
+                  target:
+                    entity_id: "{{ repeat.item.valve }}"
+                # If we need to set/update the zone's last_end property, do so now
+                - if:
+                    - condition: template
+                      value_template: "{{ (not repeat.item.last_end) or (not repeat.item.next_start) or (repeat.item.last_end | as_datetime < repeat.item.next_start | as_datetime) }}"
+                  then:
+                    - action: input_text.set_value
+                      target:
+                        entity_id: "{{ repeat.item.helper_entity }}"
+                      data:
+                        value: >-
+                          {{
+                            dict(states(repeat.item.helper_entity) | default('{}') | regex_replace('^(?!\{.*\}$).*', '{}') | from_json, **{
+                              'last_end': now().isoformat()
+                            }) | to_json
+                          }}
+  #endregion
+
+  #region If we are currently responsible for controlling zones and there is no currently_scheduled_zone, stop the master pump if it's still on
+  - if:
+      - condition: template
+        value_template: "{{ is_controlling_zones and currently_scheduled_zone == None and master_pump_entity and states(master_pump_entity) == 'on' }}"
+    then:
+      - delay:
+          seconds: 10
+      - action: switch.turn_off
+        target:
+          entity_id: "{{ master_pump_entity }}"
+  #endregion
+
+  #region If there is a currently_scheduled_zone, ensure it's watering and wait until its next_end
+  - if:
+      - condition: template
+        value_template: "{{ currently_scheduled_zone != None }}"
+    then:
+      - action: logbook.log
+        data:
+          name: "Hippo's Irrigation Scheduler:"
+          message: "{{ iif(states(currently_scheduled_zone.valve) == 'on', 'Continuing to water', 'Starting to water') }} zone {{ currently_scheduled_zone.helper_entity }} until {{ currently_scheduled_zone.next_end }} ({{ remaining_runtime_seconds }} seconds left)"
+      # If a master pump was configured, and it's currently off, turn it on and wait for it to be ready
+      - if:
+          - condition: template
+            value_template: "{{ master_pump_entity and states(master_pump_entity) != 'on' }}"
+        then:
+          - action: switch.turn_on
+            target:
+              entity_id: "{{ master_pump_entity }}"
+          - delay:
+              seconds: 10
+      # Start the zone in case it's not watering yet
+      - action: switch.turn_on
+        target:
+          entity_id: "{{ currently_scheduled_zone.valve }}"
+      # Let it run for its remaining runtime
+      - delay:
+          seconds: "{{ remaining_runtime_seconds }}"
+      # Set last_end to track that we finished watering the zone AND to cause a recursive call of this script
+      # which will take care of stopping the zone and immediately starting the next one (if any) or scheduling new runs
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ currently_scheduled_zone.helper_entity }}"
+        data:
+          value: >-
+            {{
+              dict(states(currently_scheduled_zone.helper_entity) | default('{}') | regex_replace('^(?!\{.*\}$).*', '{}') | from_json, **{
+                'last_end': now().isoformat()
+              }) | to_json
+            }}
+      # Wait for 10 seconds, which should be enough to stop this script due to the recursive call
+      - delay:
+          seconds: 10
+      # If we're still running now, log an error and stop the zone
+      - action: logbook.log
+        data:
+          name: "Hippo's Irrigation Scheduler:"
+          message: "Recursive call seems to have failed after finishing zone {{ currently_scheduled_zone.helper_entity }}, stopping zone manually"
+      - action: switch.turn_off
+        target:
+          entity_id: "{{ currently_scheduled_zone.valve }}"
+  #endregion
+
+  #region If there is no currently_scheduled_zone, recalculate the watering schedule now
+  - if:
+      - condition: template
+        value_template: "{{ currently_scheduled_zone == None }}"
+    then:
+      - action: logbook.log
+        data:
+          name: "Hippo's Irrigation Scheduler:"
+          message: "Creating or updating irrigation schedule"
+      - variables:
+          scheduled_zones: >-
+            {%- set ns = namespace(zones=[], scheduled_zones=[]) %}
+            {#- Create a list of all zones, adding an earliest_start_time property to each zone #}
+            {%- for zone in all_zones %}
+              {#- By default, the earliest_start_time is the next irrigation schedule start time #}
+              {%- set earliest_start_time = next_irrigation_start_time | as_datetime %}
+              {#- If the zone's last_end is known, respect the configured interval #}
+              {%- if zone.last_end %}
+                {#- Determine when the zone's last irrigation schedule was started #}
+                {%- set same_day_irrigation_schedule_start = (zone.last_end | as_datetime).date() | as_datetime | as_local + irrigation_start_time | as_timedelta %}
+                {%- set last_irrigation_schedule_start = iif(same_day_irrigation_schedule_start < zone.last_end | as_datetime, same_day_irrigation_schedule_start, same_day_irrigation_schedule_start - timedelta(days=1)) %}
+                {#- Add the watering interval to it and postpone earliest_start_time if needed #}
+                {%- set last_irrigation_plus_watering_interval = last_irrigation_schedule_start + timedelta(days=zone.interval) %}
+                {%- set earliest_start_time = iif(last_irrigation_plus_watering_interval > earliest_start_time, last_irrigation_plus_watering_interval, earliest_start_time) %}
+              {%- endif %}
+              {%- set ns.zones = ns.zones + [dict(zone, **{ 'earliest_start_time': earliest_start_time.isoformat() })] %}
+            {%- endfor %}
+            {#- Sort zones by their earliest start time and index #}
+            {%- set ns.zones = ns.zones | sort(attribute='helper_index') | sort(attribute='earliest_start_time') %}
+            {#- Start scheduling #}
+            {%- set ns.end_time = now() %}
+            {%- for zone in ns.zones %}
+              {#- Schedule the zone if it has a positive calculated runtime #}
+              {%- if zone.runtime > 0 %}
+                {%- set earliest_start_time = zone.earliest_start_time | as_datetime %}
+                {%- set ns.next_time = iif(earliest_start_time > ns.end_time, earliest_start_time, ns.end_time) %}
+                {%- set ns.end_time = ns.next_time + timedelta(minutes=zone.runtime) %}
+                {%- set ns.scheduled_zones = ns.scheduled_zones + [
+                  dict(zone, **{
+                    'next_start': ns.next_time.isoformat(),
+                    'next_end': ns.end_time.isoformat()
+                  })
+                ] %}
+              {%- else %}
+                {%- set ns.scheduled_zones = ns.scheduled_zones + [zone] %}
+              {%- endif %}
+            {%- endfor %}
+            {{ ns.scheduled_zones | to_json }}
+
+      # - service: logbook.log
+      #   data:
+      #     name: "Hippo's Irrigation Scheduler:"
+      #     message: "Scheduled zones: {{ scheduled_zones }}"
+
+      #region Apply the updated schedule to the status helper entities
+      - repeat:
+          for_each: "{{ scheduled_zones }}"
+          sequence:
+            # Check if the zone has a positive calculated runtime
+            - if:
+                - condition: template
+                  value_template: "{{ repeat.item.runtime > 0 }}"
+              then:
+                # Yes, update the zone's next_start and next_end properties
+                - action: input_text.set_value
+                  target:
+                    entity_id: "{{ repeat.item.helper_entity }}"
+                  data:
+                    value: >-
+                      {{
+                        dict(states(repeat.item.helper_entity) | default('{}') | regex_replace('^(?!\{.*\}$).*', '{}') | from_json, **{
+                          'next_start': repeat.item.next_start,
+                          'next_end': repeat.item.next_end
+                        }) | to_json
+                      }}
+              else:
+                # No, remove all schedule-related properties (if any)
+                - action: input_text.set_value
+                  target:
+                    entity_id: "{{ repeat.item.helper_entity }}"
+                  data:
+                    value: >-
+                      {{
+                        dict(
+                          states(repeat.item.helper_entity) | default('{}') | regex_replace('^(?!\{.*\}$).*', '{}') | from_json |
+                          dictsort |
+                          rejectattr('0', 'eq', 'next_start') |
+                          rejectattr('0', 'eq', 'next_end') |
+                          list
+                        ) | to_json
+                      }}
+      #endregion
+      - action: logbook.log
+        data:
+          name: "Hippo's Irrigation Scheduler:"
+          message: "Finished scheduling"
+  #endregion

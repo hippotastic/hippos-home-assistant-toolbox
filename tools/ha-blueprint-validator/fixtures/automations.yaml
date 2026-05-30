@@ -1,0 +1,40 @@
+- id: validate_cover_automation
+  alias: Validate Hippo's Cover Automation
+  use_blueprint:
+    path: hippotastic/cover_automation.yaml
+    input:
+      cover_entity: cover.fixture_cover
+      cover_status_helper_entity: input_text.fixture_cover_status
+      automatic_control_enabled_entity: input_boolean.fixture_automatic_control
+      sun_protection_entity: input_boolean.fixture_sun_protection
+      privacy_mode_entity: input_boolean.fixture_privacy_mode
+      night_mode_entity: input_boolean.fixture_night_mode
+      lockout_prevention_entity: input_boolean.fixture_lockout_prevention
+
+- id: validate_irrigation_scheduler
+  alias: Validate Hippo's Irrigation Scheduler
+  use_blueprint:
+    path: hippotastic/irrigation_scheduler.yaml
+    input:
+      zone_status_helper_entities:
+        - input_text.fixture_zone_status
+      master_pump_entity: switch.fixture_master_pump
+
+- id: validate_irrigation_zone_calculation
+  alias: Validate Hippo's Irrigation Zone Calculation
+  use_blueprint:
+    path: hippotastic/irrigation_zone_calculation.yaml
+    input:
+      valve_entity: switch.fixture_valve
+      status_helper_entity: input_text.fixture_zone_status
+      rainfall_percentage_of_last_24h_entity: sensor.fixture_rainfall_percentage
+      max_temperature_of_last_24h_entity: sensor.fixture_temperature
+
+- id: validate_sensor_state_machine
+  alias: Validate Hippo's Sensor-based State Machine
+  use_blueprint:
+    path: hippotastic/sensor_state_machine.yaml
+    input:
+      input_sensors:
+        - input_boolean.fixture_motion
+      state_entity: input_boolean.fixture_state

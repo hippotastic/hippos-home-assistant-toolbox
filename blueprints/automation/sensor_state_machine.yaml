@@ -1,0 +1,304 @@
+blueprint:
+  name: Hippo's Sensor-based State Machine
+  description: >-
+    Runs a configurable list of "on actions" when any of the defined sensors are on,
+    and runs a list of "off actions" when they all remain off for a configurable duration.
+    Supports optional conditions that must be true to allow switching to "on",
+    and an optional maximum "on" duration to prevent staying in the "on" state too long.
+    (V1)
+  domain: automation
+  author: Hippo
+  homeassistant:
+    min_version: 2024.6.0
+  input:
+    input_sensors:
+      name: Input sensors
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+            - input_boolean
+            - light
+            - switch
+          multiple: true
+
+    condition_entities_on:
+      name: Additional conditions that must be "on"
+      description: >
+        If given, these entities must ALL be "on" to allow the resulting state to be "on".
+
+        Example: Only allow motion in a room to turn on the lights when it is dark enough.
+      default: []
+      selector:
+        entity:
+          multiple: true
+
+    condition_entities_off:
+      name: Additional conditions that must be "off"
+      description: >
+        If given, these entities must ALL be "off" to allow the resulting state to be "on".
+
+        Example: Only allow motion in a room to turn on the lights when the sleep mode is off.
+      default: []
+      selector:
+        entity:
+          multiple: true
+
+    state_entity:
+      name: State entity
+      description: >
+        Stores the current state. This can either be an input toggle just for state storage,
+        or an actual light or switch.
+        
+        The automation will automatically turn this entity on or off when switching to a new state,
+        which allows controlling a light or switch without even having to specify any actions below.
+
+        You can prevent this default behavior by referencing the state entity in one or both lists
+        of actions below - then you are responsible for toggling it when switching to this state.
+      selector:
+        entity:
+          domain:
+            - input_boolean
+            - light
+            - switch
+
+    off_delay_minutes:
+      name: Off delay (minutes)
+      description: Wait time after all sensors are "off" before switching to the "off" state.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 0.1
+          unit_of_measurement: min
+          mode: box
+
+    max_on_duration_minutes:
+      name: Maximum "on" duration (minutes)
+      description: >
+        If any sensors remain on longer than this duration,
+        they are considered to be stuck and the state is switched to "off".
+        Set to 0 to disable.
+      default: 120
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: min
+          mode: box
+
+    on_actions:
+      name: Actions to run when switching to "on"
+      default: []
+      selector:
+        action: {}
+
+    off_actions:
+      name: Actions to run when switching to "off"
+      default: []
+      selector:
+        action: {}
+
+mode: queued
+max: 20
+
+trigger_variables:
+  input_sensors: !input input_sensors
+  condition_entities_on_raw: !input condition_entities_on
+  condition_entities_on: "{{ condition_entities_on_raw | default([]) }}"
+  condition_entities_off_raw: !input condition_entities_off
+  condition_entities_off: "{{ condition_entities_off_raw | default([]) }}"
+  state_entity: !input state_entity
+  state_domain: "{{ state_entity.split('.')[0] }}"
+  off_delay_minutes_raw: !input off_delay_minutes
+  off_delay_minutes: "{{ off_delay_minutes_raw | float(5) }}"
+  max_on_duration_minutes_raw: !input max_on_duration_minutes
+  max_on_duration_minutes: "{{ max_on_duration_minutes_raw | int(0) }}"
+  startup_period_seconds: 30
+
+trigger:
+  # Trigger: The automation configuration was just changed
+  - id: "trigger_config"
+    trigger: template
+    value_template: "{% if this is defined and this != None %}{{ is_state(this.entity_id, ['on', 'true']) }}{% endif %}"
+
+  # Trigger: The automation configuration was changed off_delay_minutes ago
+  - id: "trigger_config_delayed"
+    trigger: template
+    value_template: "{% if this is defined and this != None %}{{ is_state(this.entity_id, ['on', 'true']) }}{% endif %}"
+    for:
+      minutes: "{{ off_delay_minutes }}"
+
+  # Trigger: At least one sensor was just turned on
+  - id: check_turn_on_sensor
+    platform: state
+    entity_id: !input input_sensors
+    from: "off"
+    to: "on"
+
+  # Trigger: All sensors were turned off, and this state persists for at least off_delay_minutes
+  - id: check_turn_off_sensor
+    platform: template
+    value_template: >-
+      {% set startup_end = as_datetime(as_timestamp(states('sensor.uptime'), 0) + startup_period_seconds) %}
+      {% set sensors = expand(input_sensors) | rejectattr('state', 'in', ['unknown', 'unavailable']) | list %}
+      {% set all_off = (sensors | count) > 0 and (sensors | selectattr('state', 'eq', 'off') | list | count) == (sensors | count) %}
+      {{ now() > startup_end and all_off }}
+    for:
+      minutes: "{{ off_delay_minutes }}"
+
+  # Trigger: All conditions were just met
+  - id: check_turn_on_conditions
+    platform: template
+    value_template: >-
+      {% set startup_end = as_datetime(as_timestamp(states('sensor.uptime'), 0) + startup_period_seconds) %}
+      {% set conds_on = expand(condition_entities_on) | list %}
+      {% set conds_off = expand(condition_entities_off) | list %}
+      {% set conds_defined = (conds_on | count) > 0 or (conds_off | count) > 0 %}
+      {% set all_conds_on_met = (conds_on | selectattr('state', 'eq', 'on') | list | count) == (conds_on | count) %}
+      {% set all_conds_off_met = (conds_off | selectattr('state', 'eq', 'off') | list | count) == (conds_off | count) %}
+      {{ now() > startup_end and conds_defined and all_conds_on_met and all_conds_off_met }}
+
+  # Trigger: All conditions are no longer met
+  - id: check_turn_off_conditions
+    platform: template
+    value_template: >-
+      {% set startup_end = as_datetime(as_timestamp(states('sensor.uptime'), 0) + startup_period_seconds) %}
+      {% set conds_on = expand(condition_entities_on) | list %}
+      {% set conds_off = expand(condition_entities_off) | list %}
+      {% set conds_defined = (conds_on | count) > 0 or (conds_off | count) > 0 %}
+      {% set all_conds_on_met = (conds_on | selectattr('state', 'eq', 'on') | list | count) == (conds_on | count) %}
+      {% set all_conds_off_met = (conds_off | selectattr('state', 'eq', 'off') | list | count) == (conds_off | count) %}
+      {{ now() > startup_end and conds_defined and not (all_conds_on_met and all_conds_off_met) }}
+
+  # Trigger: All sensors are unchanged for at least X minutes and at least one sensor is on
+  - id: check_turn_off_max_on_duration
+    platform: template
+    value_template: >-
+      {% set startup_end = as_datetime(as_timestamp(states('sensor.uptime'), 0) + startup_period_seconds) %}
+      {% set sensors = expand(input_sensors) | rejectattr('state', 'in', ['unknown', 'unavailable']) | list %}
+      {% set sensors_on = sensors | selectattr('state', 'eq', 'on') | list %}
+      {%
+        set sensors_unchanged_too_long =
+          sensors
+          | selectattr('last_changed', '<', now() - timedelta(minutes=max_on_duration_minutes))
+          | list
+      %}
+      {{
+        now() > startup_end
+        and max_on_duration_minutes > 0
+        and sensors_on | count > 0
+        and sensors | count == sensors_unchanged_too_long | count
+      }}
+
+variables:
+  # Current state and conditions
+  state_is_on: "{{ is_state(state_entity, 'on') }}"
+  state_is_off: "{{ not is_state(state_entity, 'on') }}"
+  conds_on_count: "{{ expand(condition_entities_on) | list | count }}"
+  conds_off_count: "{{ expand(condition_entities_off) | list | count }}"
+  no_unmet_conditions: >-
+    {{
+      conds_on_count == (expand(condition_entities_on) | selectattr('state', 'eq', 'on') | list | count) and
+      conds_off_count == (expand(condition_entities_off) | selectattr('state', 'eq', 'off') | list | count)
+    }}
+
+  # Turn on case A: A sensor turned on while state is off, and no conditions are unmet
+  turn_on_due_to_sensor: "{{ trigger.id == 'check_turn_on_sensor' and no_unmet_conditions }}"
+
+  # Turn on case B: Conditions were met while state is off, and presence is still ongoing
+  # (any sensors are on or were turned off after startup, within the configured off delay window)
+  sensors_count: "{{ expand(input_sensors) | rejectattr('state', 'in', ['unknown', 'unavailable']) | list | count }}"
+  sensors_on_count: "{{ expand(input_sensors) | selectattr('state', 'eq', 'on') | list | count }}"
+  sensors_in_off_delay_count: >-
+    {{
+      expand(input_sensors)
+      | selectattr('state', 'eq', 'off')
+      | selectattr('last_changed', '>', as_datetime(as_timestamp(states('sensor.uptime'), 0) + startup_period_seconds))
+      | selectattr('last_changed', '>', now() - timedelta(minutes=off_delay_minutes))
+      | list
+      | count
+    }}
+  sensor_on_or_in_off_delay: "{{ sensors_on_count > 0 or sensors_in_off_delay_count > 0 }}"
+  turn_on_due_to_conditions: "{{ trigger.id == 'check_turn_on_conditions' and sensor_on_or_in_off_delay }}"
+
+  state_based_on_inputs: "{{ sensor_on_or_in_off_delay and no_unmet_conditions }}"
+  turn_on_due_to_config: "{{ trigger.id == 'trigger_config' and state_based_on_inputs }}"
+  turn_off_due_to_config: "{{ trigger.id in ['trigger_config', 'trigger_config_delayed'] and not state_based_on_inputs }}"
+
+  # Combine all possible cases that require the state to be turned on or off
+  any_turn_on_case: "{{ state_is_off and (turn_on_due_to_sensor or turn_on_due_to_conditions or turn_on_due_to_config) }}"
+  any_turn_off_case: "{{ state_is_on and (trigger.id in ['check_turn_off_sensor', 'check_turn_off_conditions', 'check_turn_off_max_on_duration'] or turn_off_due_to_config) }}"
+
+  # Actions
+  on_actions: !input on_actions
+  off_actions: !input off_actions
+  state_entity_in_on_actions: "{{ (state_entity | tojson) in (on_actions | tojson) }}"
+  state_entity_in_off_actions: "{{ (state_entity | tojson) in (off_actions | tojson) }}"
+
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ any_turn_on_case }}"
+        sequence:
+          - sequence: !input on_actions
+          - if:
+              - condition: template
+                value_template: "{{ not state_entity_in_on_actions }}"
+            then:
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ state_domain == 'input_boolean' }}"
+                    sequence:
+                      - service: input_boolean.turn_on
+                        target:
+                          entity_id: !input state_entity
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ state_domain == 'light' }}"
+                    sequence:
+                      - service: light.turn_on
+                        target:
+                          entity_id: !input state_entity
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ state_domain == 'switch' }}"
+                    sequence:
+                      - service: switch.turn_on
+                        target:
+                          entity_id: !input state_entity
+
+      - conditions:
+          - condition: template
+            value_template: "{{ any_turn_off_case }}"
+        sequence:
+          - sequence: !input off_actions
+          - if:
+              - condition: template
+                value_template: "{{ not state_entity_in_off_actions }}"
+            then:
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ state_domain == 'input_boolean' }}"
+                    sequence:
+                      - service: input_boolean.turn_off
+                        target:
+                          entity_id: !input state_entity
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ state_domain == 'light' }}"
+                    sequence:
+                      - service: light.turn_off
+                        target:
+                          entity_id: !input state_entity
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ state_domain == 'switch' }}"
+                    sequence:
+                      - service: switch.turn_off
+                        target:
+                          entity_id: !input state_entity

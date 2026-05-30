@@ -1,0 +1,43 @@
+homeassistant:
+  name: Blueprint Validator
+  # Demo location used only for deterministic Home Assistant validation.
+  latitude: 52.52
+  longitude: 13.405
+  elevation: 34
+  unit_system: metric
+  time_zone: Europe/Berlin
+
+default_config:
+
+automation: !include automations.yaml
+
+input_boolean:
+  fixture_automatic_control: {}
+  fixture_lockout_prevention: {}
+  fixture_motion: {}
+  fixture_night_mode: {}
+  fixture_privacy_mode: {}
+  fixture_state: {}
+  fixture_sun_protection: {}
+
+input_number:
+  fixture_angle:
+    min: 0
+    max: 100
+    step: 1
+
+input_text:
+  fixture_cover_status:
+    max: 255
+  fixture_zone_status:
+    max: 255
+
+template:
+  - binary_sensor:
+      - name: Fixture Binary Sensor
+        state: "off"
+  - sensor:
+      - name: Fixture Rainfall Percentage
+        state: "0"
+      - name: Fixture Temperature
+        state: "20"

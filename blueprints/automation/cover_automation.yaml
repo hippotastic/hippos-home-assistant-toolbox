@@ -1,0 +1,738 @@
+blueprint:
+  name: Hippo's Cover Automation
+  description: >-
+    Automatically control blinds, shutters etc. based on multiple sensors and conditions.
+    (V2.4)
+  domain: automation
+  author: Hippo
+  homeassistant:
+    min_version: 2024.6.0
+  input:
+    base_settings_section:
+      name: " 🧾 Base settings"
+      collapsed: false
+      input:
+        cover_entity:
+          name: Cover to control
+          selector:
+            entity:
+              filter:
+                - domain: cover
+
+        cover_status_helper_entity:
+          name: Cover status helper
+          description: |
+            A string helper for up to 254 characters. Required by the automation to detect state changes.
+          selector:
+            entity:
+              filter:
+                - domain: input_text
+
+        cover_angle_homing:
+          name: Enable cover angle homing
+          description: >
+            If enabled, the cover angle is set to a homing position (usually 0%) before turning it to the target angle.
+            This improves actual cover angle consistency by eliminating drift over time.
+          default: true
+          selector:
+            boolean:
+
+        automatic_control_enabled_entity:
+          name: External input to enable/disable automatic control (optional)
+          description: |
+            If set, the cover will only be controlled while the entity is on. Otherwise, the cover will always be controlled.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - binary_sensor
+                    - input_boolean
+                    - light
+                    - switch
+
+        default_position:
+          name: Default cover position (100% is open, 0% is closed)
+          description: |
+            The cover will be moved to this position when none of the special modes below match.
+          default: 100
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+
+        default_angle:
+          name: Default cover angle (0% is fully closed, 50% see-through, 100% inverted)
+          default: 50
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+
+        default_angle_entity:
+          name: External input for default cover angle
+          description: |
+            If this optional external input provides a valid numeric value, it overrides the default cover angle set above.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - sensor
+                    - input_number
+
+    sun_protection_values_section:
+      name: " 😎 Sun protection"
+      collapsed: false
+      input:
+        sun_protection_entity:
+          name: External input to trigger sun protection
+          description: |
+            While this entity is set, turned on, and the sun hits the window, the values here will override the default values above.
+
+            It is recommended to create a single binary sensor helper calculated based on the measured weather station brightness and use this sensor for all cover automations.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - binary_sensor
+                    - input_boolean
+                    - light
+                    - switch
+
+        sun_protection_cover_azimuth:
+          name: Horizontal orientation of the cover center
+          description: |
+            Horizontal angle (sun azimuth) in which the sun is perpendicular to the cover
+            (0° = North, 90° = East, 180° = South, 270° = West).
+          default: 180
+          selector:
+            number:
+              min: 0
+              max: 365
+              unit_of_measurement: "°"
+
+        sun_protection_cover_side_angle:
+          name: Horizontal angle of incidence (both sides)
+          description: |
+            Angle to the left and right of the cover center in which the sun still falls into the room
+            (if the cover orientation is 180° and the angle of incidence 40°, the resulting range is 140° to 220°).
+          default: 75
+          selector:
+            number:
+              min: 0
+              max: 365
+              unit_of_measurement: "°"
+
+        sun_protection_min_elevation:
+          name: Minimum sun elevation where light falls into the room
+          description: |
+            Vertical angle (sun elevation) above the horizon.
+          default: 25
+          selector:
+            number:
+              min: 0
+              max: 365
+              unit_of_measurement: "°"
+
+        sun_protection_position:
+          name: Position (100% is open, 0% is closed)
+          default: 75
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+
+        sun_protection_angle:
+          name: Angle
+          default: 50
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+
+        sun_protection_angle_entity:
+          name: External input for sun protection angle
+          description: |
+            If this optional external input provides a valid numeric value, it overrides the default sun protection angle set above.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - sensor
+                    - input_number
+
+    privacy_mode_values_section:
+      name: " 🕵️‍♂️ Privacy mode"
+      collapsed: false
+      input:
+        privacy_mode_entity:
+          name: External input to trigger privacy mode
+          description: |
+            While this entity is set and turned on, the values here will override all values of the previous states.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - binary_sensor
+                    - input_boolean
+                    - light
+                    - switch
+
+        privacy_mode_position:
+          name: Position (100% is open, 0% is closed)
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+
+        privacy_mode_angle:
+          name: Angle
+          default: 35
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+
+        privacy_mode_angle_entity:
+          name: External input for privacy mode angle
+          description: |
+            If this optional external input provides a valid numeric value, it overrides the default privacy mode angle set above.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - sensor
+                    - input_number
+
+    night_mode_values_section:
+      name: " 🌙 Night mode"
+      collapsed: false
+      input:
+        night_mode_entity:
+          name: External input to trigger night mode
+          description: |
+            While this entity is set and turned on, the values here will override all values of the previous states.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - binary_sensor
+                    - input_boolean
+                    - light
+                    - switch
+
+        night_mode_position:
+          name: Position (100% is open, 0% is closed)
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+
+        night_mode_angle:
+          name: Angle
+          default: 20
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+
+        night_mode_angle_entity:
+          name: External input for night mode angle
+          description: |
+            If this optional external input provides a valid numeric value, it overrides the default night mode angle set above.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - sensor
+                    - input_number
+
+    lockout_prevention_values_section:
+      name: " 🔒 Lockout prevention"
+      collapsed: false
+      input:
+        lockout_prevention_entity:
+          name: External input to trigger lockout prevention
+          description: |
+            While this entity is set and turned on, the values here will override all values of the previous states.
+
+            You can use this to force the cover to a more open position, e.g. to keep it open while a door is open.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - binary_sensor
+                    - input_boolean
+                    - light
+                    - switch
+
+        lockout_prevention_position:
+          name: Position (100% is open, 0% is closed)
+          default: 100
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+
+        lockout_prevention_angle:
+          name: Angle
+          default: 100
+          selector:
+            number:
+              min: 0
+              max: 100
+              unit_of_measurement: "%"
+
+    environment_section:
+      name: " 🌍 Environment information"
+      collapsed: true
+      input:
+        sun_entity:
+          name: Sun sensor
+          default: "sun.sun"
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - sun
+
+trigger_variables:
+  # Base settings
+  cover_entity: !input cover_entity
+  cover_status_helper_entity: !input cover_status_helper_entity
+  cover_angle_homing: !input cover_angle_homing
+  automatic_control_enabled_entity: !input automatic_control_enabled_entity
+  default_position: !input default_position
+  default_angle_value: !input default_angle
+  default_angle_entity: !input default_angle_entity
+  # Sun protection settings
+  sun_protection_entity: !input sun_protection_entity
+  sun_protection_cover_azimuth: !input sun_protection_cover_azimuth
+  sun_protection_cover_side_angle: !input sun_protection_cover_side_angle
+  sun_protection_min_elevation: !input sun_protection_min_elevation
+  sun_protection_position: !input sun_protection_position
+  sun_protection_angle_value: !input sun_protection_angle
+  sun_protection_angle_entity: !input sun_protection_angle_entity
+  sun_protection_azimuth_min: "{{ (sun_protection_cover_azimuth - sun_protection_cover_side_angle) % 360 }}"
+  sun_protection_azimuth_max: "{{ (sun_protection_cover_azimuth + sun_protection_cover_side_angle) % 360 }}"
+  # Privacy mode settings
+  privacy_mode_entity: !input privacy_mode_entity
+  privacy_mode_position: !input privacy_mode_position
+  privacy_mode_angle_value: !input privacy_mode_angle
+  privacy_mode_angle_entity: !input privacy_mode_angle_entity
+  # Night mode settings
+  night_mode_entity: !input night_mode_entity
+  night_mode_position: !input night_mode_position
+  night_mode_angle_value: !input night_mode_angle
+  night_mode_angle_entity: !input night_mode_angle_entity
+  # Lockout prevention settings
+  lockout_prevention_entity: !input lockout_prevention_entity
+  lockout_prevention_position: !input lockout_prevention_position
+  lockout_prevention_angle: !input lockout_prevention_angle
+  # Environment information inputs
+  sun_entity: !input sun_entity
+
+triggers:
+  # Automation was turned on
+  - trigger: template
+    value_template: "{% if this is defined and this != None %}{{ is_state(this.entity_id, ['on', 'true']) }}{% endif %}"
+    id: "trigger_automation_enabled"
+  # External input to enable/disable automatic control was turned on
+  - trigger: state
+    entity_id: !input automatic_control_enabled_entity
+    to: "on"
+    id: "trigger_automatic_control_enabled"
+  # External input to trigger any special mode was changed
+  - trigger: state
+    entity_id: !input sun_protection_entity
+    not_to:
+      - "unavailable"
+      - "unknown"
+      - "none"
+      - "query failed"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    id: "trigger_sun_protection"
+  - trigger: state
+    entity_id: !input privacy_mode_entity
+    not_to:
+      - "unavailable"
+      - "unknown"
+      - "none"
+      - "query failed"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    id: "trigger_privacy_mode"
+  - trigger: state
+    entity_id: !input night_mode_entity
+    not_to:
+      - "unavailable"
+      - "unknown"
+      - "none"
+      - "query failed"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    id: "trigger_night_mode"
+  - trigger: state
+    entity_id: !input lockout_prevention_entity
+    not_to:
+      - "unavailable"
+      - "unknown"
+      - "none"
+      - "query failed"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    id: "trigger_lockout_prevention"
+  # External input for any angle override was changed
+  - trigger: state
+    entity_id: !input default_angle_entity
+    not_to:
+      - "unavailable"
+      - "unknown"
+      - "none"
+      - "query failed"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    id: "trigger_default_angle"
+  - trigger: state
+    entity_id: !input sun_protection_angle_entity
+    not_to:
+      - "unavailable"
+      - "unknown"
+      - "none"
+      - "query failed"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    id: "trigger_sun_protection_angle"
+  - trigger: state
+    entity_id: !input privacy_mode_angle_entity
+    not_to:
+      - "unavailable"
+      - "unknown"
+      - "none"
+      - "query failed"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    id: "trigger_privacy_mode_angle"
+  - trigger: state
+    entity_id: !input night_mode_angle_entity
+    not_to:
+      - "unavailable"
+      - "unknown"
+      - "none"
+      - "query failed"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    id: "trigger_night_mode_angle"
+  # Sun visibility based on the configuration was changed
+  - trigger: template
+    value_template: >-
+      {{
+        sun_entity != [] and
+        (
+          (
+            sun_protection_azimuth_min <= sun_protection_azimuth_max and
+            (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) >= sun_protection_azimuth_min) and
+            (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) <= sun_protection_azimuth_max)
+          ) or
+          (
+            sun_protection_azimuth_min > sun_protection_azimuth_max and
+            (
+              (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) >= sun_protection_azimuth_min) or
+              (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) <= sun_protection_azimuth_max)
+            )
+          )
+        ) and
+        (state_attr(sun_entity, 'elevation') | float(default=sun_protection_min_elevation) >= sun_protection_min_elevation)
+      }}
+    id: "trigger_sun_in"
+  - trigger: template
+    value_template: >-
+      {{
+        sun_entity != [] and
+        not (
+          (
+            (
+              sun_protection_azimuth_min <= sun_protection_azimuth_max and
+              (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) >= sun_protection_azimuth_min) and
+              (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) <= sun_protection_azimuth_max)
+            ) or
+            (
+              sun_protection_azimuth_min > sun_protection_azimuth_max and
+              (
+                (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) >= sun_protection_azimuth_min) or
+                (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) <= sun_protection_azimuth_max)
+              )
+            )
+          ) and
+          (state_attr(sun_entity, 'elevation') | float(default=sun_protection_min_elevation) >= sun_protection_min_elevation)
+        )
+      }}
+    id: "trigger_sun_out"
+
+conditions:
+  # Don't run the automation if it was disabled through the input binary sensor
+  - "{{ automatic_control_enabled_entity == [] or is_state(automatic_control_enabled_entity, ['on', 'true']) }}"
+  # Don't run the automation if the new state of the trigger is unknown
+  - "{{ trigger.to_state.state not in ['unavailable', 'unknown', 'none', 'query failed'] }}"
+
+# If the automation is triggered again while still being executed, queue another run
+# to prevent half-finished cover angle homing from being interpreted as user override
+mode: queued
+max: 20
+max_exceeded: silent
+
+variables:
+  event: >-
+    {% if trigger.platform in ['state', 'template'] %}
+      Running due to {{ trigger.id }} (from {{ trigger.from_state.state }} to {{ trigger.to_state.state }})
+    {% else %}
+      Running manually (through UI)
+    {% endif %}
+  # Allow overriding angles with entities that have a valid numerical value >= -1
+  default_angle: "{{        [default_angle_entity]        | reject('eq', []) | map('states') | map('int', -2) | reject('lt', -1) | list | first | default(default_angle_value) }}"
+  sun_protection_angle: "{{ [sun_protection_angle_entity] | reject('eq', []) | map('states') | map('int', -2) | reject('lt', -1) | list | first | default(sun_protection_angle_value) }}"
+  privacy_mode_angle: "{{   [privacy_mode_angle_entity]   | reject('eq', []) | map('states') | map('int', -2) | reject('lt', -1) | list | first | default(privacy_mode_angle_value) }}"
+  night_mode_angle: "{{     [night_mode_angle_entity]     | reject('eq', []) | map('states') | map('int', -2) | reject('lt', -1) | list | first | default(night_mode_angle_value) }}"
+  # Perform state calculations
+  bright_sunlight: >-
+    {{ sun_protection_entity != [] and is_state(sun_protection_entity, ['on', 'true']) }}
+  sun_hits_cover: >-
+    {{
+      sun_entity != [] and
+      (
+        (
+          sun_protection_azimuth_min <= sun_protection_azimuth_max and
+          (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) >= sun_protection_azimuth_min) and
+          (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) <= sun_protection_azimuth_max)
+        ) or
+        (
+          sun_protection_azimuth_min > sun_protection_azimuth_max and
+          (
+            (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) >= sun_protection_azimuth_min) or
+            (state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) <= sun_protection_azimuth_max)
+          )
+        )
+      ) and
+      (state_attr(sun_entity, 'elevation') | float(default=sun_protection_min_elevation) >= sun_protection_min_elevation)
+    }}
+  old_state: "{{ states(cover_status_helper_entity) }}"
+  new_state: >-
+    {%- set ns = namespace(modes=[], position=default_position, angle=default_angle, changed=false) %}
+    {# --- Sun protection --- #}
+    {% if bright_sunlight and sun_hits_cover %}
+      {% set ns.modes = ns.modes + ['sun'] %}
+      {% if sun_protection_position > -1 %}{% set ns.position = sun_protection_position %}{% endif %}
+      {% if sun_protection_angle > -1 %}{% set ns.angle = sun_protection_angle %}{% endif %}
+    {% endif %}
+    {# --- Privacy mode --- #}
+    {% if privacy_mode_entity != [] and is_state(privacy_mode_entity, ['on', 'true']) %}
+      {% set ns.modes = ns.modes + ['privacy'] %}
+      {% if privacy_mode_position > -1 %}{% set ns.position = privacy_mode_position %}{% endif %}
+      {% if privacy_mode_angle > -1 %}{% set ns.angle = privacy_mode_angle %}{% endif %}
+    {% endif %}
+    {# --- Night mode --- #}
+    {% if night_mode_entity != [] and is_state(night_mode_entity, ['on', 'true']) %}
+      {% set ns.modes = ns.modes + ['night'] %}
+      {% if night_mode_position > -1 %}{% set ns.position = night_mode_position %}{% endif %}
+      {% if night_mode_angle > -1 %}{% set ns.angle = night_mode_angle %}{% endif %}
+    {% endif %}
+    {# --- Lockout prevention --- #}
+    {% if lockout_prevention_entity != [] and is_state(lockout_prevention_entity, ['on', 'true']) %}
+      {% set ns.modes = ns.modes + ['lockout'] %}
+      {% if lockout_prevention_position > -1 and lockout_prevention_position > ns.position and lockout_prevention_position > state_attr(cover_entity, 'current_position') %}{% set ns.position = lockout_prevention_position %}{% endif %}
+      {% if lockout_prevention_angle > -1 %}{% set ns.angle = lockout_prevention_angle %}{% endif %}
+    {% endif %}
+    {# --- Output results --- #}
+    {
+      "modes": {{ ns.modes | to_json }},
+      "position": {{ ns.position | to_json }},
+      "angle": {{ ns.angle | to_json }}
+    }
+  state_changed: "{{ new_state != old_state }}"
+  allow_changes: "{{ state_changed or trigger.id == 'trigger_automatic_control_enabled' }}"
+  current_position: "{{ state_attr(cover_entity, 'current_position') }}"
+  current_angle: "{{ state_attr(cover_entity, 'current_tilt_position') }}"
+  supports_position: "{{ current_position != None and current_position > -1 }}"
+  supports_angle: "{{ current_angle != None and current_angle > -1 }}"
+  # If lockout prevention is true, prevent moving the cover to a less open position
+  prevent_closing: "{{ 'lockout' in new_state.modes and new_state.position < current_position }}"
+  # Gather texts for log message
+  unchanged_state_text: >-
+    {% if not state_changed %}
+      {% if new_state.modes | length == 0 %}
+        No active modes.
+      {% else %}
+        Active mode{{ iif(new_state.modes | length != 1, 's', '') }}: {{ new_state.modes | join(', ') }}.
+      {% endif %}
+    {% endif %}
+  sun_position_text: >-
+    {% if sun_entity != [] %}
+      ◠{{ state_attr(sun_entity, 'azimuth') | float(default=sun_protection_cover_azimuth) | round(1) }}°/⇡{{ state_attr(sun_entity, 'elevation') | float(default=sun_protection_min_elevation) | round(1) }}°
+    {% else %}
+      missing sun entity
+    {% endif %}
+  sun_protection_reason: >-
+    {% if not bright_sunlight %}
+      no bright sunlight
+    {% elif not sun_hits_cover %}
+      bright sunlight, but it does not hit window at {{ sun_position_text }}
+    {% else %}
+      bright sunlight hits window at {{ sun_position_text }}
+    {% endif %}
+  sun_protection_text: >-
+    {% if ('sun' in old_state.modes) != ('sun' in new_state.modes) %}
+      Sun protection turned {{ iif('sun' in new_state.modes, 'on', 'off') }} ({{ sun_protection_reason }}).
+    {% endif %}
+  privacy_mode_text: >-
+    {% if ('privacy' in old_state.modes) != ('privacy' in new_state.modes) %}
+      Privacy mode turned {{ iif('privacy' in new_state.modes, 'on', 'off') }}.
+    {% endif %}
+  night_mode_text: >-
+    {% if ('night' in old_state.modes) != ('night' in new_state.modes) %}
+      Night mode turned {{ iif('night' in new_state.modes, 'on', 'off') }}.
+    {% endif %}
+  lockout_prevention_text: >-
+    {% if ('lockout' in old_state.modes) != ('lockout' in new_state.modes) %}
+      Lockout prevention turned
+      {% if ('lockout' in new_state.modes) %}
+        on, {{ iif(new_state.position > current_position, 'and cover must be opened', 'but cover is open enough') }}.
+      {% else %}
+        off.
+      {% endif %}
+    {% elif prevent_closing %}
+      Lockout prevention prevents closing the cover further.
+    {% endif %}
+  new_position_is_outside_tolerance: >-
+    {{ supports_position and new_state.position > -1 and (current_position - new_state.position) | abs > 2 }}
+  new_position_text: >-
+    {% if supports_position and new_state.position > -1 %}
+      {% if allow_changes or (not new_position_is_outside_tolerance) %}
+        {{ iif(new_position_is_outside_tolerance, 'Moving to', 'Already at') }} position {{ new_state.position }}%.
+      {% else %}
+        New position would be {{ new_state.position }}%,
+        but the user manually moved the cover to {{ current_position }}%,
+        so keeping current position.
+      {% endif %}
+    {% else %}
+      No position configured.
+    {% endif %}
+  # Fully open blinds do not support angles, so require either the new or the current blind position to be < 100%
+  new_position_supports_angle: >-
+    {{ (new_state.position > -1 and new_state.position < 100) or current_position < 100 }}
+  new_angle_is_outside_tolerance: >-
+    {{ new_position_supports_angle and supports_angle and new_state.angle > -1 and (current_angle - new_state.angle) | abs > 2 }}
+  new_angle_text: >-
+    {% if supports_angle and new_state.angle > -1 %}
+      {% if allow_changes or (not new_angle_is_outside_tolerance) %}
+        {{ iif(new_angle_is_outside_tolerance, 'Changing angle to', 'Already at angle') }} {{ new_state.angle }}%.
+      {% else %}
+        New angle would be {{ new_state.angle }}%,
+        but the user manually turned the cover to {{ current_angle }}%,
+        so keeping current angle.
+      {% endif %}
+    {% endif %}
+  cover_log_message: >-
+    {{
+      [
+        unchanged_state_text,
+        sun_protection_text,
+        privacy_mode_text,
+        night_mode_text,
+        lockout_prevention_text,
+        new_position_text,
+        new_angle_text
+      ]
+      | reject('equalto', '')
+      | join(' ')
+      | regex_replace('\s+', ' ')
+    }}
+
+action:
+  # Only continue if all configured entities are available
+  - condition: template
+    value_template: >-
+      {{
+        not is_state(cover_entity, ['unavailable', 'unknown', 'none', 'query failed']) and
+        (automatic_control_enabled_entity == [] or not is_state(automatic_control_enabled_entity, ['unavailable', 'unknown', 'none', 'query failed'])) and
+        (sun_protection_entity == [] or not is_state(sun_protection_entity, ['unavailable', 'unknown', 'none', 'query failed'])) and
+        (privacy_mode_entity == [] or not is_state(privacy_mode_entity, ['unavailable', 'unknown', 'none', 'query failed'])) and
+        (night_mode_entity == [] or not is_state(night_mode_entity, ['unavailable', 'unknown', 'none', 'query failed'])) and
+        (lockout_prevention_entity == [] or not is_state(lockout_prevention_entity, ['unavailable', 'unknown', 'none', 'query failed']))
+      }}
+  # Always output the raw event to the general logbook
+  - action: logbook.log
+    data:
+      name: "Hippo's Cover Automation"
+      message: "{{ event }}, new state={{ new_state }}, old state={{ old_state }}, allow_changes={{ allow_changes }}, prevent_closing={{ prevent_closing }}"
+      domain: cover
+  # If a significant change happened, output a friendly message to the cover-specific logbook
+  - if:
+      - condition: template
+        value_template: "{{ cover_log_message != '' }}"
+    then:
+      - action: logbook.log
+        metadata: {}
+        data:
+          name: "Hippo's Cover Automation"
+          message: "{{ cover_log_message }}"
+          entity_id: "{{ cover_entity }}"
+          domain: cover
+  # Only continue if the target state has changed and nothing prevents moving the cover
+  - condition: template
+    value_template: "{{ allow_changes and not prevent_closing }}"
+  # Update helper
+  - action: input_text.set_value
+    target:
+      entity_id: "{{ cover_status_helper_entity }}"
+    data:
+      value: "{{ new_state }}"
+  # Set new cover position if the target value is outside of the tolerance
+  - if:
+      - condition: template
+        value_template: "{{ new_position_is_outside_tolerance }}"
+    then:
+      - action: cover.set_cover_position
+        data:
+          position: "{{ new_state.position }}"
+        target:
+          entity_id: "{{ cover_entity }}"
+  # Set new cover angle if the target value is outside of the tolerance
+  - if:
+      - condition: template
+        value_template: "{{ new_angle_is_outside_tolerance }}"
+    then:
+      - delay:
+          milliseconds: 200
+      # Perform cover angle homing if all of the following conditions are true:
+      # - Cover angle homing is enabled
+      # - We didn't change the cover position (which automatically homes the angle)
+      # - The new angle is not an extreme one (0% or 100%) which doesn't need homing
+      - if:
+          - condition: template
+            value_template: "{{ cover_angle_homing and (not new_position_is_outside_tolerance) and new_state.angle != 0 and new_state.angle != 100 }}"
+        then:
+          - action: cover.set_cover_tilt_position
+            data:
+              tilt_position: 0
+            target:
+              entity_id: "{{ cover_entity }}"
+          - delay:
+              milliseconds: 2500
+      # Set the actual cover angle
+      - action: cover.set_cover_tilt_position
+        data:
+          tilt_position: "{{ new_state.angle }}"
+        target:
+          entity_id: "{{ cover_entity }}"

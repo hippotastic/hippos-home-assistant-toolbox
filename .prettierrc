@@ -1,0 +1,18 @@
+{
+  "printWidth": 180,
+  "semi": false,
+  "singleQuote": true,
+  "tabWidth": 2,
+  "trailingComma": "es5",
+  "useTabs": true,
+  "endOfLine": "lf",
+  "overrides": [
+    {
+      "files": [".*", "*.json", "*.jsonc", "*.md", "*.mdx", "*.toml", "*.yaml", "*.yml"],
+      "options": {
+        "useTabs": false,
+        "tabWidth": 2
+      }
+    }
+  ]
+}
