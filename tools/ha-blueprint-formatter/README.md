@@ -18,6 +18,12 @@ Check formatting without writing files:
 pnpm format:blueprints --check
 ```
 
+Fail the check when formatting warnings remain:
+
+```sh
+pnpm format:blueprints --check --fail-on-warnings
+```
+
 Keep checking when blueprint files change:
 
 ```sh

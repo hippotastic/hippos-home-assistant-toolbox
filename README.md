@@ -111,6 +111,19 @@ Check blueprint formatting without writing files:
 pnpm format:blueprints --check
 ```
 
+The regular lint task also runs the blueprint formatter check:
+
+```sh
+pnpm lint
+```
+
+The strict lint task treats both ESLint warnings and blueprint formatter warnings
+as failures:
+
+```sh
+pnpm lint:strict
+```
+
 The formatter acts on folded scalar blocks that contain `{#- ... #}` Jinja comments. See `tools/ha-blueprint-formatter` for the exact style rules.
 
 Run the lightweight YAML syntax check:

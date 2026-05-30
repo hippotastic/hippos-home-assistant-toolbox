@@ -9,6 +9,7 @@ type Mode = 'check' | 'write'
 type Options = {
 	mode: Mode
 	watch: boolean
+	failOnWarnings: boolean
 	width: number
 	paths: string[]
 }
@@ -16,6 +17,11 @@ type Options = {
 type FormatResult = {
 	source: string
 	warnings: Warning[]
+}
+
+type RunResult = {
+	hasChanges: boolean
+	hasWarnings: boolean
 }
 
 type Warning = {
@@ -43,6 +49,8 @@ Options:
   --check         Check formatting without writing files.
   --write         Format files in-place. This is the default.
   --watch         Keep checking when blueprint files change.
+  --fail-on-warnings
+                  Exit with an error when formatter warnings are reported.
   --width WIDTH   Target width for Jinja tag contents. Defaults to ${DEFAULT_WIDTH}.
   -h, --help      Show this help.
 `
@@ -51,6 +59,7 @@ Options:
 function parseArgs(argv: string[]): Options {
 	let mode: Mode = 'write'
 	let watchMode = false
+	let failOnWarnings = false
 	let width = DEFAULT_WIDTH
 	const paths: string[] = []
 
@@ -67,6 +76,9 @@ function parseArgs(argv: string[]): Options {
 			case '--watch':
 				mode = 'check'
 				watchMode = true
+				break
+			case '--fail-on-warnings':
+				failOnWarnings = true
 				break
 			case '--width': {
 				const value = argv[index + 1]
@@ -99,6 +111,7 @@ function parseArgs(argv: string[]): Options {
 	return {
 		mode,
 		watch: watchMode,
+		failOnWarnings,
 		width,
 		paths,
 	}
@@ -442,8 +455,9 @@ function selectedFiles(options: Options): string[] {
 	return options.paths.length > 0 ? options.paths.map((path) => resolve(path)) : defaultBlueprintFiles()
 }
 
-function runFormatter(options: Options, files: string[]): boolean {
+function runFormatter(options: Options, files: string[]): RunResult {
 	let hasChanges = false
+	let hasWarnings = false
 
 	for (const file of files) {
 		if (!existsSync(file)) {
@@ -454,6 +468,7 @@ function runFormatter(options: Options, files: string[]): boolean {
 		const result = formatBlueprintSource(source, options.width)
 
 		for (const warning of result.warnings) {
+			hasWarnings = true
 			process.stdout.write(`${formatWarning(file, warning)}\n`)
 		}
 
@@ -471,7 +486,10 @@ function runFormatter(options: Options, files: string[]): boolean {
 		}
 	}
 
-	return hasChanges
+	return {
+		hasChanges,
+		hasWarnings,
+	}
 }
 
 function runWatchCycle(options: Options): void {
@@ -529,9 +547,13 @@ function main(): void {
 		return
 	}
 
-	const hasChanges = runFormatter(options, selectedFiles(options))
+	const result = runFormatter(options, selectedFiles(options))
 
-	if (options.mode === 'check' && hasChanges) {
+	if (options.mode === 'check' && result.hasChanges) {
+		process.exit(1)
+	}
+
+	if (options.failOnWarnings && result.hasWarnings) {
 		process.exit(1)
 	}
 }
