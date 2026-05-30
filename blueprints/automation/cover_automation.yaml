@@ -4,6 +4,7 @@ blueprint:
     Automatically control blinds, shutters etc. based on multiple sensors and conditions.
     (V2.4)
   domain: automation
+  source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/cover_automation.yaml
   author: Hippo
   homeassistant:
     min_version: 2024.6.0

@@ -7,6 +7,7 @@ blueprint:
     and an optional maximum "on" duration to prevent staying in the "on" state too long.
     (V1)
   domain: automation
+  source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/sensor_state_machine.yaml
   author: Hippo
   homeassistant:
     min_version: 2024.6.0

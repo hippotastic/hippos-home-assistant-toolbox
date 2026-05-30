@@ -4,6 +4,7 @@ blueprint:
     Automatically calculate an irrigation schedule for the given zones and perform watering when needed.
     (V2)
   domain: automation
+  source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_scheduler.yaml
   author: Hippo
   homeassistant:
     min_version: 2024.6.0
