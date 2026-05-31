@@ -142,7 +142,8 @@ trigger:
   - id: check_turn_off_sensor
     platform: template
     value_template: >-
-      {% set uptime = states("sensor.uptime")                                       %}
+
+      {%- set uptime = states("sensor.uptime")                                      %}
       {% set startup_ts = as_timestamp(uptime, 0) + startup_period_seconds          %}
       {% set startup_end = as_datetime(startup_ts)                                  %}
       {% set ignored_states = ["unknown", "unavailable"]                            %}
@@ -160,7 +161,8 @@ trigger:
   - id: check_turn_on_conditions
     platform: template
     value_template: >-
-      {% set uptime = states("sensor.uptime")                                       %}
+
+      {%- set uptime = states("sensor.uptime")                                      %}
       {% set startup_ts = as_timestamp(uptime, 0) + startup_period_seconds          %}
       {% set startup_end = as_datetime(startup_ts)                                  %}
       {% set conds_on = expand(condition_entities_on) | list                        %}
@@ -179,7 +181,8 @@ trigger:
   - id: check_turn_off_conditions
     platform: template
     value_template: >-
-      {% set uptime = states("sensor.uptime")                                       %}
+
+      {%- set uptime = states("sensor.uptime")                                      %}
       {% set startup_ts = as_timestamp(uptime, 0) + startup_period_seconds          %}
       {% set startup_end = as_datetime(startup_ts)                                  %}
       {% set conds_on = expand(condition_entities_on) | list                        %}
@@ -198,7 +201,8 @@ trigger:
   - id: check_turn_off_max_on_duration
     platform: template
     value_template: >-
-      {% set uptime = states("sensor.uptime")                                       %}
+
+      {%- set uptime = states("sensor.uptime")                                      %}
       {% set startup_ts = as_timestamp(uptime, 0) + startup_period_seconds          %}
       {% set startup_end = as_datetime(startup_ts)                                  %}
       {% set ignored_states = ["unknown", "unavailable"]                            %}

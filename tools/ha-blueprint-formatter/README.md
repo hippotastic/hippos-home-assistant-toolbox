@@ -46,6 +46,9 @@ The formatter follows the style worked out for these blueprints:
 - keep YAML indentation flat inside the scalar
 - move visual nesting into the Jinja tag itself, for example `{%-   if ... %}`
 - pad Jinja block tags and Jinja comments to 80 characters
+- insert an empty first content line before leading Jinja code/comment tags so
+  Home Assistant imports dump the first real template line aligned with the
+  following lines
 - keep free text content, but remove visual YAML indentation that would make
   folded scalars preserve line breaks
 - account for Home Assistant's single-quoted YAML dump, where `'` becomes `''`

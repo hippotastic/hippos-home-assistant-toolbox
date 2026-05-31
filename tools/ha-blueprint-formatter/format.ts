@@ -271,18 +271,59 @@ function formatComment(content: string, contentIndent: string, width: number): s
 	return wrapWords(text, maxTextLength).map((line) => `${contentIndent}${padTag(`${prefix}${line} #}`, width, '#}')}`)
 }
 
-function normalizeMultilineCodeTag(lines: string[], start: number, contentIndent: string, width: number): MultilineCodeTag | undefined {
+function normalizeLeadingTrimOpener(content: string): string {
+	if (content.startsWith('{%-') || content.startsWith('{#-')) {
+		return content
+	}
+
+	if (content.startsWith('{%')) {
+		return `{%-${content.slice('{%'.length)}`
+	}
+
+	if (content.startsWith('{#')) {
+		return `{#-${content.slice('{#'.length)}`
+	}
+
+	return content
+}
+
+function shouldWrapImportedFirstLine(lines: string[], start: number, end: number): boolean {
+	for (let index = start + 1; index < end; index += 1) {
+		const trimmed = lines[index].trimStart()
+
+		if (trimmed === '') {
+			continue
+		}
+
+		return JINJA_CODE_OPENERS.some((opener) => trimmed.startsWith(opener)) || JINJA_COMMENT_OPENERS.some((opener) => trimmed.startsWith(opener))
+	}
+
+	return false
+}
+
+function firstNonEmptyBlockLine(lines: string[], start: number, end: number): number | undefined {
+	for (let index = start + 1; index < end; index += 1) {
+		if (lines[index].trim() !== '') {
+			return index
+		}
+	}
+
+	return undefined
+}
+
+function normalizeMultilineCodeTag(lines: string[], start: number, contentIndent: string, width: number, forceLeadingTrimOpener: boolean): MultilineCodeTag | undefined {
 	const firstLine = lines[start]
 	const firstTrimmed = firstLine.trimStart()
-	const opener = JINJA_CODE_OPENERS.find((candidate) => firstTrimmed.startsWith(candidate))
+	const sourceOpener = JINJA_CODE_OPENERS.find((candidate) => firstTrimmed.startsWith(candidate))
 
-	if (!opener || firstTrimmed.endsWith('%}')) {
+	if (!sourceOpener || firstTrimmed.endsWith('%}')) {
 		return undefined
 	}
 
+	const opener = forceLeadingTrimOpener ? '{%-' : sourceOpener
 	const firstIndent = leadingWhitespace(firstLine)
 	const internalIndent = firstIndent.startsWith(contentIndent) ? firstIndent.slice(contentIndent.length) : ''
-	const parts = [`${opener}${internalIndent}${firstTrimmed.slice(opener.length).trimEnd()}`]
+	const parts = [`${opener}${internalIndent}${firstTrimmed.slice(sourceOpener.length).trimEnd()}`]
 	let index = start + 1
 
 	while (index < lines.length) {
@@ -322,7 +363,7 @@ function normalizeMultilineCodeTag(lines: string[], start: number, contentIndent
 	return undefined
 }
 
-function normalizeTemplateLine(line: string, contentIndent: string, width: number): string[] {
+function normalizeTemplateLine(line: string, contentIndent: string, width: number, forceLeadingTrimOpener: boolean): string[] {
 	if (line.trim() === '') {
 		return [line]
 	}
@@ -340,7 +381,8 @@ function normalizeTemplateLine(line: string, contentIndent: string, width: numbe
 	}
 
 	const internalIndent = lineIndent.startsWith(contentIndent) ? lineIndent.slice(contentIndent.length) : ''
-	const content = `${opener}${internalIndent}${trimmed.slice(opener.length).trimEnd()}`
+	const rawContent = `${opener}${internalIndent}${trimmed.slice(opener.length).trimEnd()}`
+	const content = forceLeadingTrimOpener ? normalizeLeadingTrimOpener(rawContent) : rawContent
 
 	if (JINJA_COMMENT_OPENERS.some((opener) => content.startsWith(opener))) {
 		return formatComment(content, contentIndent, width)
@@ -399,10 +441,19 @@ function formatBlueprintSource(source: string, width: number): FormatResult {
 		}
 
 		output.push(line)
+		// HA dumps folded templates as quoted scalars with the first content line
+		// after the key; a trimmed leading blank keeps real template lines aligned.
+		const shouldInsertImportWrapBlank = shouldWrapImportedFirstLine(lines, index, blockEnd) && lines[index + 1]?.trim() !== ''
+		const firstNonEmptyLine = firstNonEmptyBlockLine(lines, index, blockEnd)
+
+		if (shouldInsertImportWrapBlank) {
+			output.push('')
+		}
 
 		let blockIndex = index + 1
 		while (blockIndex < blockEnd) {
-			const multilineCodeTag = normalizeMultilineCodeTag(lines, blockIndex, contentIndent, width)
+			const forceLeadingTrimOpener = shouldInsertImportWrapBlank && blockIndex === firstNonEmptyLine
+			const multilineCodeTag = normalizeMultilineCodeTag(lines, blockIndex, contentIndent, width, forceLeadingTrimOpener)
 			if (multilineCodeTag) {
 				if (multilineCodeTag.collapsedLength) {
 					warnings.push({
@@ -429,7 +480,7 @@ function formatBlueprintSource(source: string, width: number): FormatResult {
 				continue
 			}
 
-			for (const formattedLine of normalizeTemplateLine(lines[blockIndex], contentIndent, width)) {
+			for (const formattedLine of normalizeTemplateLine(lines[blockIndex], contentIndent, width, forceLeadingTrimOpener)) {
 				const content = formattedLine.startsWith(contentIndent) ? formattedLine.slice(contentIndent.length) : formattedLine
 
 				if (isJinjaLine(formattedLine) && haDumpedLength(content) > width) {

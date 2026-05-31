@@ -499,7 +499,8 @@ max_exceeded: silent
 
 variables:
   event: >-
-    {% if trigger.platform in ["state", "template"]                               %}
+
+    {%- if trigger.platform in ["state", "template"]                              %}
     Running due to {{ trigger.id }} (from {{ trigger.from_state.state }} to {{ trigger.to_state.state }})
     {% else                                                                       %}
     Running manually (through UI)
@@ -573,6 +574,7 @@ variables:
     }}
   old_state: "{{ states(cover_status_helper_entity) }}"
   new_state: >-
+
     {%- set ns = namespace(modes=[], pos=default_position, tilt=default_angle)    %}
     {%- set active_states = ["on", "true"]                                        %}
     {# --- Sun protection ---                                                     #}
@@ -649,7 +651,8 @@ variables:
   prevent_closing: "{{ 'lockout' in new_state.modes and new_state.position < current_position }}"
   # Gather texts for log message
   unchanged_state_text: >-
-    {% if not state_changed                                                       %}
+
+    {%- if not state_changed                                                      %}
     {%   if new_state.modes | length == 0                                         %}
     No active modes.
     {%   else                                                                     %}
@@ -657,7 +660,8 @@ variables:
     {%   endif                                                                    %}
     {% endif                                                                      %}
   sun_position_text: >-
-    {% if sun_entity != []                                                        %}
+
+    {%- if sun_entity != []                                                       %}
     {%   set azimuth = state_attr(sun_entity, "azimuth")                          %}
     {%   set azimuth = azimuth | float(default=sun_protection_cover_azimuth)      %}
     {%   set azimuth = azimuth | round(1)                                         %}
@@ -669,7 +673,8 @@ variables:
     missing sun entity
     {% endif                                                                      %}
   sun_protection_reason: >-
-    {% if not bright_sunlight                                                     %}
+
+    {%- if not bright_sunlight                                                    %}
     no bright sunlight
     {% elif not sun_hits_cover                                                    %}
     bright sunlight, but it does not hit window at {{ sun_position_text }}
@@ -677,19 +682,23 @@ variables:
     bright sunlight hits window at {{ sun_position_text }}
     {% endif                                                                      %}
   sun_protection_text: >-
-    {% if ("sun" in old_state.modes) != ("sun" in new_state.modes)                %}
+
+    {%- if ("sun" in old_state.modes) != ("sun" in new_state.modes)               %}
     Sun protection turned {{ iif('sun' in new_state.modes, 'on', 'off') }} ({{ sun_protection_reason }}).
     {% endif                                                                      %}
   privacy_mode_text: >-
-    {% if ("privacy" in old_state.modes) != ("privacy" in new_state.modes)        %}
+
+    {%- if ("privacy" in old_state.modes) != ("privacy" in new_state.modes)       %}
     Privacy mode turned {{ iif('privacy' in new_state.modes, 'on', 'off') }}.
     {% endif                                                                      %}
   night_mode_text: >-
-    {% if ("night" in old_state.modes) != ("night" in new_state.modes)            %}
+
+    {%- if ("night" in old_state.modes) != ("night" in new_state.modes)           %}
     Night mode turned {{ iif('night' in new_state.modes, 'on', 'off') }}.
     {% endif                                                                      %}
   lockout_prevention_text: >-
-    {% if ("lockout" in old_state.modes) != ("lockout" in new_state.modes)        %}
+
+    {%- if ("lockout" in old_state.modes) != ("lockout" in new_state.modes)       %}
     Lockout prevention turned
     {%   if ("lockout" in new_state.modes)                                        %}
     on, {{ iif(new_state.position > current_position, 'and cover must be opened', 'but cover is open enough') }}.
@@ -702,7 +711,8 @@ variables:
   new_position_is_outside_tolerance: >-
     {{ supports_position and new_state.position > -1 and (current_position - new_state.position) | abs > 2 }}
   new_position_text: >-
-    {% if supports_position and new_state.position > -1                           %}
+
+    {%- if supports_position and new_state.position > -1                          %}
     {%   if allow_changes or (not new_position_is_outside_tolerance)              %}
     {%     if new_position_is_outside_tolerance                                   %}
     {%       set position_action = "Moving to"                                    %}
@@ -724,7 +734,8 @@ variables:
   new_angle_is_outside_tolerance: >-
     {{ new_position_supports_angle and supports_angle and new_state.angle > -1 and (current_angle - new_state.angle) | abs > 2 }}
   new_angle_text: >-
-    {% if supports_angle and new_state.angle > -1                                 %}
+
+    {%- if supports_angle and new_state.angle > -1                                %}
     {%   if allow_changes or (not new_angle_is_outside_tolerance)                 %}
     {%     if new_angle_is_outside_tolerance                                      %}
     {%       set angle_action = "Changing angle to"                               %}

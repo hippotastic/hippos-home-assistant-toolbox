@@ -93,6 +93,7 @@ max_exceeded: silent
 
 variables:
   event: >-
+
     {%- if trigger.platform in ["state", "template", "time", "homeassistant"]     %}
     Running due to {{ trigger.id }}
     {%- else                                                                      %}
@@ -100,6 +101,7 @@ variables:
     {%- endif                                                                     %}
   # Load all zones from the configured status helper entities
   all_zones: >-
+
     {%- set ns = namespace(zones=[])                                              %}
     {%- for zone_helper in zone_status_helper_entities                            %}
     {%-   set zone = states(zone_helper) | default("{}")                          %}
@@ -115,6 +117,7 @@ variables:
   # If we were triggered by a Home Assistant restart, or any zone valve states are unavailable,
   # add a small startup delay to allow everything to initialize
   startup_delay: >-
+
     {%- set ns = namespace(delay=0)                                               %}
     {%- if trigger.id == "trigger_ha_restarted"                                   %}
     {%-   set ns.delay = 30                                                       %}
@@ -127,6 +130,7 @@ variables:
     {{ ns.delay }}
   # Find the first zone (if any) where the current time is between the zone's next_start and next_end
   currently_scheduled_zone: >-
+
     {%- set ns = namespace(zone=None)                                             %}
     {%- for zone in all_zones                                                     %}
     {%-   set has_schedule = zone.next_start and zone.next_end                    %}
@@ -143,6 +147,7 @@ variables:
     {{ ns.zone }}
   # If there is a currently scheduled zone, calculate its remaining runtime in seconds
   remaining_runtime_seconds: >-
+
     {%- if currently_scheduled_zone != None                                       %}
     {%-   set remaining = currently_scheduled_zone.next_end | as_datetime - now() %}
     {{ [0, remaining.total_seconds() | round(0, "ceil")] | max }}
@@ -153,6 +158,7 @@ variables:
   # - True if there is any zone where the current time is between the zone's next_start and next_end + 30min,
   #   or last_end is less than 30min ago
   is_controlling_zones: >-
+
     {%- set ns = namespace(result=false)                                          %}
     {%- for zone in all_zones                                                     %}
     {%-   set recent_window = false                                               %}
@@ -173,6 +179,7 @@ variables:
     {{ ns.result }}
   # Get the next possible irrigation start time, which is either today or tomorrow at the configured irrigation_start_time
   next_irrigation_start_time: >-
+
     {%- set todays_start_time = today_at(irrigation_start_time)                   %}
     {%- if todays_start_time > now()                                              %}
     {{ todays_start_time }}
@@ -332,6 +339,7 @@ actions:
           message: "Creating or updating irrigation schedule"
       - variables:
           scheduled_zones: >-
+
             {%- set ns = namespace(zones=[], scheduled_zones=[])                          %}
             {#- // Create a list of all zones, adding an earliest_start_time property to  #}
             {#- // each zone                                                              #}
