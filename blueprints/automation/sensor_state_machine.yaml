@@ -25,7 +25,7 @@ blueprint:
 
     condition_entities_on:
       name: Additional conditions that must be "on"
-      description: >
+      description: |
         If given, these entities must ALL be "on" to allow the resulting state to be "on".
 
         Example: Only allow motion in a room to turn on the lights when it is dark enough.
@@ -36,7 +36,7 @@ blueprint:
 
     condition_entities_off:
       name: Additional conditions that must be "off"
-      description: >
+      description: |-
         If given, these entities must ALL be "off" to allow the resulting state to be "on".
 
         Example: Only allow motion in a room to turn on the lights when the sleep mode is off.
@@ -47,10 +47,10 @@ blueprint:
 
     state_entity:
       name: State entity
-      description: >
+      description: |
         Stores the current state. This can either be an input toggle just for state storage,
         or an actual light or switch.
-        
+
         The automation will automatically turn this entity on or off when switching to a new state,
         which allows controlling a light or switch without even having to specify any actions below.
 
@@ -142,9 +142,16 @@ trigger:
   - id: check_turn_off_sensor
     platform: template
     value_template: >-
-      {% set startup_end = as_datetime(as_timestamp(states('sensor.uptime'), 0) + startup_period_seconds) %}
-      {% set sensors = expand(input_sensors) | rejectattr('state', 'in', ['unknown', 'unavailable']) | list %}
-      {% set all_off = (sensors | count) > 0 and (sensors | selectattr('state', 'eq', 'off') | list | count) == (sensors | count) %}
+      {% set uptime = states("sensor.uptime")                                       %}
+      {% set startup_ts = as_timestamp(uptime, 0) + startup_period_seconds          %}
+      {% set startup_end = as_datetime(startup_ts)                                  %}
+      {% set ignored_states = ["unknown", "unavailable"]                            %}
+      {% set sensors = expand(input_sensors)                                        %}
+      {% set sensors = sensors | rejectattr("state", "in", ignored_states) | list   %}
+      {% set sensors_off = sensors | selectattr("state", "eq", "off") | list        %}
+      {% set sensor_count = sensors | count                                         %}
+      {% set sensors_off_count = sensors_off | count                                %}
+      {% set all_off = sensor_count > 0 and sensors_off_count == sensor_count       %}
       {{ now() > startup_end and all_off }}
     for:
       minutes: "{{ off_delay_minutes }}"
@@ -153,45 +160,58 @@ trigger:
   - id: check_turn_on_conditions
     platform: template
     value_template: >-
-      {% set startup_end = as_datetime(as_timestamp(states('sensor.uptime'), 0) + startup_period_seconds) %}
-      {% set conds_on = expand(condition_entities_on) | list %}
-      {% set conds_off = expand(condition_entities_off) | list %}
-      {% set conds_defined = (conds_on | count) > 0 or (conds_off | count) > 0 %}
-      {% set all_conds_on_met = (conds_on | selectattr('state', 'eq', 'on') | list | count) == (conds_on | count) %}
-      {% set all_conds_off_met = (conds_off | selectattr('state', 'eq', 'off') | list | count) == (conds_off | count) %}
-      {{ now() > startup_end and conds_defined and all_conds_on_met and all_conds_off_met }}
+      {% set uptime = states("sensor.uptime")                                       %}
+      {% set startup_ts = as_timestamp(uptime, 0) + startup_period_seconds          %}
+      {% set startup_end = as_datetime(startup_ts)                                  %}
+      {% set conds_on = expand(condition_entities_on) | list                        %}
+      {% set conds_off = expand(condition_entities_off) | list                      %}
+      {% set on_count = conds_on | count                                            %}
+      {% set off_count = conds_off | count                                          %}
+      {% set conds_defined = on_count > 0 or off_count > 0                          %}
+      {% set met_on = conds_on | selectattr("state", "eq", "on") | list             %}
+      {% set met_off = conds_off | selectattr("state", "eq", "off") | list          %}
+      {% set all_conds_on_met = met_on | count == on_count                          %}
+      {% set all_conds_off_met = met_off | count == off_count                       %}
+      {% set ready = conds_defined and all_conds_on_met and all_conds_off_met       %}
+      {{ now() > startup_end and ready }}
 
   # Trigger: All conditions are no longer met
   - id: check_turn_off_conditions
     platform: template
     value_template: >-
-      {% set startup_end = as_datetime(as_timestamp(states('sensor.uptime'), 0) + startup_period_seconds) %}
-      {% set conds_on = expand(condition_entities_on) | list %}
-      {% set conds_off = expand(condition_entities_off) | list %}
-      {% set conds_defined = (conds_on | count) > 0 or (conds_off | count) > 0 %}
-      {% set all_conds_on_met = (conds_on | selectattr('state', 'eq', 'on') | list | count) == (conds_on | count) %}
-      {% set all_conds_off_met = (conds_off | selectattr('state', 'eq', 'off') | list | count) == (conds_off | count) %}
-      {{ now() > startup_end and conds_defined and not (all_conds_on_met and all_conds_off_met) }}
+      {% set uptime = states("sensor.uptime")                                       %}
+      {% set startup_ts = as_timestamp(uptime, 0) + startup_period_seconds          %}
+      {% set startup_end = as_datetime(startup_ts)                                  %}
+      {% set conds_on = expand(condition_entities_on) | list                        %}
+      {% set conds_off = expand(condition_entities_off) | list                      %}
+      {% set on_count = conds_on | count                                            %}
+      {% set off_count = conds_off | count                                          %}
+      {% set conds_defined = on_count > 0 or off_count > 0                          %}
+      {% set met_on = conds_on | selectattr("state", "eq", "on") | list             %}
+      {% set met_off = conds_off | selectattr("state", "eq", "off") | list          %}
+      {% set all_conds_on_met = met_on | count == on_count                          %}
+      {% set all_conds_off_met = met_off | count == off_count                       %}
+      {% set all_met = all_conds_on_met and all_conds_off_met                       %}
+      {{ now() > startup_end and conds_defined and not all_met }}
 
   # Trigger: All sensors are unchanged for at least X minutes and at least one sensor is on
   - id: check_turn_off_max_on_duration
     platform: template
     value_template: >-
-      {% set startup_end = as_datetime(as_timestamp(states('sensor.uptime'), 0) + startup_period_seconds) %}
-      {% set sensors = expand(input_sensors) | rejectattr('state', 'in', ['unknown', 'unavailable']) | list %}
-      {% set sensors_on = sensors | selectattr('state', 'eq', 'on') | list %}
-      {%
-        set sensors_unchanged_too_long =
-          sensors
-          | selectattr('last_changed', '<', now() - timedelta(minutes=max_on_duration_minutes))
-          | list
-      %}
-      {{
-        now() > startup_end
-        and max_on_duration_minutes > 0
-        and sensors_on | count > 0
-        and sensors | count == sensors_unchanged_too_long | count
-      }}
+      {% set uptime = states("sensor.uptime")                                       %}
+      {% set startup_ts = as_timestamp(uptime, 0) + startup_period_seconds          %}
+      {% set startup_end = as_datetime(startup_ts)                                  %}
+      {% set ignored_states = ["unknown", "unavailable"]                            %}
+      {% set sensors = expand(input_sensors)                                        %}
+      {% set sensors = sensors | rejectattr("state", "in", ignored_states) | list   %}
+      {% set sensors_on = sensors | selectattr("state", "eq", "on") | list          %}
+      {% set too_old = now() - timedelta(minutes=max_on_duration_minutes)           %}
+      {% set stale = sensors | selectattr("last_changed", "<", too_old) | list      %}
+      {% set duration_enabled = max_on_duration_minutes > 0                         %}
+      {% set any_sensor_on = sensors_on | count > 0                                 %}
+      {% set all_sensors_stale = sensors | count == stale | count                   %}
+      {% set ready = duration_enabled and any_sensor_on and all_sensors_stale       %}
+      {{ now() > startup_end and ready }}
 
 variables:
   # Current state and conditions
@@ -229,8 +249,23 @@ variables:
   turn_off_due_to_config: "{{ trigger.id in ['trigger_config', 'trigger_config_delayed'] and not state_based_on_inputs }}"
 
   # Combine all possible cases that require the state to be turned on or off
-  any_turn_on_case: "{{ state_is_off and (turn_on_due_to_sensor or turn_on_due_to_conditions or turn_on_due_to_config) }}"
-  any_turn_off_case: "{{ state_is_on and (trigger.id in ['check_turn_off_sensor', 'check_turn_off_conditions', 'check_turn_off_max_on_duration'] or turn_off_due_to_config) }}"
+  any_turn_on_case: >-
+    {{
+      state_is_off and
+      (turn_on_due_to_sensor or turn_on_due_to_conditions or turn_on_due_to_config)
+    }}
+  any_turn_off_case: >-
+    {{
+      state_is_on and
+      (
+        trigger.id in [
+          'check_turn_off_sensor',
+          'check_turn_off_conditions',
+          'check_turn_off_max_on_duration'
+        ] or
+        turn_off_due_to_config
+      )
+    }}
 
   # Actions
   on_actions: !input on_actions
