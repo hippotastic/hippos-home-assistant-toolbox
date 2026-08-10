@@ -1,10 +1,78 @@
 # Hippo's Home Assistant Toolbox
 
-Reusable Home Assistant blueprints for automations I use locally and share with friends.
+Reusable Home Assistant blueprints with comfortable installation and updates
+through a custom Home Assistant integration.
+
+## Installation
+
+[![Open your Home Assistant instance and add this repository to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=hippotastic&repository=hippos-home-assistant-toolbox&category=integration)
+
+1. Add this repository to HACS as an **Integration** custom repository.
+2. Download **Hippo's Home Assistant Toolbox** in HACS.
+3. Restart Home Assistant.
+4. Open **Settings > Devices & services > Add integration** and select
+   **Hippo's Home Assistant Toolbox**.
+
+No integration settings are required. During setup, all active blueprints that
+do not already exist locally are installed automatically.
+
+Blueprints previously imported from this repository through Home Assistant are
+recognized by their source URL, backed up, and adopted by the integration.
+
+## Updates
+
+The integration checks the published blueprint catalog once per day. New and
+changed blueprints appear together as an update for the **Blueprints** update
+entity. Installing that update downloads the exact source files from one Git
+commit and reloads affected Home Assistant domains.
+
+Use the **Check for updates** button entity to run the catalog check immediately.
+This only checks for changes; it does not install them.
+
+### Release Channels
+
+Every installation follows the **Stable** channel by default; initial setup does
+not ask for a channel. Stable reads the blueprint catalog from the `main` branch.
+
+To test upcoming changes on one Home Assistant instance, open **Settings >
+Devices & services > Hippo's Home Assistant Toolbox > Configure** and select
+**Beta**. The integration reloads automatically and follows the `beta` branch.
+Beta revisions are prefixed with `beta-` in the update entity so they remain
+visibly distinct from stable releases. Switching back to Stable is supported at
+any time.
+
+The Beta channel only affects blueprint content. HACS continues to update the
+integration itself normally.
+
+Files are installed under:
+
+```text
+/config/blueprints/<domain>/hippotastic/
+```
+
+Before replacing an existing file, the integration keeps up to three copies in:
+
+```text
+/config/blueprints/.hippos_toolbox_backups/
+```
+
+### Local Changes
+
+The integration never silently overwrites an unexpected local modification. It
+creates a Repair issue instead. The repair flow backs up the local file and
+restores the published version after explicit confirmation. Keeping the local
+version and ignoring the issue is also supported.
+
+### Deprecated Blueprints
+
+Retired blueprints remain installed locally and continue to be available to
+existing automations, scripts, or template entities. They no longer receive
+updates, and Home Assistant shows an ignorable deprecation issue.
 
 ## Blueprints
 
-Import a blueprint with the **My Home Assistant** button, or copy the GitHub source URL into **Settings > Automations & scenes > Blueprints > Import Blueprint**.
+The integration is the recommended installation method. Individual blueprints
+can still be imported manually.
 
 ### Hippo's Cover Automation
 
@@ -30,114 +98,66 @@ Source: [blueprints/automation/irrigation_zone_calculation.yaml](https://github.
 
 Source: [blueprints/automation/sensor_state_machine.yaml](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/sensor_state_machine.yaml)
 
-## Manual Import
-
-Use these GitHub URLs when importing manually:
-
-| Blueprint | File |
-| --- | --- |
-| Hippo's Cover Automation | `https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/cover_automation.yaml` |
-| Hippo's Irrigation Scheduler | `https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_scheduler.yaml` |
-| Hippo's Irrigation Zone Calculation | `https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_zone_calculation.yaml` |
-| Hippo's Sensor-based State Machine | `https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/sensor_state_machine.yaml` |
-
-For GitHub imports, Home Assistant stores the blueprint under its own blueprint directory using the GitHub user and YAML filename, for example:
-
-```text
-/config/blueprints/automation/hippotastic/cover_automation.yaml
-```
-
-The repository subfolder is only part of the source URL. It does not need to mirror the local Home Assistant storage path.
-
-## Updates
-
-When a blueprint changes:
-
-1. Push the updated blueprint file to GitHub.
-2. In Home Assistant, open **Settings > Automations & scenes > Blueprints**.
-3. Open the three-dot menu for the blueprint.
-4. Select **Re-import blueprint**.
-5. Reload automations under **Settings > Developer tools > YAML**.
-
-Automations created from a blueprint continue to reference that blueprint, so they pick up compatible blueprint changes after the updated blueprint is loaded.
-
-## Local Use
-
-For my own Home Assistant instance, use the same GitHub import flow as everyone else. That keeps the local installation on the same tested path as friends using the shared repository.
-
-Alternatively, for development only, copy or sync the files into the Home Assistant configuration directory under:
-
-```text
-/config/blueprints/automation/hippotastic/
-```
-
-Then reload automations after changes.
-
-If this repository is checked out directly on the Home Assistant host, pull the latest changes before reloading automations.
-
 ## Compatibility
 
-These blueprints declare a minimum Home Assistant version of `2024.6.0`, because they use modern blueprint schema features such as input sections. If a blueprint is tested against a newer required Home Assistant version, update its `homeassistant.min_version` before publishing.
+The integration requires Home Assistant `2026.7.0` or newer. Individual
+blueprints currently declare Home Assistant `2024.6.0` as their minimum version
+and can still be imported manually on compatible older installations.
 
-Breaking input changes can require existing automations to be adjusted manually after re-importing. Prefer additive changes for shared blueprints whenever possible.
+Blueprint updates should remain backwards compatible with existing inputs.
+Breaking input changes can require users to adjust existing consumers manually.
 
-## Validation
+## Development
 
-The repository includes a Home Assistant based blueprint validator in `tools/ha-blueprint-validator`.
-
-Run ESLint:
-
-```sh
-pnpm lint
-```
-
-ESLint also checks YAML files and reports overly long lines as warnings. Use those warnings as a cue to split complex Jinja expressions or introduce local variables before publishing.
-
-Apply automatic ESLint fixes:
+Install dependencies with:
 
 ```sh
-pnpm lint:fix
+pnpm install
 ```
 
-Format annotated Jinja template blocks in blueprints:
+After adding or editing a blueprint, update the catalog:
 
 ```sh
-pnpm format:blueprints
+pnpm catalog:sync
 ```
 
-Check blueprint formatting without writing files:
+The catalog belongs to the checked-out branch. Develop and push preview changes
+on `beta`, including the synchronized `blueprints/catalog.json`, then select the
+Beta channel on a test Home Assistant instance. Promote the tested changes to
+`main` to publish them to Stable users. New blueprints and deprecation
+tombstones follow the same process.
 
-```sh
-pnpm format:blueprints --check
-```
-
-The regular lint task also runs the blueprint formatter check:
-
-```sh
-pnpm lint
-```
-
-The strict lint task treats both ESLint warnings and blueprint formatter warnings
-as failures:
-
-```sh
-pnpm lint:strict
-```
-
-The formatter acts on folded scalar blocks that contain `{#- ... #}` Jinja comments. See `tools/ha-blueprint-formatter` for the exact style rules.
-
-Run the lightweight YAML syntax check:
-
-```sh
-pnpm validate --syntax-only
-```
-
-Run the full Docker-based Home Assistant configuration check:
+Run the canonical local validation suite:
 
 ```sh
 pnpm validate
 ```
 
-The full check creates a temporary Home Assistant configuration, installs the repository blueprints into it, adds one fixture automation per blueprint, and runs `hass --script check_config`.
+This fails fast through ESLint and catalog consistency, then checks TypeScript
+and unit tests. Finally, one Vitest run starts a network-isolated Home Assistant
+container and executes both repository validation and blueprint runtime tests.
+The YAML linter reports lines longer than 140 characters as warnings.
 
-The Home Assistant validation container runs with Docker networking disabled. The validator also uses Docker's `--pull never` policy by default, so pull the Home Assistant image explicitly before the first full run.
+The suite is composed from independently runnable commands:
+
+```sh
+pnpm lint:strict
+pnpm typecheck
+pnpm test:unit
+pnpm test:ha:config
+pnpm test:ha:runtime
+pnpm test:ha
+```
+
+`test:ha:config` selects only repository and configuration validation,
+`test:ha:runtime` selects only runtime behavior, and `test:ha` runs both groups
+with one shared HA instance. GitHub Actions runs only the first three Docker-free
+commands, while `pnpm validate` remains the canonical full local validation.
+
+The shared validation and runtime container uses Docker networking mode `none`.
+No Python installation is required on the host; Python regression tests execute
+inside the Home Assistant container and are orchestrated by Vitest. See
+`tools/ha-blueprint-validator` and `test/README.md` for details.
+
+Catalog maintenance and deprecation rules are documented in
+`tools/blueprint-catalog`.

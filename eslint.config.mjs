@@ -68,7 +68,7 @@ const tsRules = {
 
 export default [
 	{
-		ignores: ['**/node_modules/**', 'pnpm-lock.yaml'],
+		ignores: ['**/node_modules/**', '.ha-imported-blueprints/**', 'pnpm-lock.yaml'],
 	},
 	js.configs.recommended,
 	eslintConfigPrettier,
@@ -136,6 +136,12 @@ export default [
 			'yml/no-empty-sequence-entry': 'warn',
 			'yml/no-irregular-whitespace': 'off',
 			'yml/plain-scalar': 'off',
+		},
+	},
+	{
+		files: ['test/reference/**/*.yaml', 'test/reference/**/*.yml'],
+		rules: {
+			'max-len': 'off',
 		},
 	},
 	...tsTypeCheckedConfigs,

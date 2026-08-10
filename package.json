@@ -3,13 +3,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "format:blueprints": "node tools/ha-blueprint-formatter/format.ts",
-    "lint": "eslint . && pnpm lint:blueprints",
-    "lint:blueprints": "pnpm format:blueprints --check",
+    "catalog:check": "node tools/blueprint-catalog/cli.ts check",
+    "catalog:sync": "node tools/blueprint-catalog/cli.ts sync",
+    "lint": "eslint . && pnpm catalog:check",
     "lint:fix": "eslint . --fix",
-    "lint:strict": "eslint . --max-warnings 0 && pnpm lint:blueprints --fail-on-warnings",
+    "lint:strict": "eslint . --max-warnings 0 && pnpm catalog:check",
+    "test:ha": "vitest run --config test/vitest.config.ts",
+    "test:ha:config": "vitest run --config test/config/vitest.config.ts",
+    "test:ha:runtime": "vitest run --config test/runtime/vitest.config.ts",
+    "test:unit": "vitest run --config test/unit/vitest.config.ts",
     "typecheck": "tsc --noEmit",
-    "validate": "node tools/ha-blueprint-validator/validate.ts"
+    "validate": "pnpm lint:strict && pnpm typecheck && pnpm test:unit && pnpm test:ha"
   },
   "packageManager": "pnpm@10.6.1",
   "dependencies": {
@@ -28,6 +32,7 @@
     "globals": "^17.6.0",
     "prettier": "^3.8.3",
     "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
     "yaml-eslint-parser": "^2.0.0"
   }
 }

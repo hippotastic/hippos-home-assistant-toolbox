@@ -1,0 +1,35 @@
+homeassistant:
+  name: Blueprint Runtime Test
+  # Demo location used only for deterministic Home Assistant tests.
+  latitude: 52.52
+  longitude: 13.405
+  elevation: 34
+  unit_system: metric
+  time_zone: Europe/Berlin
+
+logger:
+  default: warning
+
+http:
+
+logbook:
+
+blueprint_test:
+  states: !include fixture_states.yaml
+
+automation: !include automations.yaml
+input_boolean: !include input_booleans.yaml
+input_number: !include input_numbers.yaml
+input_text: !include input_texts.yaml
+
+cover:
+  - platform: blueprint_test
+    entities: !include fixture_covers.yaml
+
+light:
+  - platform: blueprint_test
+    entities: !include fixture_lights.yaml
+
+switch:
+  - platform: blueprint_test
+    entities: !include fixture_switches.yaml

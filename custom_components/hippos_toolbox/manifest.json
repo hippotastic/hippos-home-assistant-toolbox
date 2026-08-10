@@ -1,0 +1,14 @@
+{
+  "domain": "hippos_toolbox",
+  "name": "Hippo's Home Assistant Toolbox",
+  "after_dependencies": ["automation", "script", "template"],
+  "codeowners": ["@hippotastic"],
+  "config_flow": true,
+  "documentation": "https://github.com/hippotastic/hippos-home-assistant-toolbox",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/hippotastic/hippos-home-assistant-toolbox/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}

@@ -1,0 +1,8 @@
+{
+  "domain": "blueprint_test",
+  "name": "Blueprint Test Harness",
+  "version": "0.0.1",
+  "dependencies": ["cover", "http", "light", "switch"],
+  "requirements": [],
+  "codeowners": []
+}

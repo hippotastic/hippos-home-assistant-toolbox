@@ -1,0 +1,37 @@
+{
+  "blueprints": [
+    {
+      "domain": "automation",
+      "id": "cover_automation",
+      "name": "Hippo's Cover Automation",
+      "path": "blueprints/automation/cover_automation.yaml",
+      "sha256": "36e5cc95d14c7a4fbcb0dfa89038b3fd16627f92fdeaa8e4a0bb8c9fff00b3b4",
+      "status": "active"
+    },
+    {
+      "domain": "automation",
+      "id": "irrigation_scheduler",
+      "name": "Hippo's Irrigation Scheduler",
+      "path": "blueprints/automation/irrigation_scheduler.yaml",
+      "sha256": "22f9e877e7065e967b10e7740eddf06ca0ee40129eec114cdceb7dafc57d011b",
+      "status": "active"
+    },
+    {
+      "domain": "automation",
+      "id": "irrigation_zone_calculation",
+      "name": "Hippo's Irrigation Zone Calculation",
+      "path": "blueprints/automation/irrigation_zone_calculation.yaml",
+      "sha256": "b40ca78436f3bbe442907fcecaa4232f07b3ca726e378ab46c1ee38cd3bedc30",
+      "status": "active"
+    },
+    {
+      "domain": "automation",
+      "id": "sensor_state_machine",
+      "name": "Hippo's Sensor-based State Machine",
+      "path": "blueprints/automation/sensor_state_machine.yaml",
+      "sha256": "71ec0c1fd0b060e12497e52a27f86190c07340412411a26792df38968805ae2d",
+      "status": "active"
+    }
+  ],
+  "schema_version": 1
+}

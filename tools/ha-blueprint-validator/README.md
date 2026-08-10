@@ -1,67 +1,55 @@
 # Home Assistant Blueprint Validator
 
-This directory contains a lightweight integration smoke test for the repository's Home Assistant blueprints.
+This directory contains the minimal configuration used to validate every
+repository blueprint against Home Assistant.
 
-It builds a temporary Home Assistant configuration, installs the repository blueprints into that configuration, wires each blueprint into one fixture automation, and then runs Home Assistant's real configuration checker in Docker.
+## Test Coverage
 
-## What This Is
+The Vitest test file `test/config/validation.test.ts` performs three
+checks:
 
-This is an integration-style validator with fixtures:
+- parse repository and validator YAML with Home Assistant's custom YAML tags;
+- execute the Python integration regression tests inside the HA container;
+- run Home Assistant's real `check_config --fail-on-warnings` against the
+  validator fixtures.
 
-- `fixtures/configuration.yaml` is the minimal Home Assistant configuration.
-- `fixtures/automations.yaml` contains one `use_blueprint` automation per blueprint.
-- `validate.ts` copies the real blueprints into a temporary Home Assistant config directory and runs `hass --script check_config`.
+`fixtures/configuration.yaml` provides the minimal Home Assistant configuration,
+and `fixtures/automations.yaml` instantiates every published blueprint with
+explicit inputs.
 
-It is not a unit test for runtime behavior. It validates that Home Assistant can load the blueprint-backed automations and that the generated automation configuration passes Home Assistant's schema checks.
+## Running Tests
 
-## Usage
-
-Run the validator from anywhere inside the repository:
+Run only repository and Home Assistant configuration validation:
 
 ```sh
-pnpm validate
+pnpm test:ha:config
 ```
 
-By default it uses:
+Run all HA-backed validation and runtime tests with one shared container:
 
-```text
-ghcr.io/home-assistant/home-assistant:stable
+```sh
+pnpm test:ha
 ```
 
-The Home Assistant container is started with `--network none`. The validation run cannot communicate with devices on the local network or with the internet.
+The canonical `pnpm validate` command runs linting, type checking, unit tests,
+and then `test:ha`.
 
-The validator also uses Docker's `--pull never` policy by default, so running the validator does not implicitly download an image. Pull the image explicitly once when needed:
+The default image is `ghcr.io/home-assistant/home-assistant:stable`. The harness
+uses Docker's `--pull never` policy. Update the image explicitly when desired:
 
 ```sh
 docker pull ghcr.io/home-assistant/home-assistant:stable
 ```
 
-Alternatively, allow Docker to pull the image during validation:
+Use `HA_IMAGE` to select a different image and `HA_IMAGE_PULL_POLICY` with
+`never`, `missing`, or `always` to change the pull behavior for one run. The
+container uses `--network none`, publishes no ports, and cannot contact the LAN
+or internet.
 
-```sh
-pnpm validate --pull missing
-```
-
-To test against another Home Assistant image:
-
-```sh
-pnpm validate --image ghcr.io/home-assistant/home-assistant:beta
-```
-
-For a local syntax-only check that does not start Docker:
-
-```sh
-pnpm validate --syntax-only
-```
-
-To inspect the generated Home Assistant configuration:
-
-```sh
-pnpm validate --prepare-only
-```
+Set `KEEP_HA_BLUEPRINT_RUNTIME_TEST_CONFIG=1` to preserve the generated runtime
+and validator configurations for inspection.
 
 ## Updating Fixtures
 
-When a blueprint gains a new required input, add a matching value to the corresponding entry in `fixtures/automations.yaml`.
-
-Prefer keeping fixture values explicit. The goal is to exercise the same `use_blueprint` shape that a real Home Assistant installation uses.
+When a blueprint gains a new required input, add a matching explicit value to
+`fixtures/automations.yaml`.
