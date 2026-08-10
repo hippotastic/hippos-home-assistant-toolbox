@@ -17,22 +17,17 @@ checks:
 and `fixtures/automations.yaml` instantiates every published blueprint with
 explicit inputs.
 
-## Running Tests
+## Running Validation
 
-Run only repository and Home Assistant configuration validation:
-
-```sh
-pnpm test:ha:config
-```
-
-Run all HA-backed validation and runtime tests with one shared container:
+Run the complete repository validation from the project root:
 
 ```sh
-pnpm test:ha
+pnpm validate
 ```
 
-The canonical `pnpm validate` command runs linting, type checking, unit tests,
-and then `test:ha`.
+This command is intentionally ordered to fail early on quick static checks. It
+runs the Home Assistant configuration and runtime tests together in one shared
+container only after those checks pass.
 
 The default image is `ghcr.io/home-assistant/home-assistant:stable`. The harness
 uses Docker's `--pull never` policy. Update the image explicitly when desired:

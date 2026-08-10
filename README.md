@@ -133,26 +133,16 @@ Run the canonical local validation suite:
 pnpm validate
 ```
 
-This fails fast through ESLint and catalog consistency, then checks TypeScript
+`pnpm validate` is the complete local check and orders its work to fail early
+and quickly: ESLint and catalog consistency run first, followed by TypeScript
 and unit tests. Finally, one Vitest run starts a network-isolated Home Assistant
 container and executes both repository validation and blueprint runtime tests.
-The YAML linter reports lines longer than 140 characters as warnings.
+Do not run additional checks before or after a successful validation unless the
+working tree changed. The YAML linter reports lines longer than 140 characters
+as warnings.
 
-The suite is composed from independently runnable commands:
-
-```sh
-pnpm lint:strict
-pnpm typecheck
-pnpm test:unit
-pnpm test:ha:config
-pnpm test:ha:runtime
-pnpm test:ha
-```
-
-`test:ha:config` selects only repository and configuration validation,
-`test:ha:runtime` selects only runtime behavior, and `test:ha` runs both groups
-with one shared HA instance. GitHub Actions runs only the first three Docker-free
-commands, while `pnpm validate` remains the canonical full local validation.
+GitHub Actions runs the Docker-free portion of the same validation flow. The
+full Home Assistant-backed suite remains local.
 
 The shared validation and runtime container uses Docker networking mode `none`.
 No Python installation is required on the host; Python regression tests execute

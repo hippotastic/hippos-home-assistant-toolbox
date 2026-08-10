@@ -4,27 +4,18 @@ These tests validate the repository and execute blueprint automations inside a
 real Home Assistant process. They are the final stage of the local
 `pnpm validate` suite but are deliberately not run in CI.
 
-## Running Tests
+## Running Validation
 
-Run all HA-backed tests with one shared container:
-
-```sh
-pnpm test:ha
-```
-
-Run only the repository validator or blueprint runtime tests:
+Run the complete repository validation from the project root:
 
 ```sh
-pnpm test:ha:config
-pnpm test:ha:runtime
+pnpm validate
 ```
 
-Run one test file or select one scenario with regular Vitest arguments:
-
-```sh
-pnpm test:ha:runtime test/runtime/cover_automation.test.ts
-pnpm test:ha:runtime -t "homes intermediate tilt targets"
-```
+This is the canonical and complete check. It deliberately runs fast static
+checks before slower tests and starts Home Assistant only after those checks
+pass. No preliminary or follow-up validation commands are needed when it
+succeeds and the working tree remains unchanged.
 
 The default image is `ghcr.io/home-assistant/home-assistant:stable`. The harness
 uses Docker's `--pull never` policy so the tested Home Assistant version changes
@@ -39,10 +30,10 @@ Use `HA_IMAGE` to select another image and `HA_IMAGE_PULL_POLICY` with `never`,
 
 ## Architecture
 
-Vitest `globalSetup` creates one Home Assistant container for the selected
-HA-backed test run. `test:ha` executes repository validation and runtime behavior
-in the same container. Test files execute sequentially with one worker and
-address Home Assistant through a small test-only integration.
+Vitest `globalSetup` creates one Home Assistant container for the HA-backed
+validation stage. Repository validation and runtime behavior execute in the
+same container. Test files execute sequentially with one worker and address
+Home Assistant through a small test-only integration.
 
 The generated Home Assistant configuration contains:
 
