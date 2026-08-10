@@ -1,10 +1,12 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { TestProject } from 'vitest/node'
 import { requestHomeAssistant, type BlueprintRuntimeDiagnostics } from './api.ts'
-import { expectedAutomationEntityIds, expectedFixtureStateEntityIds, fixtureFiles } from './scenarios.ts'
+import { applyBlueprintTestValueOverrides } from './blueprint-test-overrides.ts'
+import { formatHomeAssistantLogIssues, isKnownReferenceBlueprintWarning, unexpectedHomeAssistantLogIssues } from './ha-runtime-logs.ts'
+import { expectedAutomationStates, expectedFixtureStateEntityIds, fixtureFiles } from './scenarios.ts'
 
 type HarnessOptions = {
 	image: string
@@ -18,6 +20,7 @@ type RuntimeFixture = {
 	containerName: string
 	logs: string[]
 	process: ChildProcessWithoutNullStreams
+	runtimeLogStart: number
 }
 
 const DEFAULT_IMAGE = 'ghcr.io/home-assistant/home-assistant:stable'
@@ -34,7 +37,7 @@ export async function setupRuntimeFixture(project: TestProject, repoRoot: string
 	const containerName = `ha-blueprint-runtime-${process.pid}-${Date.now()}`
 	const logs: string[] = []
 	const processHandle = startHomeAssistant(configDir, options, containerName, repoRoot)
-	const fixture: RuntimeFixture = { configDir, containerName, logs, process: processHandle }
+	const fixture: RuntimeFixture = { configDir, containerName, logs, process: processHandle, runtimeLogStart: 0 }
 
 	processHandle.stdout.on('data', (chunk: Buffer) => recordLog(logs, chunk))
 	processHandle.stderr.on('data', (chunk: Buffer) => recordLog(logs, chunk))
@@ -42,13 +45,14 @@ export async function setupRuntimeFixture(project: TestProject, repoRoot: string
 	try {
 		await waitForFixture(fixture)
 		requestHomeAssistant(containerName, 'clear_events', {}, 'POST')
+		fixture.runtimeLogStart = completeLogs(fixture).length
 		project.provide('haBlueprintContainerName', containerName)
 	} catch (error) {
 		await stopFixture(fixture)
 		throw error
 	}
 
-	return async () => stopFixture(fixture)
+	return async () => teardownRuntimeFixture(fixture)
 }
 
 function harnessOptions(): HarnessOptions {
@@ -71,15 +75,22 @@ function prepareConfig(repoRoot: string): string {
 	const configDir = mkdtempSync(join(tmpdir(), 'ha-blueprint-runtime-test.'))
 	const testDir = join(repoRoot, 'test')
 	const targetBlueprintDir = join(configDir, 'blueprints', 'automation', 'hippotastic')
+	const targetReferenceDir = join(targetBlueprintDir, 'reference')
 
 	mkdirSync(targetBlueprintDir, { recursive: true })
+	mkdirSync(targetReferenceDir, { recursive: true })
 	cpSync(join(testDir, 'fixtures', 'configuration.yaml'), join(configDir, 'configuration.yaml'))
 	cpSync(join(testDir, 'custom_components'), join(configDir, 'custom_components'), { recursive: true })
 
 	for (const file of readdirSync(join(repoRoot, 'blueprints', 'automation'))
 		.filter((name) => name.endsWith('.yaml'))
 		.sort()) {
-		cpSync(join(repoRoot, 'blueprints', 'automation', file), join(targetBlueprintDir, basename(file)))
+		copyRuntimeBlueprint(join(repoRoot, 'blueprints', 'automation', file), join(targetBlueprintDir, basename(file)))
+	}
+	for (const file of readdirSync(join(testDir, 'reference', 'blueprints', 'automation'))
+		.filter((name) => name.endsWith('.yaml'))
+		.sort()) {
+		copyRuntimeBlueprint(join(testDir, 'reference', 'blueprints', 'automation', file), join(targetReferenceDir, basename(file)))
 	}
 	for (const [file, source] of Object.entries(fixtureFiles())) {
 		writeFileSync(join(configDir, file), source, 'utf8')
@@ -87,6 +98,11 @@ function prepareConfig(repoRoot: string): string {
 	prepareValidatorConfig(repoRoot, configDir)
 
 	return configDir
+}
+
+function copyRuntimeBlueprint(sourcePath: string, targetPath: string): void {
+	const source = readFileSync(sourcePath, 'utf8')
+	writeFileSync(targetPath, applyBlueprintTestValueOverrides(source, sourcePath), 'utf8')
 }
 
 function prepareValidatorConfig(repoRoot: string, configDir: string): void {
@@ -133,7 +149,7 @@ function startHomeAssistant(configDir: string, options: HarnessOptions, name: st
 }
 
 async function waitForFixture(fixture: RuntimeFixture): Promise<void> {
-	const expectedAutomations = expectedAutomationEntityIds()
+	const expectedAutomations = expectedAutomationStates()
 	const expectedFixtureStates = expectedFixtureStateEntityIds()
 	const deadline = Date.now() + STARTUP_TIMEOUT_MS
 
@@ -145,7 +161,7 @@ async function waitForFixture(fixture: RuntimeFixture): Promise<void> {
 		try {
 			const diagnostics = requestHomeAssistant<BlueprintRuntimeDiagnostics>(fixture.containerName, 'diagnostics', {}, 'GET')
 			const states = new Map(diagnostics.states.map((state) => [state.entity_id, state.state]))
-			if (expectedAutomations.every((entityId) => states.get(entityId) === 'on') && expectedFixtureStates.every((entityId) => states.has(entityId))) {
+			if (expectedAutomations.every(({ entityId, state }) => states.get(entityId) === state) && expectedFixtureStates.every((entityId) => states.has(entityId))) {
 				await delay(250)
 				return
 			}
@@ -183,6 +199,29 @@ async function stopFixture(fixture: RuntimeFixture): Promise<void> {
 	if (existsSync(fixture.configDir)) {
 		rmSync(fixture.configDir, { force: true, recursive: true })
 	}
+}
+
+async function teardownRuntimeFixture(fixture: RuntimeFixture): Promise<void> {
+	let logError: Error | undefined
+	try {
+		// Let Home Assistant flush warnings caused by the final awaited action.
+		await delay(100)
+		const issues = unexpectedHomeAssistantLogIssues(completeLogs(fixture).slice(fixture.runtimeLogStart), isKnownReferenceBlueprintWarning)
+		if (issues.length > 0) {
+			logError = new Error(`Home Assistant emitted unexpected runtime log entries:\n\n${formatHomeAssistantLogIssues(issues)}`)
+		}
+	} finally {
+		await stopFixture(fixture)
+	}
+
+	if (logError) {
+		process.exitCode = 1
+		throw logError
+	}
+}
+
+function completeLogs(fixture: RuntimeFixture): string {
+	return fixture.logs.join('')
 }
 
 function lastLogLines(logs: string[]): string {

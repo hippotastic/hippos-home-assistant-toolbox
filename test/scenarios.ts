@@ -4,6 +4,7 @@ import { stringify } from 'yaml'
 type Automation = {
 	alias: string
 	id: string
+	initial_state?: boolean
 	use_blueprint: {
 		input: Record<string, unknown>
 		path: string
@@ -35,7 +36,12 @@ type CoverScenarioOptions = {
 }
 
 export type CoverScenario = ReturnType<typeof coverScenario>
+export type IrrigationCalculationScenario = ReturnType<typeof irrigationCalculationScenario>
+export type IrrigationSchedulerScenario = ReturnType<typeof irrigationSchedulerScenario>
 export type SensorScenario = ReturnType<typeof sensorScenario>
+
+export const IRRIGATION_VARIANTS = ['current', 'reference'] as const
+export type IrrigationVariant = (typeof IRRIGATION_VARIANTS)[number]
 
 function coverScenario(id: string, options: CoverScenarioOptions = {}) {
 	const inputPrefix = `fixture_cover_${id}`
@@ -122,6 +128,62 @@ function sensorScenario(id: string, options: SensorScenarioOptions = {}) {
 	}
 }
 
+type IrrigationCalculationScenarioOptions = {
+	baseRuntimeMinutes?: number
+	intervalDays?: number
+}
+
+function irrigationCalculationScenario(id: string, options: IrrigationCalculationScenarioOptions = {}) {
+	const prefix = `fixture_irrigation_calculation_${id}`
+	return {
+		baseRuntimeMinutes: options.baseRuntimeMinutes ?? 10,
+		id,
+		intervalDays: options.intervalDays ?? 1,
+		sensors: {
+			rainfall: `sensor.${prefix}_rainfall`,
+			temperature: `sensor.${prefix}_temperature`,
+		},
+		variants: Object.fromEntries(
+			IRRIGATION_VARIANTS.map((variant) => [
+				variant,
+				{
+					automation: `automation.${prefix}_${variant}`,
+					helper: `input_text.${prefix}_${variant}_status`,
+					valve: `switch.${prefix}_${variant}_valve`,
+				},
+			])
+		) as Record<IrrigationVariant, { automation: string; helper: string; valve: string }>,
+	}
+}
+
+type IrrigationSchedulerScenarioOptions = {
+	startTime?: string
+	withPump?: boolean
+	zoneCount?: number
+}
+
+function irrigationSchedulerScenario(id: string, options: IrrigationSchedulerScenarioOptions = {}) {
+	const prefix = `fixture_irrigation_scheduler_${id}`
+	const zoneCount = options.zoneCount ?? 2
+	return {
+		id,
+		startTime: options.startTime ?? '04:37:00',
+		variants: Object.fromEntries(
+			IRRIGATION_VARIANTS.map((variant) => [
+				variant,
+				{
+					automation: `automation.${prefix}_${variant}`,
+					helpers: Array.from({ length: zoneCount }, (_, index) => `input_text.${prefix}_${variant}_zone_${index + 1}`),
+					pump: `switch.${prefix}_${variant}_pump`,
+					valves: Array.from({ length: zoneCount }, (_, index) => `switch.${prefix}_${variant}_valve_${index + 1}`),
+				},
+			])
+		) as Record<IrrigationVariant, { automation: string; helpers: string[]; pump: string; valves: string[] }>,
+		withPump: options.withPump ?? false,
+		zoneCount,
+	}
+}
+
 export const COVER_SCENARIOS = {
 	availability: coverScenario('availability', { defaultPosition: 70, defaultAngle: 40 }),
 	default: coverScenario('default', {
@@ -183,6 +245,47 @@ export const SENSOR_SCENARIOS = {
 	transitions: sensorScenario('transitions', { sensorCount: 2 }),
 } as const
 
+export const IRRIGATION_CALCULATION_SCENARIOS = {
+	emptyHelper: irrigationCalculationScenario('empty_helper'),
+	fallback: irrigationCalculationScenario('fallback'),
+	formula: irrigationCalculationScenario('formula'),
+	noOp: irrigationCalculationScenario('no_op'),
+	reconcile: irrigationCalculationScenario('reconcile'),
+} as const
+
+export const IRRIGATION_SCHEDULER_SCENARIOS = {
+	active: irrigationSchedulerScenario('active', { withPump: true, zoneCount: 2 }),
+	emptyHelper: irrigationSchedulerScenario('empty_helper', { zoneCount: 1 }),
+	handoff: irrigationSchedulerScenario('handoff', { zoneCount: 2 }),
+	interval: irrigationSchedulerScenario('interval', { zoneCount: 2 }),
+	invalid: irrigationSchedulerScenario('invalid', { zoneCount: 4 }),
+	outsideWindow: irrigationSchedulerScenario('outside_window', { withPump: true, zoneCount: 1 }),
+	planning: irrigationSchedulerScenario('planning', { zoneCount: 3 }),
+	recentWindow: irrigationSchedulerScenario('recent_window', { withPump: true, zoneCount: 1 }),
+	startup: irrigationSchedulerScenario('startup', { zoneCount: 1 }),
+	triggerFilter: irrigationSchedulerScenario('trigger_filter', { zoneCount: 1 }),
+} as const
+
+export const IRRIGATION_END_TO_END = {
+	id: 'end_to_end',
+	sensors: {
+		rainfall: 'sensor.fixture_irrigation_end_to_end_rainfall',
+		temperature: 'sensor.fixture_irrigation_end_to_end_temperature',
+	},
+	startTime: '04:37:00',
+	variants: Object.fromEntries(
+		IRRIGATION_VARIANTS.map((variant) => [
+			variant,
+			{
+				calculationAutomation: `automation.fixture_irrigation_end_to_end_calculation_${variant}`,
+				helper: `input_text.fixture_irrigation_end_to_end_${variant}_status`,
+				schedulerAutomation: `automation.fixture_irrigation_end_to_end_scheduler_${variant}`,
+				valve: `switch.fixture_irrigation_end_to_end_${variant}_valve`,
+			},
+		])
+	) as Record<IrrigationVariant, { calculationAutomation: string; helper: string; schedulerAutomation: string; valve: string }>,
+} as const
+
 function coverAutomations(): Automation[] {
 	return Object.values(COVER_SCENARIOS).map((scenario) => ({
 		alias: `Fixture cover ${scenario.id}`,
@@ -231,6 +334,96 @@ function sensorAutomations(): Automation[] {
 	})
 }
 
+function irrigationBlueprintPath(blueprint: 'irrigation_scheduler' | 'irrigation_zone_calculation', variant: IrrigationVariant): string {
+	const directory = variant === 'current' ? 'hippotastic' : 'hippotastic/reference'
+	return `${directory}/${blueprint}.yaml`
+}
+
+function irrigationCalculationAutomations(): Automation[] {
+	return Object.values(IRRIGATION_CALCULATION_SCENARIOS).flatMap((scenario) =>
+		IRRIGATION_VARIANTS.map((variant) => {
+			const entities = scenario.variants[variant]
+			return {
+				alias: `Fixture irrigation calculation ${scenario.id} ${variant}`,
+				id: objectId(entities.automation),
+				initial_state: false,
+				use_blueprint: {
+					input: {
+						base_runtime_minutes: scenario.baseRuntimeMinutes,
+						max_temperature_of_last_24h_entity: scenario.sensors.temperature,
+						rainfall_percentage_of_last_24h_entity: scenario.sensors.rainfall,
+						status_helper_entity: entities.helper,
+						valve_entity: entities.valve,
+						watering_interval_days: scenario.intervalDays,
+					},
+					path: irrigationBlueprintPath('irrigation_zone_calculation', variant),
+				},
+			}
+		})
+	)
+}
+
+function irrigationSchedulerAutomations(): Automation[] {
+	return Object.values(IRRIGATION_SCHEDULER_SCENARIOS).flatMap((scenario) =>
+		IRRIGATION_VARIANTS.map((variant) => {
+			const entities = scenario.variants[variant]
+			return {
+				alias: `Fixture irrigation scheduler ${scenario.id} ${variant}`,
+				id: objectId(entities.automation),
+				initial_state: false,
+				use_blueprint: {
+					input: {
+						irrigation_start_time: scenario.startTime,
+						master_pump_entity: scenario.withPump ? entities.pump : [],
+						zone_status_helper_entities: entities.helpers,
+					},
+					path: irrigationBlueprintPath('irrigation_scheduler', variant),
+				},
+			}
+		})
+	)
+}
+
+function irrigationEndToEndAutomations(): Automation[] {
+	return IRRIGATION_VARIANTS.flatMap((variant) => {
+		const entities = IRRIGATION_END_TO_END.variants[variant]
+		return [
+			{
+				alias: `Fixture irrigation end-to-end calculation ${variant}`,
+				id: objectId(entities.calculationAutomation),
+				initial_state: false,
+				use_blueprint: {
+					input: {
+						base_runtime_minutes: 10,
+						max_temperature_of_last_24h_entity: IRRIGATION_END_TO_END.sensors.temperature,
+						rainfall_percentage_of_last_24h_entity: IRRIGATION_END_TO_END.sensors.rainfall,
+						status_helper_entity: entities.helper,
+						valve_entity: entities.valve,
+						watering_interval_days: 2,
+					},
+					path: irrigationBlueprintPath('irrigation_zone_calculation', variant),
+				},
+			},
+			{
+				alias: `Fixture irrigation end-to-end scheduler ${variant}`,
+				id: objectId(entities.schedulerAutomation),
+				initial_state: false,
+				use_blueprint: {
+					input: {
+						irrigation_start_time: IRRIGATION_END_TO_END.startTime,
+						zone_status_helper_entities: [entities.helper],
+					},
+					path: irrigationBlueprintPath('irrigation_scheduler', variant),
+				},
+			},
+		]
+	})
+}
+
+function irrigationAutomations(): Automation[] {
+	return [...irrigationCalculationAutomations(), ...irrigationSchedulerAutomations(), ...irrigationEndToEndAutomations()]
+}
+
 function objectId(entityId: string): string {
 	return entityId.split('.', 2)[1] ?? entityId
 }
@@ -241,6 +434,8 @@ function unique(values: string[]): string[] {
 
 export function fixtureFiles(): Record<string, string> {
 	const coverScenarios = Object.values(COVER_SCENARIOS)
+	const irrigationCalculationScenarios = Object.values(IRRIGATION_CALCULATION_SCENARIOS)
+	const irrigationSchedulerScenarios = Object.values(IRRIGATION_SCHEDULER_SCENARIOS)
 	const sensorScenarios = Object.values(SENSOR_SCENARIOS)
 	const inputBooleans = unique([
 		...coverScenarios.flatMap((scenario) => [scenario.controls.automatic, scenario.controls.lockout, scenario.controls.night, scenario.controls.privacy, scenario.controls.sun]),
@@ -265,6 +460,11 @@ export function fixtureFiles(): Record<string, string> {
 				},
 			] as const
 	)
+	const irrigationInputTexts = [
+		...irrigationCalculationScenarios.flatMap((scenario) => IRRIGATION_VARIANTS.map((variant) => scenario.variants[variant].helper)),
+		...irrigationSchedulerScenarios.flatMap((scenario) => IRRIGATION_VARIANTS.flatMap((variant) => scenario.variants[variant].helpers)),
+		...IRRIGATION_VARIANTS.map((variant) => IRRIGATION_END_TO_END.variants[variant].helper),
+	].map((entityId) => [objectId(entityId), { initial: '{}', max: 255 }] as const)
 	const covers = coverScenarios.map((scenario) => ({
 		id: objectId(scenario.entities.cover),
 		position: scenario.initialPosition,
@@ -277,17 +477,22 @@ export function fixtureFiles(): Record<string, string> {
 		...(scenario.outputDomain === 'switch' ? [objectId(scenario.entities.output)] : []),
 		...(scenario.withCustomActions ? [objectId(scenario.entities.marker)] : []),
 	])
+	const irrigationSwitches = [
+		...irrigationCalculationScenarios.flatMap((scenario) => IRRIGATION_VARIANTS.map((variant) => scenario.variants[variant].valve)),
+		...irrigationSchedulerScenarios.flatMap((scenario) => IRRIGATION_VARIANTS.flatMap((variant) => [scenario.variants[variant].pump, ...scenario.variants[variant].valves])),
+		...IRRIGATION_VARIANTS.map((variant) => IRRIGATION_END_TO_END.variants[variant].valve),
+	].map(objectId)
 	const yamlOptions: DocumentOptions & SchemaOptions & ToStringOptions = {
 		lineWidth: 0,
 		sortMapEntries: true,
 	}
 
 	return {
-		'automations.yaml': stringify([...coverAutomations(), ...sensorAutomations()], yamlOptions),
+		'automations.yaml': stringify([...coverAutomations(), ...sensorAutomations(), ...irrigationAutomations()], yamlOptions),
 		'fixture_covers.yaml': stringify(covers, yamlOptions),
 		'fixture_lights.yaml': stringify(unique(lights), yamlOptions),
 		'fixture_states.yaml': stringify(initialFixtureStates(), yamlOptions),
-		'fixture_switches.yaml': stringify(unique(switches), yamlOptions),
+		'fixture_switches.yaml': stringify(unique([...switches, ...irrigationSwitches]), yamlOptions),
 		'input_booleans.yaml': stringify(Object.fromEntries(inputBooleans.map((entityId) => [objectId(entityId), { initial: false }])), yamlOptions),
 		'input_numbers.yaml': stringify(
 			Object.fromEntries(
@@ -299,12 +504,15 @@ export function fixtureFiles(): Record<string, string> {
 			),
 			yamlOptions
 		),
-		'input_texts.yaml': stringify(Object.fromEntries(inputTexts), yamlOptions),
+		'input_texts.yaml': stringify(Object.fromEntries([...inputTexts, ...irrigationInputTexts]), yamlOptions),
 	}
 }
 
-export function expectedAutomationEntityIds(): string[] {
-	return [...coverAutomations(), ...sensorAutomations()].map((automation) => `automation.${automation.id}`)
+export function expectedAutomationStates(): Array<{ entityId: string; state: 'off' | 'on' }> {
+	return [
+		...[...coverAutomations(), ...sensorAutomations()].map((automation) => ({ entityId: `automation.${automation.id}`, state: 'on' as const })),
+		...irrigationAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'off' as const })),
+	]
 }
 
 export function expectedFixtureStateEntityIds(): string[] {
@@ -312,11 +520,21 @@ export function expectedFixtureStateEntityIds(): string[] {
 }
 
 function initialFixtureStates(): Array<{ attributes: Record<string, unknown>; entity_id: string; state: string }> {
+	const irrigationSensors = [
+		...Object.values(IRRIGATION_CALCULATION_SCENARIOS).flatMap((scenario) => [scenario.sensors.rainfall, scenario.sensors.temperature]),
+		IRRIGATION_END_TO_END.sensors.rainfall,
+		IRRIGATION_END_TO_END.sensors.temperature,
+	]
 	return [
 		...Object.values(COVER_SCENARIOS).map((scenario) => ({
 			attributes: { azimuth: 180, elevation: 10 },
 			entity_id: scenario.controls.sunEntity,
 			state: 'above_horizon',
+		})),
+		...irrigationSensors.map((entityId) => ({
+			attributes: {},
+			entity_id: entityId,
+			state: entityId.endsWith('_rainfall') ? '0' : '20',
 		})),
 		{
 			attributes: {},

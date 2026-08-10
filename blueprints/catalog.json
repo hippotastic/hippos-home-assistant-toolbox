@@ -13,7 +13,7 @@
       "id": "irrigation_scheduler",
       "name": "Hippo's Irrigation Scheduler",
       "path": "blueprints/automation/irrigation_scheduler.yaml",
-      "sha256": "22f9e877e7065e967b10e7740eddf06ca0ee40129eec114cdceb7dafc57d011b",
+      "sha256": "328e925e16b2c63cc3fbd819d0fbc364216c1455288d3015298ecc828e3ca8ad",
       "status": "active"
     },
     {
@@ -21,7 +21,7 @@
       "id": "irrigation_zone_calculation",
       "name": "Hippo's Irrigation Zone Calculation",
       "path": "blueprints/automation/irrigation_zone_calculation.yaml",
-      "sha256": "b40ca78436f3bbe442907fcecaa4232f07b3ca726e378ab46c1ee38cd3bedc30",
+      "sha256": "dc0139f5648808f1b7282f985573d26ef3cf1b5abf1cd2119c02929ae3699d7c",
       "status": "active"
     },
     {

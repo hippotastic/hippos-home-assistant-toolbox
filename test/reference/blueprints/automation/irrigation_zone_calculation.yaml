@@ -22,7 +22,7 @@ blueprint:
 
         status_helper_entity:
           name: Irrigation zone status helper
-          description: |-
+          description: |
             A string helper for up to 254 characters. Required to store the runtime calculated by this automation and other information.
           selector:
             entity:
@@ -31,25 +31,25 @@ blueprint:
 
         base_runtime_minutes:
           name: Base runtime
-          description: |-
+          description: |
             The default runtime of this zone. Will be modified by factors based on rainfall and temperature during the last 24 hours.
           default: 10
           selector:
             number:
               min: 1
               max: 60
-              unit_of_measurement: minutes
+              unit_of_measurement: "minutes"
 
         watering_interval_days:
           name: Watering interval (every X days)
-          description: |-
+          description: |
             The amount of days that must have passed since the last scheduled watering before this zone is allowed to run again.
           default: 1
           selector:
             number:
               min: 1
               max: 7
-              unit_of_measurement: days
+              unit_of_measurement: "days"
 
     environment_section:
       name: " 🌍 Environment information"
@@ -83,65 +83,61 @@ trigger_variables:
 triggers:
   # The automation was enabled or any settings were changed
   - trigger: template
-    value_template: '{{ this is defined and this is not none and is_state(this.entity_id, "on") }}'
-    id: trigger_automation_enabled
+    value_template: "{% if this is defined and this != None %}{{ is_state(this.entity_id, ['on', 'true']) }}{% endif %}"
+    id: "trigger_automation_enabled"
   # Every hour at 58 minutes past whole
   - trigger: time_pattern
     minutes: 58
-    id: trigger_time_based_update
+    id: "trigger_time_based_update"
 
 # If the automation is triggered again while still being executed, restart it
 mode: restart
 max_exceeded: silent
 
 variables:
+  # event: >-
+  #   {% if trigger.platform in ['state', 'template', 'time_pattern'] %}
+  #     Running due to {{ trigger.id }} (from {{ trigger.from_state.state }} to {{ trigger.to_state.state }})
+  #   {% else %}
+  #     Running manually (through UI)
+  #   {% endif %}
   # Perform zone runtime calculation
-  rainfall_pct: '{{ states(rainfall_percentage_of_last_24h_entity) | float(default=0) }}'
-  max_temperature: '{{ states(max_temperature_of_last_24h_entity) | float(default=20) }}'
-  rain_minutes: '{{ (24 * 60 * rainfall_pct / 100) | round(0, "ceil") }}'
-  rain_factor: '{{ ([0, 1 - rain_minutes / 30] | max) | round(2) }}'
-  heat_factor: '{{ (0.7 + ([1, ([0, (max_temperature - 25) / 10] | max)] | min) * 1.3) | round(2) }}'
-  cold_factor: '{{ iif(max_temperature < 12, 0, 1) }}'
-  combined_factor: '{{ (rain_factor * heat_factor * cold_factor) | round(2) }}'
-  runtime_minutes: '{{ (base_runtime_minutes * combined_factor) | round(0, "ceil") }}'
+  rainfall_percentage_of_last_24h: "{{ states(rainfall_percentage_of_last_24h_entity) | float(default=0) }}"
+  max_temperature_of_last_24h: "{{ states(max_temperature_of_last_24h_entity) | float(default=20) }}"
+  rain_minutes_in_last_24h: "{{ (24 * 60 * rainfall_percentage_of_last_24h / 100) | round(0, 'ceil') }}"
+  rain_factor: "{{ ([0, 1 - rain_minutes_in_last_24h / 30] | max) | round(2) }}"
+  heat_factor: "{{ (0.7 + ([1, ([0, (max_temperature_of_last_24h - 25) / 10] | max)] | min) * 1.3) | round(2) }}"
+  cold_factor: "{{ iif(max_temperature_of_last_24h < 12, 0, 1) }}"
+  combined_factor: "{{ (rain_factor * heat_factor * cold_factor) | round(2) }}"
+  runtime_minutes: "{{ (base_runtime_minutes * combined_factor) | round(0, 'ceil') }}"
   # Get current value of status helper
-  status: >-
-    {%- set value = states(status_helper_entity) | from_json({}) %}
-    {{ value if value is mapping else {} }}
+  old_status: >-
+    {{ states(status_helper_entity) | regex_replace('^(?!\{.*\}$).*', '{}') }}
 
 actions:
+  # # Log why we are running
+  # - service: logbook.log
+  #   data:
+  #     name: "Hippo's Irrigation Zone Calculation:"
+  #     message: "{{ event }}"
   # Only continue if we need to update any of our output properties in the status helper
   - condition: template
     value_template: >-
       {{
-        status.get("valve") != valve_entity or
-        status.get("interval") != watering_interval_days or
-        status.get("runtime") != runtime_minutes
+        old_status.valve != valve_entity or
+        old_status.interval != watering_interval_days or
+        old_status.runtime != runtime_minutes
       }}
-  # Explain the changed watering requirement in the valve's logbook.
-  - action: logbook.log
-    data:
-      name: Hippo's Irrigation Zone Calculation
-      message: >-
-        Updated watering requirement to {{ runtime_minutes }} minutes every
-        {{ watering_interval_days }} day{{ iif(watering_interval_days == 1, "", "s") }}.
-        The {{ base_runtime_minutes }} minute
-        base runtime was adjusted for {{ rainfall_pct }}%
-        rainfall and a maximum temperature of
-        {{ max_temperature }} degrees Celsius.
-      entity_id: '{{ valve_entity }}'
-      domain: switch
   # Update helper
   - action: input_text.set_value
     target:
-      entity_id: '{{ status_helper_entity }}'
+      entity_id: "{{ status_helper_entity }}"
     data:
       value: >-
         {{
-          dict(
-            status,
-            valve=valve_entity,
-            interval=watering_interval_days,
-            runtime=runtime_minutes
-          ) | to_json
+          dict(old_status, **{
+            'valve': valve_entity,
+            'interval': watering_interval_days,
+            'runtime': runtime_minutes
+          }) | to_json
         }}

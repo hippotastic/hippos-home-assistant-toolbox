@@ -35,10 +35,19 @@ validation stage. Repository validation and runtime behavior execute in the
 same container. Test files execute sequentially with one worker and address
 Home Assistant through a small test-only integration.
 
+The harness marks the end of Home Assistant startup and inspects every
+subsequent container log entry before shutdown. Unexpected Home Assistant
+`WARNING`, `ERROR`, or `CRITICAL` entries fail validation even when all state
+and service-call assertions passed. Repeated messages are grouped in the
+failure output. The only allowlist entries are recognizable warnings emitted by
+the frozen Irrigation reference blueprints; published blueprints receive no
+warning exemptions.
+
 The generated Home Assistant configuration contains:
 
 - a separate validator config that instantiates every published blueprint;
 - the published blueprints from `blueprints/automation`;
+- temporary committed-version references for the Irrigation blueprints;
 - one automation instance per runtime scenario;
 - dedicated entities for every scenario;
 - deterministic test implementations for covers, lights, and switches.
@@ -46,6 +55,28 @@ The generated Home Assistant configuration contains:
 Assertions describe the intended behavior explicitly. They remain the contract
 for future blueprint revisions instead of treating an older implementation as
 the expected result.
+
+During the Irrigation revision, current and reference automations receive
+identical inputs but own separate status helpers, valves, and pumps. Neither
+variant is automatically authoritative. The references and their duplicate
+automation instances are removed after the recommended versions are accepted;
+the behavior tests remain.
+
+## Test-Only Scalar Values
+
+Blueprints may annotate a YAML scalar with a faster runtime-test value:
+
+```yaml
+settle_seconds: 30 # @blueprint-test-value 0.1
+```
+
+The harness parses the blueprint and replaces only the annotated scalar's
+source range while copying it into the temporary runtime configuration. The
+repository source, published blueprint, catalog hash, and separate Home
+Assistant configuration validator continue to use `30`. Invalid directives or
+directives attached to non-scalar nodes fail fixture setup. This mechanism is
+reserved for deterministic test timing and must not alter functional inputs or
+outputs.
 
 ## Network Isolation
 
@@ -102,6 +133,8 @@ test/
     vitest.config.ts
   runtime/
     cover_automation.test.ts
+    irrigation_scheduler.test.ts
+    irrigation_zone_calculation.test.ts
     sensor_state_machine.test.ts
     helpers.ts
     vitest.config.ts
@@ -110,8 +143,10 @@ test/
     vitest.config.ts
   custom_components/blueprint_test/
   fixtures/configuration.yaml
+  reference/blueprints/automation/
   api.ts
   global-setup.ts
+  ha-runtime-logs.ts
   harness.ts
   scenarios.ts
   setup.ts
