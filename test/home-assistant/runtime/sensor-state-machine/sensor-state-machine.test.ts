@@ -1,128 +1,142 @@
 import { describe, expect, test } from 'vitest'
-import { withScenarioDiagnostics } from '../../harness/client.ts'
-import { callsForEntity, expectNoCalls, normalizeServiceNames } from '../helpers/assertions.ts'
-import { setBoolean } from '../helpers/entities.ts'
-import { settle } from '../helpers/timing.ts'
-import { initializeSensorScenario, scenarioEntityIds, waitForOutputState } from './helpers.ts'
+import { normalizeServiceNames } from '../helpers/assertions.ts'
+import { withSensorScenario } from './helpers.ts'
 import { SENSOR_SCENARIOS } from './scenarios.ts'
 
 describe("Hippo's Sensor-based State Machine", () => {
 	test('turns on for any sensor and off only after all sensors turn off', async () => {
-		const scenario = SENSOR_SCENARIOS.transitions
-		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
-			await initializeSensorScenario(client, scenario)
-			await setBoolean(client, scenario.inputs[0], true)
-			await waitForOutputState(client, scenario, 'on')
+		await withSensorScenario(SENSOR_SCENARIOS.transitions, async ({ scenario, client, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+			// If any input sensor turns on, expect the output to turn on
+			await setBoolean(scenario.inputs[0], true)
+			await expectOutputToBecome('on')
 
+			// If one sensor turns off while another remains on, expect the output to remain on
 			await client.clearEvents()
-			await setBoolean(client, scenario.inputs[1], true)
-			await setBoolean(client, scenario.inputs[0], false)
-			await settle()
-			expect((await client.getState(scenario.entities.output))?.state).toBe('on')
+			await setBoolean(scenario.inputs[1], true)
+			await setBoolean(scenario.inputs[0], false)
+			await expectOutputToRemain('on', { forMs: 100 })
 
-			await setBoolean(client, scenario.inputs[1], false)
-			await waitForOutputState(client, scenario, 'off')
+			// If the final active sensor turns off, expect the output to turn off
+			await setBoolean(scenario.inputs[1], false)
+			await expectOutputToBecome('off')
 		})
 	})
 
 	test('enforces required-on and required-off conditions in both directions', async () => {
-		const scenario = SENSOR_SCENARIOS.conditions
-		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
-			await initializeSensorScenario(client, scenario)
-			await setBoolean(client, scenario.inputs[0], true)
-			await expectNoCalls(client, [{ domain: scenario.outputDomain, entityId: scenario.entities.output, service: 'turn_on' }])
+		await withSensorScenario(SENSOR_SCENARIOS.conditions, async ({ scenario, setBoolean, expectNoCalls, expectOutputToBecome }) => {
+			// If presence is detected while the required-on condition is false,
+			// expect the output to remain off
+			await setBoolean(scenario.inputs[0], true)
+			await expectNoCalls([{ domain: scenario.outputDomain, entityId: scenario.entities.output, service: 'turn_on' }])
 
-			await setBoolean(client, scenario.conditionOn!, true)
-			await waitForOutputState(client, scenario, 'on')
+			// If the required-on condition becomes true during presence, expect the output to turn on
+			await setBoolean(scenario.conditionOn!, true)
+			await expectOutputToBecome('on')
 
-			await setBoolean(client, scenario.conditionOff!, true)
-			await waitForOutputState(client, scenario, 'off')
+			// If the required-off condition becomes true, expect the active output to turn off
+			await setBoolean(scenario.conditionOff!, true)
+			await expectOutputToBecome('off')
 
-			await setBoolean(client, scenario.conditionOff!, false)
-			await waitForOutputState(client, scenario, 'on')
+			// If the required-off condition becomes false again during presence,
+			// expect the output to turn on
+			await setBoolean(scenario.conditionOff!, false)
+			await expectOutputToBecome('on')
 
-			await setBoolean(client, scenario.conditionOn!, false)
-			await waitForOutputState(client, scenario, 'off')
+			// If the required-on condition becomes false, expect the active output to turn off
+			await setBoolean(scenario.conditionOn!, false)
+			await expectOutputToBecome('off')
 		})
 	})
 
 	test('uses a real 0.1-minute off delay and its condition grace window', async () => {
-		const scenario = SENSOR_SCENARIOS.delay
-		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
-			await initializeSensorScenario(client, scenario)
-			await setBoolean(client, scenario.conditionOn!, true)
-			await setBoolean(client, scenario.inputs[0], true)
-			await waitForOutputState(client, scenario, 'on')
+		await withSensorScenario(SENSOR_SCENARIOS.delay, async ({ scenario, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+			// If presence is detected while all required conditions are met,
+			// expect the output to turn on
+			await setBoolean(scenario.conditionOn!, true)
+			await setBoolean(scenario.inputs[0], true)
+			await expectOutputToBecome('on')
 
-			await setBoolean(client, scenario.inputs[0], false)
-			await settle(1_000)
-			expect((await client.getState(scenario.entities.output))?.state).toBe('on')
-			await waitForOutputState(client, scenario, 'off', { timeoutMs: 8_000 })
+			// The scenario configures a 0.1-minute (6000 ms) off delay,
+			// so if presence ends, expect the output to remain on for the first 5000 ms
+			await setBoolean(scenario.inputs[0], false)
+			await expectOutputToRemain('on', { forMs: 5000 })
 
-			await setBoolean(client, scenario.conditionOn!, false)
-			await setBoolean(client, scenario.inputs[0], true)
-			await setBoolean(client, scenario.inputs[0], false)
-			await settle(500)
-			await setBoolean(client, scenario.conditionOn!, true)
-			await waitForOutputState(client, scenario, 'on')
+			// After another 1000 ms, the output should turn off (5000 + 1000 = 6000 ms off delay)
+			// but we wait up to 3000 ms to reduce test flakiness
+			await expectOutputToBecome('off', { withinMs: 3000 })
+
+			// If presence is detected while the required condition is not met,
+			// expect the output to remain off
+			await setBoolean(scenario.conditionOn!, false)
+			await setBoolean(scenario.inputs[0], true)
+			await expectOutputToRemain('off', { forMs: 500 })
+
+			// If presence ends while the required condition is not met,
+			// expect the output to still remain off
+			await setBoolean(scenario.inputs[0], false)
+			await expectOutputToRemain('off', { forMs: 500 })
+
+			// If the required condition becomes met briefly after presence ends
+			// (while we're in the off-delay window), expect the output to turn on
+			await setBoolean(scenario.conditionOn!, true)
+			await expectOutputToBecome('on')
 		})
 	})
 
 	test('ignores unknown sensors while retaining the all-invalid safety guard', async () => {
-		const scenario = SENSOR_SCENARIOS.invalid
-		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
-			await initializeSensorScenario(client, scenario)
-			await setBoolean(client, scenario.inputs[0], true)
-			await waitForOutputState(client, scenario, 'on')
+		await withSensorScenario(SENSOR_SCENARIOS.invalid, async ({ scenario, client, setBoolean, expectNoCalls, expectOutputToBecome, expectOutputToRemain }) => {
+			// If the only active sensor becomes unknown while another valid sensor is off,
+			// expect the output to turn off
+			await setBoolean(scenario.inputs[0], true)
+			await expectOutputToBecome('on')
 
 			await client.setState(scenario.inputs[0], 'unknown')
-			await waitForOutputState(client, scenario, 'off')
+			await expectOutputToBecome('off')
 
-			await setBoolean(client, scenario.inputs[0], false)
-			await setBoolean(client, scenario.inputs[0], true)
-			await waitForOutputState(client, scenario, 'on')
+			// If every sensor becomes invalid while the output is active,
+			// expect the safety guard to preserve the current output state
+			await setBoolean(scenario.inputs[0], false)
+			await setBoolean(scenario.inputs[0], true)
+			await expectOutputToBecome('on')
 			await client.setState(scenario.inputs[1], 'unavailable')
 			await client.clearEvents()
 			await client.setState(scenario.inputs[0], 'unknown')
-			await settle()
-
-			expect((await client.getState(scenario.entities.output))?.state).toBe('on')
-			await expectNoCalls(client, [{ domain: scenario.outputDomain, entityId: scenario.entities.output, service: 'turn_off' }])
+			await expectOutputToRemain('on', { forMs: 100 })
+			await expectNoCalls([{ domain: scenario.outputDomain, entityId: scenario.entities.output, service: 'turn_off' }])
 		})
 	})
 
 	test('expires only when every valid sensor is older than the maximum duration', async () => {
-		const scenario = SENSOR_SCENARIOS.maxDuration
-		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
-			await initializeSensorScenario(client, scenario)
+		await withSensorScenario(SENSOR_SCENARIOS.maxDuration, async ({ scenario, client, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+			// If at least one active sensor is recent, expect an older valid sensor not to expire the output
 			await client.setState(scenario.inputs[1], 'off', { lastChangedAgeSeconds: 120 })
-			await setBoolean(client, scenario.inputs[0], true)
-			await waitForOutputState(client, scenario, 'on')
-			await settle()
-			expect((await client.getState(scenario.entities.output))?.state).toBe('on')
+			await setBoolean(scenario.inputs[0], true)
+			await expectOutputToBecome('on')
+			await expectOutputToRemain('on', { forMs: 100 })
 
+			// If every valid sensor is older than the one-minute maximum duration,
+			// expect the output to turn off
 			await client.setState(scenario.inputs[0], 'on', { lastChangedAgeSeconds: 120 })
-			await waitForOutputState(client, scenario, 'off')
+			await expectOutputToBecome('off')
 		})
 
-		const disabled = SENSOR_SCENARIOS.domainBoolean
-		await withScenarioDiagnostics(scenarioEntityIds(disabled), async (client) => {
-			await initializeSensorScenario(client, disabled)
-			await setBoolean(client, disabled.inputs[0], true)
-			await waitForOutputState(client, disabled, 'on')
+		await withSensorScenario(SENSOR_SCENARIOS.domainBoolean, async ({ scenario, client, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+			// If maximum duration is disabled, expect an old active sensor not to expire the output
+			await setBoolean(scenario.inputs[0], true)
+			await expectOutputToBecome('on')
 			await client.clearEvents()
-			await client.setState(disabled.inputs[0], 'on', { lastChangedAgeSeconds: 120 })
-			await settle()
-			expect((await client.getState(disabled.entities.output))?.state).toBe('on')
+			await client.setState(scenario.inputs[0], 'on', { lastChangedAgeSeconds: 120 })
+			await expectOutputToRemain('on', { forMs: 100 })
 		})
 	})
 
 	test('controls input booleans, lights, and switches through their native services', async () => {
-		for (const scenario of [SENSOR_SCENARIOS.domainBoolean, SENSOR_SCENARIOS.domainLight, SENSOR_SCENARIOS.domainSwitch]) {
-			await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
-				await initializeSensorScenario(client, scenario)
-				await setBoolean(client, scenario.inputs[0], true)
-				await waitForOutputState(client, scenario, 'on')
+		// If no custom actions are configured,
+		// expect each output domain to use its native turn-on service
+		for (const selectedScenario of [SENSOR_SCENARIOS.domainBoolean, SENSOR_SCENARIOS.domainLight, SENSOR_SCENARIOS.domainSwitch]) {
+			await withSensorScenario(selectedScenario, async ({ scenario, client, setBoolean, expectOutputToBecome }) => {
+				await setBoolean(scenario.inputs[0], true)
+				await expectOutputToBecome('on')
 
 				const calls = await client.serviceCalls({ entityId: scenario.entities.output })
 				expect(normalizeServiceNames(calls)).toEqual([`${scenario.outputDomain}.turn_on`])
@@ -131,57 +145,48 @@ describe("Hippo's Sensor-based State Machine", () => {
 	})
 
 	test('runs custom actions in order without duplicating the state service call', async () => {
-		const scenario = SENSOR_SCENARIOS.actions
-		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
-			await initializeSensorScenario(client, scenario)
-			await setBoolean(client, scenario.inputs[0], true)
-			await waitForOutputState(client, scenario, 'on')
-			await client.waitForServiceCall({ domain: 'switch', entityId: scenario.entities.marker, service: 'turn_on' })
+		await withSensorScenario(SENSOR_SCENARIOS.actions, async ({ scenario, client, customActionServiceNames, setBoolean, expectOutputToBecome }) => {
+			// If presence starts, expect custom turn-on actions to run once in their configured order
+			await setBoolean(scenario.inputs[0], true)
+			await expectOutputToBecome('on')
+			expect(await customActionServiceNames()).toEqual(['switch.turn_on', 'input_boolean.turn_on'])
 
-			const onCalls = (await client.serviceCalls()).filter(
-				(call) => callsForEntity([call], scenario.entities.marker).length > 0 || callsForEntity([call], scenario.entities.output).length > 0
-			)
-			expect(normalizeServiceNames(onCalls)).toEqual(['switch.turn_on', 'input_boolean.turn_on'])
-
+			// If presence ends, expect custom turn-off actions to run once in their configured order
 			await client.clearEvents()
-			await setBoolean(client, scenario.inputs[0], false)
-			await waitForOutputState(client, scenario, 'off')
-			await client.waitForServiceCall({ domain: 'switch', entityId: scenario.entities.marker, service: 'turn_off' })
-			const offCalls = (await client.serviceCalls()).filter(
-				(call) => callsForEntity([call], scenario.entities.marker).length > 0 || callsForEntity([call], scenario.entities.output).length > 0
-			)
-			expect(normalizeServiceNames(offCalls)).toEqual(['switch.turn_off', 'input_boolean.turn_off'])
+			await setBoolean(scenario.inputs[0], false)
+			await expectOutputToBecome('off')
+			expect(await customActionServiceNames()).toEqual(['switch.turn_off', 'input_boolean.turn_off'])
 		})
 	})
 
 	test('reconciles an input change made while the automation was disabled', async () => {
-		const scenario = SENSOR_SCENARIOS.reconcile
-		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
-			await initializeSensorScenario(client, scenario)
+		await withSensorScenario(SENSOR_SCENARIOS.reconcile, async ({ scenario, client, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+			// If presence starts while the automation is disabled, expect no immediate output change
 			await client.callService('automation', 'turn_off', { entity_id: scenario.entities.automation })
-			await setBoolean(client, scenario.inputs[0], true)
+			await setBoolean(scenario.inputs[0], true)
+			await expectOutputToRemain('off', { forMs: 500 })
 			await client.clearEvents()
 
+			// If the automation is re-enabled during presence, expect it to reconcile and turn the output on
 			await client.callService('automation', 'turn_on', { entity_id: scenario.entities.automation })
-			await waitForOutputState(client, scenario, 'on')
+			await expectOutputToBecome('on')
 		})
 	})
 
 	test('suppresses startup-driven turn-off until the configured uptime sensor is old enough', async () => {
-		const scenario = SENSOR_SCENARIOS.startup
-		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
-			await initializeSensorScenario(client, scenario)
+		await withSensorScenario(SENSOR_SCENARIOS.startup, async ({ scenario, client, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+			// The blueprint protects the first 30 seconds after startup
+			// If presence ends during that period, expect the output to remain on
 			await client.setState('sensor.uptime', new Date().toISOString())
-			await setBoolean(client, scenario.inputs[0], true)
-			await waitForOutputState(client, scenario, 'on')
+			await setBoolean(scenario.inputs[0], true)
+			await expectOutputToBecome('on')
 			await client.clearEvents()
-			await setBoolean(client, scenario.inputs[0], false)
-			await settle(1_000)
+			await setBoolean(scenario.inputs[0], false)
+			await expectOutputToRemain('on', { forMs: 1000 })
 
-			expect((await client.getState(scenario.entities.output))?.state).toBe('on')
-
-			await client.setState('sensor.uptime', new Date(Date.now() - 60_000).toISOString())
-			await waitForOutputState(client, scenario, 'off')
+			// If Home Assistant has been running for 60 seconds, expect the pending turn-off to proceed
+			await client.setState('sensor.uptime', new Date(Date.now() - 60000).toISOString())
+			await expectOutputToBecome('off')
 		})
 	})
 })

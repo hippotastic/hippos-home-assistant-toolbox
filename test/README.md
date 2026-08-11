@@ -73,6 +73,52 @@ variant is automatically authoritative. The references and their duplicate
 automation instances are removed after the recommended versions are accepted;
 the behavior tests remain.
 
+## Test Case Style
+
+Tests should read from top to bottom as a sequence of small behavioral
+scenarios. Prefer explicit, linear setup, actions, and assertions over helpers
+that hide the state transitions relevant to the test.
+
+- Separate behaviorally distinct phases with blank lines
+- Add a short comment before each phase whose purpose is not immediately clear
+- Write comments in English and sentence case without punctuation at the end
+- Prefer `If <situation>, expect <behavior>` for comments that describe expected behavior
+- Wrap a comment across multiple lines when that makes its situation and expectation easier to scan
+- Explain why a combination matters instead of narrating the individual API calls
+- Assert meaningful intermediate states immediately after the transition that produces them
+- Keep separate assertions for distinct states even when the final result would otherwise cover both
+- State non-obvious fixture values explicitly, including units and relevant conversions
+- Distinguish the expected timing from a larger technical timeout used to reduce test flakiness
+- Write test timing literals without numeric separators, for example `5000` rather than `5_000`
+
+For example:
+
+```ts
+await withSensorScenario(SENSOR_SCENARIOS.delay, async ({ scenario, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+  // If presence is detected while the required condition is not met,
+  // expect the output to remain off
+  await setBoolean(scenario.inputs[0], true)
+  await expectOutputToRemain('off', { forMs: 500 })
+
+  // If the required condition becomes met inside the off-delay window,
+  // expect the output to turn on
+  await setBoolean(scenario.conditionOn!, true)
+  await expectOutputToBecome('on')
+})
+```
+
+Comments should clarify the behavioral contract. Do not add comments to
+self-explanatory setup or assertions merely to make every block look alike.
+
+`withSensorScenario` adds diagnostics, initializes the scenario, and supplies
+the scenario, raw client, and bound test functions to the callback. Destructure
+only the functions used by that test. Use `expectOutputToBecome` for
+transitions; by default, the expected state must be reached within 500 ms. Pass
+`withinMs` only when the behavior intentionally takes longer. Use
+`expectOutputToRemain` when the state must already match and remain unchanged
+for the supplied `forMs` period. Generic Home Assistant operations remain
+available through `client`.
+
 ## Test-Only Scalar Values
 
 Blueprints may annotate a YAML scalar with a faster runtime-test value:

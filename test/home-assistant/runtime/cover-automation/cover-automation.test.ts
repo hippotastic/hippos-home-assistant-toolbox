@@ -10,6 +10,8 @@ describe("Hippo's Cover Automation", () => {
 	test('applies defaults and a valid external angle override when control is enabled', async () => {
 		const scenario = COVER_SCENARIOS.default
 		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
+			// If automatic control is disabled, expect input changes not to move the cover
+			// or update its managed state
 			await initializeCoverScenario(client, scenario)
 			await client.callService('input_number', 'set_value', {
 				entity_id: scenario.commonInputs.default_angle_entity,
@@ -19,6 +21,9 @@ describe("Hippo's Cover Automation", () => {
 				{ domain: 'cover', entityId: scenario.entities.cover },
 				{ domain: 'input_text', entityId: scenario.entities.helper, service: 'set_value' },
 			])
+
+			// If automatic control is enabled, expect the configured position
+			// and latest valid angle override to be applied
 			await client.callService('input_number', 'set_value', {
 				entity_id: scenario.commonInputs.default_angle_entity,
 				value: 62,
@@ -46,8 +51,12 @@ describe("Hippo's Cover Automation", () => {
 	test('falls back to the configured angle for invalid external values', async () => {
 		for (const scenario of [COVER_SCENARIOS.invalidAngle, COVER_SCENARIOS.invalidHighAngle]) {
 			await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
+				// If the external angle is below -1 or above 100,
+				// expect the configured angle to be applied instead
 				await initializeCoverScenario(client, scenario)
 				if (scenario === COVER_SCENARIOS.invalidHighAngle) {
+					// Keep the reported tilt aligned with the invalid high override
+					// before automatic control starts
 					await client.setState(scenario.commonInputs.default_angle_entity as string, '101')
 					await client.setState(scenario.entities.cover, 'open', {
 						attributes: { current_position: 65, current_tilt_position: 101 },
@@ -72,6 +81,8 @@ describe("Hippo's Cover Automation", () => {
 	test('handles sun protection across north and leaves it below the elevation limit', async () => {
 		const scenario = COVER_SCENARIOS.sun
 		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
+			// If the sun is above the elevation limit inside an azimuth range crossing north,
+			// expect sun protection to activate
 			await initializeCoverScenario(client, scenario)
 			await setBoolean(client, scenario.controls.sun, true)
 			await client.setState(scenario.controls.sunEntity, 'above_horizon', {
@@ -83,12 +94,15 @@ describe("Hippo's Cover Automation", () => {
 
 			expect(await waitForManagedState(client, scenario)).toEqual({ angle: 30, modes: ['sun'], position: 70 })
 
+			// If the sun drops below the elevation limit, expect the cover to return to its default state
 			await client.clearEvents()
 			await client.setState(scenario.controls.sunEntity, 'above_horizon', {
 				attributes: { azimuth: 350, elevation: 10 },
 			})
 			expect(await waitForManagedState(client, scenario)).toEqual({ angle: 45, modes: [], position: 80 })
 
+			// If the sun leaves the azimuth range while the cover is already at its default,
+			// expect no duplicate state write
 			await client.clearEvents()
 			await client.setState(scenario.controls.sunEntity, 'above_horizon', {
 				attributes: { azimuth: 180, elevation: 30 },
@@ -98,6 +112,7 @@ describe("Hippo's Cover Automation", () => {
 
 		const normal = COVER_SCENARIOS.sunNormal
 		await withScenarioDiagnostics(scenarioEntityIds(normal), async (client) => {
+			// If the sun is inside a normal non-wrapping azimuth range, expect sun protection to activate
 			await initializeCoverScenario(client, normal)
 			await setBoolean(client, normal.controls.sun, true)
 			await client.setState(normal.controls.sunEntity, 'above_horizon', {
@@ -117,14 +132,17 @@ describe("Hippo's Cover Automation", () => {
 			await setBoolean(client, scenario.controls.automatic, true)
 			await waitForManagedState(client, scenario)
 
+			// If privacy mode activates, expect its position and angle to override the defaults
 			await client.clearEvents()
 			await setBoolean(client, scenario.controls.privacy, true)
 			expect(await waitForManagedState(client, scenario)).toEqual({ angle: 25, modes: ['privacy'], position: 40 })
 
+			// If night mode also activates, expect it to take priority while preserving both active modes
 			await client.clearEvents()
 			await setBoolean(client, scenario.controls.night, true)
 			expect(await waitForManagedState(client, scenario)).toEqual({ angle: 15, modes: ['privacy', 'night'], position: 10 })
 
+			// If lockout also activates, expect it to take highest priority and explain the safety movement
 			await client.clearEvents()
 			await setBoolean(client, scenario.controls.lockout, true)
 			expect(await waitForManagedState(client, scenario)).toEqual({ angle: 100, modes: ['privacy', 'night', 'lockout'], position: 90 })
@@ -137,6 +155,8 @@ describe("Hippo's Cover Automation", () => {
 	test('opens for lockout and then prevents closing an already more-open cover', async () => {
 		const scenario = COVER_SCENARIOS.lockout
 		await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
+			// If lockout activates while the cover is less open than required,
+			// expect it to open to the lockout position
 			await initializeCoverScenario(client, scenario)
 			await setBoolean(client, scenario.controls.automatic, true)
 			await waitForManagedState(client, scenario)
@@ -148,6 +168,7 @@ describe("Hippo's Cover Automation", () => {
 				attributes: { current_position: 80, current_tilt_position: 70 },
 			})
 
+			// If the user opens the cover further, expect a lower-priority mode not to close it again
 			await client.clearEvents()
 			await client.callService('cover', 'set_cover_position', {
 				entity_id: scenario.entities.cover,
@@ -169,10 +190,13 @@ describe("Hippo's Cover Automation", () => {
 			await setBoolean(client, scenario.controls.automatic, true)
 			await waitForManagedState(client, scenario)
 
+			// If the user moves the cover manually, expect a normal trigger to preserve the manual position
 			await client.callService('cover', 'set_cover_position', {
 				entity_id: scenario.entities.cover,
 				position: 30,
 			})
+			await client.waitForState(scenario.entities.cover, { attributes: { current_position: 30 } })
+			await settle()
 			await client.clearEvents()
 			await client.setState(scenario.controls.sunEntity, 'above_horizon', {
 				attributes: { azimuth: 180, elevation: 30 },
@@ -182,6 +206,7 @@ describe("Hippo's Cover Automation", () => {
 			expect(await coverCalls(client, scenario.entities.cover)).toEqual([])
 			expect(logMessages.join(' ')).toContain('but the user manually moved the cover to 30%')
 
+			// If automatic control is explicitly re-enabled, expect the managed position to be restored
 			await client.clearEvents()
 			await setBoolean(client, scenario.controls.automatic, false)
 			await setBoolean(client, scenario.controls.automatic, true)
@@ -190,6 +215,8 @@ describe("Hippo's Cover Automation", () => {
 	})
 
 	test('honors tolerances and suppresses tilt for a fully open cover', async () => {
+		// If changes are within tolerance or tilt is irrelevant while fully open,
+		// expect no movement calls
 		for (const scenario of [COVER_SCENARIOS.tolerance, COVER_SCENARIOS.fullyOpen]) {
 			await withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
 				await initializeCoverScenario(client, scenario)
@@ -203,6 +230,7 @@ describe("Hippo's Cover Automation", () => {
 	test('uses only the movement services supported by a cover', async () => {
 		const positionOnly = COVER_SCENARIOS.positionOnly
 		await withScenarioDiagnostics(scenarioEntityIds(positionOnly), async (client) => {
+			// If a cover supports only position, expect no tilt service call
 			await initializeCoverScenario(client, positionOnly)
 			await setBoolean(client, positionOnly.controls.automatic, true)
 			expect(await waitForManagedState(client, positionOnly)).toEqual({ angle: 35, modes: [], position: 70 })
@@ -211,6 +239,7 @@ describe("Hippo's Cover Automation", () => {
 
 		const tiltOnly = COVER_SCENARIOS.tiltOnly
 		await withScenarioDiagnostics(scenarioEntityIds(tiltOnly), async (client) => {
+			// If a cover supports only tilt, expect no position service call
 			await initializeCoverScenario(client, tiltOnly)
 			await setBoolean(client, tiltOnly.controls.automatic, true)
 			expect(await waitForManagedState(client, tiltOnly)).toEqual({ angle: 35, modes: [], position: 100 })
@@ -220,6 +249,8 @@ describe("Hippo's Cover Automation", () => {
 	})
 
 	test('homes intermediate tilt targets and skips homing exclusions', async () => {
+		// If homing applies, expect angle 0 before the target
+		// Otherwise expect only the applicable target
 		const expectations = [
 			{ calls: [0, 40], scenario: COVER_SCENARIOS.homing },
 			{ calls: [40], scenario: COVER_SCENARIOS.homingDisabled },
@@ -231,7 +262,7 @@ describe("Hippo's Cover Automation", () => {
 				await initializeCoverScenario(client, scenario)
 				await setBoolean(client, scenario.controls.automatic, true)
 				await waitForManagedState(client, scenario)
-				await client.waitForState(scenario.entities.cover, { attributes: { current_tilt_position: calls.at(-1) } }, { timeoutMs: 6_000 })
+				await client.waitForState(scenario.entities.cover, { attributes: { current_tilt_position: calls.at(-1) } }, { timeoutMs: 6000 })
 				expect((await coverCalls(client, scenario.entities.cover)).map((call) => call.value)).toEqual(calls)
 			})
 		}
@@ -240,6 +271,8 @@ describe("Hippo's Cover Automation", () => {
 	test('blocks unavailable configured entities but accepts omitted optional modes', async () => {
 		const unavailable = COVER_SCENARIOS.availability
 		await withScenarioDiagnostics(scenarioEntityIds(unavailable), async (client) => {
+			// If a configured optional mode entity is unavailable,
+			// expect automatic control to abort without state changes
 			await initializeCoverScenario(client, unavailable)
 			await client.setState(unavailable.controls.privacy, 'unavailable')
 			await client.clearEvents()
@@ -252,6 +285,8 @@ describe("Hippo's Cover Automation", () => {
 
 		const required = COVER_SCENARIOS.requiredAvailability
 		await withScenarioDiagnostics(scenarioEntityIds(required), async (client) => {
+			// If the required cover entity is unknown,
+			// expect automatic control to abort without state changes
 			await initializeCoverScenario(client, required)
 			await client.setState(required.entities.cover, 'unknown')
 			await client.clearEvents()
@@ -264,6 +299,8 @@ describe("Hippo's Cover Automation", () => {
 
 		const minimal = COVER_SCENARIOS.minimal
 		await withScenarioDiagnostics(scenarioEntityIds(minimal), async (client) => {
+			// If optional mode entities are omitted,
+			// expect automatic control to apply the default state normally
 			await initializeCoverScenario(client, minimal)
 			await setBoolean(client, minimal.controls.automatic, true)
 			expect(await waitForManagedState(client, minimal)).toEqual({ angle: 35, modes: [], position: 65 })

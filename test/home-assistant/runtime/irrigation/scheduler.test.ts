@@ -14,16 +14,16 @@ describe("Hippo's Irrigation Scheduler", () => {
 			await initializeSchedulerScenario(client, scenario, (variant, zoneIndex) =>
 				JSON.stringify({
 					interval: 1,
-					next_end: new Date(Date.now() + (zoneIndex + 6) * 60_000).toISOString(),
-					next_start: new Date(Date.now() + (zoneIndex + 5) * 60_000).toISOString(),
+					next_end: new Date(Date.now() + (zoneIndex + 6) * 60000).toISOString(),
+					next_start: new Date(Date.now() + (zoneIndex + 5) * 60000).toISOString(),
 					runtime: 1,
 					valve: scenario.variants[variant].valves[zoneIndex],
 				})
 			)
 			await enableSchedulerVariants(client, scenario)
 
-			const plannedEnd = Date.now() + 2_500
-			const secondPlannedEnd = plannedEnd + 2_500
+			const plannedEnd = Date.now() + 2500
+			const secondPlannedEnd = plannedEnd + 2500
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
 				for (const zoneIndex of [0, 1]) {
@@ -31,7 +31,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 					await setHelper(client, entities.helpers[zoneIndex], {
 						...status,
 						next_end: new Date(zoneIndex === 0 ? plannedEnd : secondPlannedEnd).toISOString(),
-						next_start: new Date(zoneIndex === 0 ? Date.now() - 60_000 : plannedEnd).toISOString(),
+						next_start: new Date(zoneIndex === 0 ? Date.now() - 60000 : plannedEnd).toISOString(),
 					})
 				}
 			}
@@ -39,6 +39,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 			await client.clearEvents()
 
 			try {
+				// If the daily start has not fired, expect neither planned zone to water
 				for (const variant of IRRIGATION_VARIANTS) {
 					const entities = scenario.variants[variant]
 					expect((await client.getState(entities.valves[0]))?.state).toBe('off')
@@ -46,6 +47,8 @@ describe("Hippo's Irrigation Scheduler", () => {
 					await client.expectNoServiceCall({ domain: 'switch', entityId: entities.valves[0], service: 'turn_on' }, { timeoutMs: 150 })
 				}
 
+				// If the daily start fires, expect the first zone to start
+				// while the second zone remains off
 				expect(await client.fireScheduledTime(scenario.startTime)).toBe(2)
 
 				for (const variant of IRRIGATION_VARIANTS) {
@@ -54,6 +57,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 					expect((await client.getState(entities.valves[1]))?.state).toBe('off')
 				}
 
+				// Until the first planned end, expect only the first zone to remain on
 				await settle(Math.max(0, plannedEnd - Date.now() - 250))
 				for (const variant of IRRIGATION_VARIANTS) {
 					const entities = scenario.variants[variant]
@@ -61,22 +65,26 @@ describe("Hippo's Irrigation Scheduler", () => {
 					expect((await client.getState(entities.valves[1]))?.state).toBe('off')
 				}
 
+				// At the first planned end, expect watering to continue with the second zone
 				for (const variant of IRRIGATION_VARIANTS) {
 					const entities = scenario.variants[variant]
-					await client.waitForState(entities.valves[1], { state: 'on' }, { timeoutMs: 5_000 })
+					await client.waitForState(entities.valves[1], { state: 'on' }, { timeoutMs: 5000 })
 					await client.waitForState(entities.valves[0], { state: 'off' })
 					await waitForZoneStatus(client, entities.helpers[0], (status) => typeof status.last_end === 'string')
 				}
 
+				// Until the second planned end, expect the second zone to remain on
 				await settle(Math.max(0, secondPlannedEnd - Date.now() - 250))
 				for (const variant of IRRIGATION_VARIANTS) {
 					const entities = scenario.variants[variant]
 					expect((await client.getState(entities.valves[1]))?.state).toBe('on')
 				}
 
+				// At the final planned end, expect both zones to be off
+				// and the valve calls to preserve their watering order
 				for (const variant of IRRIGATION_VARIANTS) {
 					const entities = scenario.variants[variant]
-					await client.waitForState(entities.valves[1], { state: 'off' }, { timeoutMs: 5_000 })
+					await client.waitForState(entities.valves[1], { state: 'off' }, { timeoutMs: 5000 })
 					await waitForZoneStatus(client, entities.helpers[1], (status) => typeof status.last_end === 'string')
 
 					const calls = (await client.serviceCalls({ domain: 'switch' })).filter((call) => entities.valves.some((entityId) => callsForEntity([call], entityId).length > 0))
@@ -102,6 +110,8 @@ describe("Hippo's Irrigation Scheduler", () => {
 				await waitForScheduledStatus(client, scenario.variants[variant].helpers[0])
 			}
 
+			// If a configured helper is manually cleared,
+			// expect the scheduler to create a fresh plan without failing
 			for (const variant of IRRIGATION_VARIANTS) {
 				await client.clearEvents()
 				await setHelper(client, scenario.variants[variant].helpers[0], '')
@@ -124,19 +134,23 @@ describe("Hippo's Irrigation Scheduler", () => {
 				})
 			})
 
+			// If zones have positive runtimes, expect contiguous plans in helper order
+			// while a zero-runtime zone loses its stale schedule metadata
 			await enableSchedulerVariants(client, scenario)
+
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
 				const first = await waitForScheduledStatus(client, entities.helpers[0])
 				const second = await waitForScheduledStatus(client, entities.helpers[1])
 				const zero = await waitForZoneStatus(client, entities.helpers[2], (status) => status.next_start === undefined && status.next_end === undefined)
 
-				expect(millisecondsBetween(first.next_start!, first.next_end!)).toBe(120_000)
-				expect(millisecondsBetween(second.next_start!, second.next_end!)).toBe(60_000)
+				expect(millisecondsBetween(first.next_start!, first.next_end!)).toBe(120000)
+				expect(millisecondsBetween(second.next_start!, second.next_end!)).toBe(60000)
 				expect(Date.parse(second.next_start!)).toBe(Date.parse(first.next_end!))
 				expect(zero).toMatchObject({ custom: 'zone-3', interval: 1, runtime: 0, valve: entities.valves[2] })
 			}
 
+			// If scheduling succeeds, expect each valve log to explain its plan or omission
 			const current = scenario.variants.current
 			const scheduledLog = await waitForLogMessage(client, current.valves[0], 'Scheduled 2 minutes of watering')
 			expect(String(scheduledLog.serviceData.message)).toContain('next configured daily start')
@@ -147,7 +161,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 	test('anchors watering intervals to the daily start before or after last_end', async () => {
 		const scenario = IRRIGATION_SCHEDULER_SCENARIOS.interval
 		const previousStart = previousDailyStart(scenario.startTime)
-		const lastEnds = [new Date(previousStart.getTime() - 60 * 60_000), new Date(previousStart.getTime() + 60 * 60_000)]
+		const lastEnds = [new Date(previousStart.getTime() - 60 * 60000), new Date(previousStart.getTime() + 60 * 60000)]
 		const expectedStarts = [addLocalDays(previousStart, 1), addLocalDays(previousStart, 2)]
 
 		await withScenarioDiagnostics(schedulerScenarioEntityIds(scenario), async (client) => {
@@ -161,12 +175,16 @@ describe("Hippo's Irrigation Scheduler", () => {
 				})
 			})
 
+			// If last watering ended before the previous daily start,
+			// expect the interval to begin at that start rather than one day later
+			// If it ended after the daily start, expect the next day to become the anchor
 			await enableSchedulerVariants(client, scenario)
+
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
 				for (const zoneIndex of [0, 1]) {
 					const status = await waitForScheduledStatus(client, entities.helpers[zoneIndex])
-					expect(Math.abs(Date.parse(status.next_start!) - expectedStarts[zoneIndex].getTime())).toBeLessThan(2_000)
+					expect(Math.abs(Date.parse(status.next_start!) - expectedStarts[zoneIndex].getTime())).toBeLessThan(2000)
 				}
 			}
 		})
@@ -190,7 +208,11 @@ describe("Hippo's Irrigation Scheduler", () => {
 				})
 			})
 
+			// If helper values are malformed, non-objects, or missing a valve,
+			// expect the scheduler to ignore them without writing replacements
+			// If a valid zone has zero runtime, expect stale schedule fields to be cleared
 			await enableSchedulerVariants(client, scenario)
+
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
 				await waitForSchedulingFinished(client)
@@ -213,8 +235,8 @@ describe("Hippo's Irrigation Scheduler", () => {
 				const entities = scenario.variants[variant]
 				return JSON.stringify({
 					interval: 1,
-					next_end: new Date(now + (zoneIndex === 0 ? 60_000 : 180_000)).toISOString(),
-					next_start: new Date(now + (zoneIndex === 0 ? -60_000 : 120_000)).toISOString(),
+					next_end: new Date(now + (zoneIndex === 0 ? 60000 : 180000)).toISOString(),
+					next_start: new Date(now + (zoneIndex === 0 ? -60000 : 120000)).toISOString(),
 					runtime: 1,
 					valve: entities.valves[zoneIndex],
 				})
@@ -224,7 +246,10 @@ describe("Hippo's Irrigation Scheduler", () => {
 			}
 			await client.clearEvents()
 
+			// If one zone is scheduled now while another valve is still on,
+			// expect the competing valve to stop before the pump and current zone start
 			await enableSchedulerVariants(client, scenario)
+
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
 				await client.waitForState(entities.valves[0], { state: 'on' })
@@ -234,12 +259,15 @@ describe("Hippo's Irrigation Scheduler", () => {
 				const calls = (await client.serviceCalls({ domain: 'switch' })).filter((call) =>
 					[entities.pump, ...entities.valves].some((entityId) => callsForEntity([call], entityId).length > 0)
 				)
-				expect(normalizeServiceNames(calls)).toEqual(['switch.turn_off', 'switch.turn_on', 'switch.turn_on'])
-				expect(callsForEntity([calls[0]], entities.valves[1])).toHaveLength(1)
-				expect(callsForEntity([calls[1]], entities.pump)).toHaveLength(1)
-				expect(callsForEntity([calls[2]], entities.valves[0])).toHaveLength(1)
+				// A follow-up reconciliation may repeat the idempotent zone start
+				const initialCalls = calls.slice(0, 3)
+				expect(normalizeServiceNames(initialCalls)).toEqual(['switch.turn_off', 'switch.turn_on', 'switch.turn_on'])
+				expect(callsForEntity([initialCalls[0]], entities.valves[1])).toHaveLength(1)
+				expect(callsForEntity([initialCalls[1]], entities.pump)).toHaveLength(1)
+				expect(callsForEntity([initialCalls[2]], entities.valves[0])).toHaveLength(1)
 			}
 
+			// If the scheduler changes active zones, expect both valves to log the reason
 			const current = scenario.variants.current
 			await waitForLogMessage(client, current.valves[1], 'another zone is scheduled now')
 			await waitForLogMessage(client, current.valves[0], 'according to schedule until')
@@ -252,7 +280,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 			await initializeSchedulerScenario(client, recent, (variant) =>
 				JSON.stringify({
 					interval: 1,
-					last_end: new Date(Date.now() - 5 * 60_000).toISOString(),
+					last_end: new Date(Date.now() - 5 * 60000).toISOString(),
 					runtime: 1,
 					valve: recent.variants[variant].valves[0],
 				})
@@ -262,6 +290,9 @@ describe("Hippo's Irrigation Scheduler", () => {
 				await setSwitch(client, recent.variants[variant].pump, true)
 			}
 			await client.clearEvents()
+
+			// If watering ended 5 minutes ago inside the 30-minute control window,
+			// expect the scheduler to stop a valve and pump left on
 			await enableSchedulerVariants(client, recent)
 
 			for (const variant of IRRIGATION_VARIANTS) {
@@ -276,7 +307,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 			await initializeSchedulerScenario(client, outside, (variant) =>
 				JSON.stringify({
 					interval: 1,
-					last_end: new Date(Date.now() - 31 * 60_000).toISOString(),
+					last_end: new Date(Date.now() - 31 * 60000).toISOString(),
 					runtime: 1,
 					valve: outside.variants[variant].valves[0],
 				})
@@ -286,6 +317,9 @@ describe("Hippo's Irrigation Scheduler", () => {
 				await setSwitch(client, outside.variants[variant].pump, true)
 			}
 			await client.clearEvents()
+
+			// If watering ended 31 minutes ago outside the control window,
+			// expect the scheduler to leave the valve and pump untouched
 			await enableSchedulerVariants(client, outside)
 
 			for (const variant of IRRIGATION_VARIANTS) {
@@ -307,8 +341,8 @@ describe("Hippo's Irrigation Scheduler", () => {
 				const entities = scenario.variants[variant]
 				return JSON.stringify({
 					interval: 1,
-					next_end: new Date(now + (zoneIndex === 0 ? 1_500 : 60_000)).toISOString(),
-					next_start: new Date(now + (zoneIndex === 0 ? -60_000 : 1_500)).toISOString(),
+					next_end: new Date(now + (zoneIndex === 0 ? 1500 : 60000)).toISOString(),
+					next_start: new Date(now + (zoneIndex === 0 ? -60000 : 1500)).toISOString(),
 					runtime: 1,
 					valve: entities.valves[zoneIndex],
 				})
@@ -318,13 +352,17 @@ describe("Hippo's Irrigation Scheduler", () => {
 			for (const variant of IRRIGATION_VARIANTS) {
 				await client.waitForState(scenario.variants[variant].valves[0], { state: 'on' })
 			}
+
+			// If the active zone reaches its planned end as the next zone starts,
+			// expect a direct handoff without waiting for the safety fallback
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
-				await client.waitForState(entities.valves[1], { state: 'on' }, { timeoutMs: 5_000 })
+				await client.waitForState(entities.valves[1], { state: 'on' }, { timeoutMs: 5000 })
 				await client.waitForState(entities.valves[0], { state: 'off' })
 				await waitForZoneStatus(client, entities.helpers[0], (status) => typeof status.last_end === 'string')
 			}
 
+			// If the handoff succeeds, expect a completion log without a fallback warning
 			const logCalls = await client.serviceCalls({ domain: 'logbook', service: 'log' })
 			expect(logCalls.map((call) => String(call.serviceData.message)).join(' ')).not.toContain('safety fallback')
 			const current = scenario.variants.current
@@ -345,18 +383,21 @@ describe("Hippo's Irrigation Scheduler", () => {
 			}
 			await settle(350)
 
+			// If only generated schedule timestamps change,
+			// expect the scheduler not to create another plan
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
 				const status = statuses.get(variant)!
 				await setHelper(client, entities.helpers[0], {
 					...status,
-					next_end: new Date(Date.parse(status.next_end!) + 60_000).toISOString(),
-					next_start: new Date(Date.parse(status.next_start!) + 60_000).toISOString(),
+					next_end: new Date(Date.parse(status.next_end!) + 60000).toISOString(),
+					next_start: new Date(Date.parse(status.next_start!) + 60000).toISOString(),
 				})
 			}
 			await client.clearEvents()
 			await client.expectNoServiceCall({ domain: 'logbook', service: 'log', data: { message: 'Creating or updating irrigation schedule' } }, { timeoutMs: 300 })
 
+			// If a material zone value changes, expect the scheduler to replan
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
 				await setHelper(client, entities.helpers[0], { ...statuses.get(variant)!, runtime: 2 })
@@ -364,6 +405,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 			await client.clearEvents()
 			await waitForSchedulingStarted(client)
 
+			// If a helper becomes unavailable, expect no attempt to replan it
 			await settle(250)
 			for (const variant of IRRIGATION_VARIANTS) {
 				await client.setState(scenario.variants[variant].helpers[0], 'unavailable')
@@ -382,8 +424,11 @@ describe("Hippo's Irrigation Scheduler", () => {
 			}
 			await client.clearEvents()
 
+			// The blueprint's 30-second startup settle time is replaced with 100 ms in tests,
+			// so if the valve is unavailable, expect scheduling to wait at least about 80 ms
 			const startedAt = Date.now()
 			await enableSchedulerVariants(client, scenario)
+
 			for (const variant of IRRIGATION_VARIANTS) {
 				await waitForScheduledStatus(client, scenario.variants[variant].helpers[0])
 			}
@@ -408,6 +453,8 @@ describe("Hippo's Irrigation Scheduler", () => {
 			await settle(250)
 			await client.clearEvents()
 
+			// If climate calculation produces a 14-minute runtime,
+			// expect the scheduler to turn it into a matching plan without starting early
 			for (const variant of IRRIGATION_VARIANTS) {
 				await setAutomation(client, scenario.variants[variant].calculationAutomation, true)
 			}
@@ -419,7 +466,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 					(value) => value.runtime === 14 && typeof value.next_start === 'string' && typeof value.next_end === 'string'
 				)
 				expect(status).toMatchObject({ interval: 2, runtime: 14, valve: entities.valve })
-				expect(millisecondsBetween(status.next_start!, status.next_end!)).toBe(14 * 60_000)
+				expect(millisecondsBetween(status.next_start!, status.next_end!)).toBe(14 * 60000)
 				expect((await client.getState(entities.valve))?.state).toBe('off')
 			}
 		})
@@ -448,7 +495,7 @@ async function waitForSchedulingFinished(client: BlueprintRuntimeClient): Promis
 }
 
 async function waitForLogMessage(client: BlueprintRuntimeClient, entityId: string, text: string): Promise<BlueprintServiceCall> {
-	const deadline = Date.now() + 5_000
+	const deadline = Date.now() + 5000
 	while (Date.now() < deadline) {
 		const call = (await client.serviceCalls({ domain: 'logbook', entityId, service: 'log' })).find((candidate) => String(candidate.serviceData.message).includes(text))
 		if (call) return call

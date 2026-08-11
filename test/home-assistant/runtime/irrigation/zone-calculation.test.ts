@@ -9,6 +9,8 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 		await withScenarioDiagnostics(calculationScenarioEntityIds(scenario), async (client) => {
 			await initializeCalculationScenario(client, scenario)
 
+			// If the helper is empty or does not contain an object,
+			// expect the calculated zone status to replace it
 			for (const helperValue of ['', '[]', 'null', '"text"']) {
 				for (const variant of IRRIGATION_VARIANTS) {
 					const entities = scenario.variants[variant]
@@ -23,6 +25,8 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 				}
 			}
 
+			// If the watering requirement changes, expect the valve log to explain
+			// the calculated runtime and its climate inputs
 			const current = scenario.variants.current
 			const log = await client.waitForServiceCall({ domain: 'logbook', entityId: current.valve, service: 'log' })
 			expect(String(log.serviceData.message)).toContain('Updated watering requirement to 7 minutes every 1 day')
@@ -45,6 +49,8 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 		await withScenarioDiagnostics(calculationScenarioEntityIds(scenario), async (client) => {
 			await initializeCalculationScenario(client, scenario)
 
+			// If temperature and rainfall cross their calculation boundaries,
+			// expect the runtime to follow the configured climate formula
 			for (const { expectedRuntime, rainfall, temperature } of cases) {
 				for (const variant of IRRIGATION_VARIANTS) {
 					await setAutomation(client, scenario.variants[variant].automation, false)
@@ -76,6 +82,8 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 				temperature: 'unknown',
 			})
 
+			// If the helper contains invalid JSON and both climate sensors are unavailable,
+			// expect a fresh status calculated from the configured fallback values
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
 				await setAutomation(client, entities.automation, true)
@@ -103,6 +111,8 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 			await client.setState(scenario.sensors.temperature, '30')
 			await client.clearEvents()
 
+			// If a valid helper already contains scheduler metadata,
+			// expect recalculation to preserve it while updating the runtime
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
 				await setAutomation(client, entities.automation, true)
@@ -129,6 +139,7 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 			}
 			await client.clearEvents()
 
+			// If the calculated status is unchanged, expect no helper write
 			for (const variant of IRRIGATION_VARIANTS) {
 				await setAutomation(client, scenario.variants[variant].automation, true)
 			}
@@ -153,6 +164,9 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 
 			await client.setState(scenario.sensors.temperature, '35')
 			await client.clearEvents()
+
+			// If climate inputs change while calculation is disabled,
+			// expect re-enabling it to reconcile the helper
 			for (const variant of IRRIGATION_VARIANTS) {
 				const entities = scenario.variants[variant]
 				await setAutomation(client, entities.automation, true)
