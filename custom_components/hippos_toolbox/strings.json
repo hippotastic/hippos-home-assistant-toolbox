@@ -42,19 +42,18 @@
       "title": "Blueprint is deprecated"
     },
     "local_modified": {
-      "description": "The local file for **{blueprint_name}** at `{path}` differs from the last managed version. It has not been overwritten. Use Repair to back it up and restore the published version, or keep your local version and ignore this issue.",
+      "fix_flow": {
+        "abort": {
+          "integration_not_configured": "The integration is no longer configured."
+        },
+        "step": {
+          "init": {
+            "description": "The local blueprint `{blueprint_id}` has changes. Its current file will be backed up and replaced with the latest published version. This cannot merge local changes.",
+            "title": "Restore published blueprint"
+          }
+        }
+      },
       "title": "Blueprint has local changes"
-    }
-  },
-  "repairs": {
-    "abort": {
-      "integration_not_configured": "The integration is no longer configured."
-    },
-    "step": {
-      "init": {
-        "description": "The current file will be backed up, then blueprint `{blueprint_id}` will be replaced with the latest published version. This cannot merge local changes.",
-        "title": "Restore published blueprint"
-      }
     }
   }
 }

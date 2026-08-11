@@ -141,7 +141,7 @@ test/
   unit/
     blueprint-catalog.test.ts
     vitest.config.ts
-  custom_components/blueprint_test/
+  ha-fixture/blueprint_test/
   fixtures/configuration.yaml
   reference/blueprints/automation/
   api.ts

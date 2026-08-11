@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { TestProject } from 'vitest/node'
@@ -76,11 +76,13 @@ function prepareConfig(repoRoot: string): string {
 	const testDir = join(repoRoot, 'test')
 	const targetBlueprintDir = join(configDir, 'blueprints', 'automation', 'hippotastic')
 	const targetReferenceDir = join(targetBlueprintDir, 'reference')
+	const targetTestIntegrationDir = join(configDir, 'custom_components', 'blueprint_test')
 
 	mkdirSync(targetBlueprintDir, { recursive: true })
 	mkdirSync(targetReferenceDir, { recursive: true })
 	cpSync(join(testDir, 'fixtures', 'configuration.yaml'), join(configDir, 'configuration.yaml'))
-	cpSync(join(testDir, 'custom_components'), join(configDir, 'custom_components'), { recursive: true })
+	cpSync(join(testDir, 'ha-fixture', 'blueprint_test'), targetTestIntegrationDir, { recursive: true })
+	renameSync(join(targetTestIntegrationDir, 'manifest.fixture.json'), join(targetTestIntegrationDir, 'manifest.json'))
 
 	for (const file of readdirSync(join(repoRoot, 'blueprints', 'automation'))
 		.filter((name) => name.endsWith('.yaml'))
