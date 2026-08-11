@@ -4,9 +4,11 @@ import importlib.util
 from pathlib import Path
 import unittest
 
+from repository import find_repository_root
+
 
 MODULE_PATH = (
-    Path(__file__).parents[2]
+    find_repository_root(Path(__file__))
     / "custom_components"
     / "hippos_toolbox"
     / "hashing.py"

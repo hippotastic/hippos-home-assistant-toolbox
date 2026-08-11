@@ -147,7 +147,7 @@ full Home Assistant-backed suite remains local.
 The shared validation and runtime container uses Docker networking mode `none`.
 No Python installation is required on the host; Python regression tests execute
 inside the Home Assistant container and are orchestrated by Vitest. See
-`tools/ha-blueprint-validator` and `test/README.md` for details.
+`test/README.md` for details.
 
 Catalog maintenance and deprecation rules are documented in
 `tools/blueprint-catalog`.

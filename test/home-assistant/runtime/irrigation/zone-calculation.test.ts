@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
-import { withScenarioDiagnostics } from '../api.ts'
-import { IRRIGATION_CALCULATION_SCENARIOS, IRRIGATION_VARIANTS } from '../scenarios.ts'
-import { calculationScenarioEntityIds, initializeCalculationScenario, setAutomation, setHelper, waitForZoneStatus } from './irrigation-helpers.ts'
+import { withScenarioDiagnostics } from '../../harness/client.ts'
+import { calculationScenarioEntityIds, initializeCalculationScenario, setAutomation, setHelper, waitForZoneStatus } from './helpers.ts'
+import { IRRIGATION_CALCULATION_SCENARIOS, IRRIGATION_VARIANTS } from './scenarios.ts'
 
 describe("Hippo's Irrigation Zone Calculation", () => {
 	test('initializes empty and non-object helpers and explains the calculation on the valve', async () => {

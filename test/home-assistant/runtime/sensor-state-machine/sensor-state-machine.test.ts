@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'vitest'
-import { withScenarioDiagnostics } from '../api.ts'
-import { SENSOR_SCENARIOS } from '../scenarios.ts'
-import { callsForEntity, expectNoCalls, initializeSensorScenario, normalizeServiceNames, scenarioEntityIds, setBoolean, settle, waitForOutputState } from './helpers.ts'
+import { withScenarioDiagnostics } from '../../harness/client.ts'
+import { callsForEntity, expectNoCalls, normalizeServiceNames } from '../helpers/assertions.ts'
+import { setBoolean } from '../helpers/entities.ts'
+import { settle } from '../helpers/timing.ts'
+import { initializeSensorScenario, scenarioEntityIds, waitForOutputState } from './helpers.ts'
+import { SENSOR_SCENARIOS } from './scenarios.ts'
 
 describe("Hippo's Sensor-based State Machine", () => {
 	test('turns on for any sensor and off only after all sensors turn off', async () => {
@@ -133,6 +136,7 @@ describe("Hippo's Sensor-based State Machine", () => {
 			await initializeSensorScenario(client, scenario)
 			await setBoolean(client, scenario.inputs[0], true)
 			await waitForOutputState(client, scenario, 'on')
+			await client.waitForServiceCall({ domain: 'switch', entityId: scenario.entities.marker, service: 'turn_on' })
 
 			const onCalls = (await client.serviceCalls()).filter(
 				(call) => callsForEntity([call], scenario.entities.marker).length > 0 || callsForEntity([call], scenario.entities.output).length > 0
@@ -142,6 +146,7 @@ describe("Hippo's Sensor-based State Machine", () => {
 			await client.clearEvents()
 			await setBoolean(client, scenario.inputs[0], false)
 			await waitForOutputState(client, scenario, 'off')
+			await client.waitForServiceCall({ domain: 'switch', entityId: scenario.entities.marker, service: 'turn_off' })
 			const offCalls = (await client.serviceCalls()).filter(
 				(call) => callsForEntity([call], scenario.entities.marker).length > 0 || callsForEntity([call], scenario.entities.output).length > 0
 			)

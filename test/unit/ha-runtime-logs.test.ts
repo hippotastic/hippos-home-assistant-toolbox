@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { formatHomeAssistantLogIssues, isKnownReferenceBlueprintWarning, unexpectedHomeAssistantLogIssues } from '../ha-runtime-logs.ts'
+import { formatHomeAssistantLogIssues, isKnownReferenceBlueprintWarning, unexpectedHomeAssistantLogIssues } from '../home-assistant/harness/log-validation.ts'
 
 describe('unexpectedHomeAssistantLogIssues', () => {
 	test('extracts warning and error entries including continuation lines', () => {

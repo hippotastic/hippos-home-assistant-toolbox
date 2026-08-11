@@ -1,6 +1,6 @@
-import type { BlueprintRuntimeClient } from '../api.ts'
-import { IRRIGATION_VARIANTS, type IrrigationCalculationScenario, type IrrigationSchedulerScenario, type IrrigationVariant } from '../scenarios.ts'
-import { settle } from './helpers.ts'
+import type { BlueprintRuntimeClient } from '../../harness/client.ts'
+import { settle } from '../helpers/timing.ts'
+import { IRRIGATION_VARIANTS, type IrrigationCalculationScenario, type IrrigationSchedulerScenario, type IrrigationVariant } from './scenarios.ts'
 
 export type ZoneStatus = Record<string, unknown> & {
 	interval?: number

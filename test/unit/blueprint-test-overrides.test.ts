@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { applyBlueprintTestValueOverrides } from '../blueprint-test-overrides.ts'
+import { applyBlueprintTestValueOverrides } from '../home-assistant/harness/blueprint-test-overrides.ts'
 
 describe('applyBlueprintTestValueOverrides', () => {
 	test('replaces only annotated scalar source ranges', () => {

@@ -4,6 +4,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from repository import find_repository_root
+
 from custom_components.hippos_toolbox.api import _parse_catalog
 from custom_components.hippos_toolbox.hashing import blueprint_hash
 from custom_components.hippos_toolbox.manager import (
@@ -95,7 +97,7 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_published_catalog_matches_python_hash_contract(self) -> None:
-        repo_root = Path(__file__).parents[2]
+        repo_root = find_repository_root(Path(__file__))
         entries = _parse_catalog(
             (repo_root / "blueprints" / "catalog.json").read_text(encoding="utf-8")
         )

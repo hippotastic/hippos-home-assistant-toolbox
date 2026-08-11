@@ -139,7 +139,7 @@ export default [
 		},
 	},
 	{
-		files: ['test/reference/**/*.yaml', 'test/reference/**/*.yml'],
+		files: ['test/home-assistant/runtime/fixtures/reference-blueprints/**/*.yaml', 'test/home-assistant/runtime/fixtures/reference-blueprints/**/*.yml'],
 		rules: {
 			'max-len': 'off',
 		},

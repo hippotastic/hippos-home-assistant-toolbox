@@ -3,10 +3,10 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { TestProject } from 'vitest/node'
-import { requestHomeAssistant, type BlueprintRuntimeDiagnostics } from './api.ts'
+import { requestHomeAssistant, type BlueprintRuntimeDiagnostics } from './client.ts'
 import { applyBlueprintTestValueOverrides } from './blueprint-test-overrides.ts'
-import { formatHomeAssistantLogIssues, isKnownReferenceBlueprintWarning, unexpectedHomeAssistantLogIssues } from './ha-runtime-logs.ts'
-import { expectedAutomationStates, expectedFixtureStateEntityIds, fixtureFiles } from './scenarios.ts'
+import { expectedAutomationStates, expectedFixtureStateEntityIds, generatedFixtureFiles } from './generated-config.ts'
+import { formatHomeAssistantLogIssues, isKnownReferenceBlueprintWarning, unexpectedHomeAssistantLogIssues } from './log-validation.ts'
 
 type HarnessOptions = {
 	image: string
@@ -73,15 +73,15 @@ function commandExists(command: string): boolean {
 
 function prepareConfig(repoRoot: string): string {
 	const configDir = mkdtempSync(join(tmpdir(), 'ha-blueprint-runtime-test.'))
-	const testDir = join(repoRoot, 'test')
+	const runtimeFixtureDir = join(repoRoot, 'test', 'home-assistant', 'runtime', 'fixtures')
 	const targetBlueprintDir = join(configDir, 'blueprints', 'automation', 'hippotastic')
 	const targetReferenceDir = join(targetBlueprintDir, 'reference')
 	const targetTestIntegrationDir = join(configDir, 'custom_components', 'blueprint_test')
 
 	mkdirSync(targetBlueprintDir, { recursive: true })
 	mkdirSync(targetReferenceDir, { recursive: true })
-	cpSync(join(testDir, 'fixtures', 'configuration.yaml'), join(configDir, 'configuration.yaml'))
-	cpSync(join(testDir, 'ha-fixture', 'blueprint_test'), targetTestIntegrationDir, { recursive: true })
+	cpSync(join(runtimeFixtureDir, 'configuration.yaml'), join(configDir, 'configuration.yaml'))
+	cpSync(join(runtimeFixtureDir, 'custom_components', 'blueprint_test'), targetTestIntegrationDir, { recursive: true })
 	renameSync(join(targetTestIntegrationDir, 'manifest.fixture.json'), join(targetTestIntegrationDir, 'manifest.json'))
 
 	for (const file of readdirSync(join(repoRoot, 'blueprints', 'automation'))
@@ -89,12 +89,12 @@ function prepareConfig(repoRoot: string): string {
 		.sort()) {
 		copyRuntimeBlueprint(join(repoRoot, 'blueprints', 'automation', file), join(targetBlueprintDir, basename(file)))
 	}
-	for (const file of readdirSync(join(testDir, 'reference', 'blueprints', 'automation'))
+	for (const file of readdirSync(join(runtimeFixtureDir, 'reference-blueprints'))
 		.filter((name) => name.endsWith('.yaml'))
 		.sort()) {
-		copyRuntimeBlueprint(join(testDir, 'reference', 'blueprints', 'automation', file), join(targetReferenceDir, basename(file)))
+		copyRuntimeBlueprint(join(runtimeFixtureDir, 'reference-blueprints', file), join(targetReferenceDir, basename(file)))
 	}
-	for (const [file, source] of Object.entries(fixtureFiles())) {
+	for (const [file, source] of Object.entries(generatedFixtureFiles())) {
 		writeFileSync(join(configDir, file), source, 'utf8')
 	}
 	prepareValidatorConfig(repoRoot, configDir)
@@ -110,7 +110,7 @@ function copyRuntimeBlueprint(sourcePath: string, targetPath: string): void {
 function prepareValidatorConfig(repoRoot: string, configDir: string): void {
 	const validatorDir = join(configDir, 'validator')
 	const validatorBlueprintDir = join(validatorDir, 'blueprints', 'automation', 'hippotastic')
-	const validatorFixtureDir = join(repoRoot, 'tools', 'ha-blueprint-validator', 'fixtures')
+	const validatorFixtureDir = join(repoRoot, 'test', 'home-assistant', 'blueprint-loading', 'fixtures')
 
 	mkdirSync(validatorBlueprintDir, { recursive: true })
 	cpSync(join(validatorFixtureDir, 'configuration.yaml'), join(validatorDir, 'configuration.yaml'))

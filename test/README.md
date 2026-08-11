@@ -1,8 +1,8 @@
-# Home Assistant Tests
+# Test Suite
 
-These tests validate the repository and execute blueprint automations inside a
-real Home Assistant process. They are the final stage of the local
-`pnpm validate` suite but are deliberately not run in CI.
+The test suite combines fast Node.js unit tests with configuration and runtime
+tests inside a real Home Assistant process. The Home Assistant-backed tests are
+the final stage of `pnpm validate` but are deliberately not run in CI.
 
 ## Running Validation
 
@@ -51,6 +51,17 @@ The generated Home Assistant configuration contains:
 - one automation instance per runtime scenario;
 - dedicated entities for every scenario;
 - deterministic test implementations for covers, lights, and switches.
+
+The blueprint loading checks live in
+`test/home-assistant/blueprint-loading`. Its
+`fixtures/configuration.yaml` provides a minimal Home Assistant configuration,
+while `fixtures/automations.yaml` instantiates every published blueprint with
+explicit inputs. Add matching inputs there whenever a blueprint gains a new
+required input.
+
+The regression tests for the repository's Home Assistant integration live in
+`test/home-assistant/hippos-toolbox-integration`. They execute their Python test
+suite inside the same Home Assistant container used by the blueprint tests.
 
 Assertions describe the intended behavior explicitly. They remain the contract
 for future blueprint revisions instead of treating an older implementation as
@@ -106,7 +117,7 @@ for inspection. A later run still creates a different temporary directory.
 
 ## Runtime Client
 
-`test/api.ts` exposes operations for:
+`test/home-assistant/harness/client.ts` exposes operations for:
 
 - setting states with attributes and a controlled `last_changed` age;
 - calling real Home Assistant services;
@@ -127,30 +138,61 @@ generated config path at teardown.
 
 ```text
 test/
-  config/
-    validation.test.ts
-    test_*.py
-    vitest.config.ts
-  runtime/
-    cover_automation.test.ts
-    irrigation_scheduler.test.ts
-    irrigation_zone_calculation.test.ts
-    sensor_state_machine.test.ts
-    helpers.ts
-    vitest.config.ts
   unit/
     blueprint-catalog.test.ts
+    blueprint-test-overrides.test.ts
+    blueprint-yaml.test.ts
+    ha-runtime-logs.test.ts
     vitest.config.ts
-  ha-fixture/blueprint_test/
-  fixtures/configuration.yaml
-  reference/blueprints/automation/
-  api.ts
-  global-setup.ts
-  ha-runtime-logs.ts
-  harness.ts
-  scenarios.ts
-  setup.ts
+  home-assistant/
+    blueprint-loading/
+      fixtures/
+        automations.yaml
+        configuration.yaml
+      blueprint-loading.test.ts
+      vitest.config.ts
+    hippos-toolbox-integration/
+      python/
+        repository.py
+        test_*.py
+      hippos-toolbox-integration.test.ts
+      vitest.config.ts
+    harness/
+      blueprint-test-overrides.ts
+      client.ts
+      container.ts
+      container-command.ts
+      generated-config.ts
+      global-setup.ts
+      log-validation.ts
+      setup.ts
+    runtime/
+      cover-automation/
+        cover-automation.test.ts
+        helpers.ts
+        scenarios.ts
+      sensor-state-machine/
+        sensor-state-machine.test.ts
+        helpers.ts
+        scenarios.ts
+      irrigation/
+        helpers.ts
+        scenarios.ts
+        scheduler.test.ts
+        zone-calculation.test.ts
+      helpers/
+        assertions.ts
+        entities.ts
+        timing.ts
+      fixtures/
+        configuration.yaml
+        custom_components/blueprint_test/
+        reference-blueprints/
+      vitest.config.ts
+    vitest.config.ts
+  vitest.shared.ts
   COVERAGE.md
+  README.md
 ```
 
 The required behavior and deliberate coverage boundaries are documented in

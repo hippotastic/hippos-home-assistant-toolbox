@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'vitest'
-import { withScenarioDiagnostics } from '../api.ts'
-import { COVER_SCENARIOS } from '../scenarios.ts'
-import { coverCalls, expectNoCalls, initializeCoverScenario, scenarioEntityIds, setBoolean, settle, waitForCoreLogMessages, waitForManagedState } from './helpers.ts'
+import { withScenarioDiagnostics } from '../../harness/client.ts'
+import { expectNoCalls } from '../helpers/assertions.ts'
+import { setBoolean } from '../helpers/entities.ts'
+import { settle } from '../helpers/timing.ts'
+import { coverCalls, initializeCoverScenario, scenarioEntityIds, waitForCoreLogMessages, waitForManagedState } from './helpers.ts'
+import { COVER_SCENARIOS } from './scenarios.ts'
 
 describe("Hippo's Cover Automation", () => {
 	test('applies defaults and a valid external angle override when control is enabled', async () => {

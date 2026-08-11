@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest'
-import { withScenarioDiagnostics, type BlueprintRuntimeClient, type BlueprintServiceCall } from '../api.ts'
-import { IRRIGATION_END_TO_END, IRRIGATION_SCHEDULER_SCENARIOS, IRRIGATION_VARIANTS } from '../scenarios.ts'
-import { callsForEntity, normalizeServiceNames, settle } from './helpers.ts'
-import { initializeSchedulerScenario, schedulerScenarioEntityIds, setAutomation, setHelper, setSwitch, waitForZoneStatus, type ZoneStatus } from './irrigation-helpers.ts'
+import { withScenarioDiagnostics, type BlueprintRuntimeClient, type BlueprintServiceCall } from '../../harness/client.ts'
+import { callsForEntity, normalizeServiceNames } from '../helpers/assertions.ts'
+import { settle } from '../helpers/timing.ts'
+import { initializeSchedulerScenario, schedulerScenarioEntityIds, setAutomation, setHelper, setSwitch, waitForZoneStatus, type ZoneStatus } from './helpers.ts'
+import { IRRIGATION_END_TO_END, IRRIGATION_SCHEDULER_SCENARIOS, IRRIGATION_VARIANTS } from './scenarios.ts'
 
 const TIME_ZONE = 'Europe/Berlin'
 
