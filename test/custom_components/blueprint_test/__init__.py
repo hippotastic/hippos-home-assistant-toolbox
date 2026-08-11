@@ -8,6 +8,7 @@ from aiohttp import web
 
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.util import dt as dt_util
 
 
 DOMAIN = "blueprint_test"
@@ -75,6 +76,32 @@ class BlueprintTestView(HomeAssistantView):
 
         if command == "events":
             return web.json_response({"events": hass.data[DOMAIN]["events"]})
+
+        if command == "fire_scheduled_time":
+            target = dt_util.parse_time(data["time"])
+            if target is None:
+                return web.json_response({"error": "invalid time"}, status=400)
+
+            fired = 0
+            # HA time triggers are loop timers; invoke only jobs registered for the requested wall time.
+            for handle in list(hass.loop._scheduled):
+                timer = handle._callback
+                point = getattr(timer, "utc_point_in_time", None)
+                job = getattr(timer, "job", None)
+                if (
+                    point is None
+                    or job is None
+                    or dt_util.as_local(point).time().replace(microsecond=0) != target
+                ):
+                    continue
+                timer.async_cancel()
+                hass.async_run_hass_job(job, point)
+                fired += 1
+
+            # Let the timer jobs start without waiting for their automation delays.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            return web.json_response({"fired": fired})
 
         if command == "diagnostics":
             return web.json_response(_diagnostics(hass))

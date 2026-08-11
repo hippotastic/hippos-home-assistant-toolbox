@@ -263,6 +263,7 @@ export const IRRIGATION_SCHEDULER_SCENARIOS = {
 	planning: irrigationSchedulerScenario('planning', { zoneCount: 3 }),
 	recentWindow: irrigationSchedulerScenario('recent_window', { withPump: true, zoneCount: 1 }),
 	startup: irrigationSchedulerScenario('startup', { zoneCount: 1 }),
+	timeTrigger: irrigationSchedulerScenario('time_trigger', { startTime: '04:38:00', zoneCount: 2 }),
 	triggerFilter: irrigationSchedulerScenario('trigger_filter', { zoneCount: 1 }),
 } as const
 

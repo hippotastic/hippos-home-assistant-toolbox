@@ -7,6 +7,91 @@ import { initializeSchedulerScenario, schedulerScenarioEntityIds, setAutomation,
 const TIME_ZONE = 'Europe/Berlin'
 
 describe("Hippo's Irrigation Scheduler", () => {
+	test('waters the complete preplanned sequence when the configured daily time is reached', async () => {
+		const scenario = IRRIGATION_SCHEDULER_SCENARIOS.timeTrigger
+		await withScenarioDiagnostics(schedulerScenarioEntityIds(scenario), async (client) => {
+			await initializeSchedulerScenario(client, scenario, (variant, zoneIndex) =>
+				JSON.stringify({
+					interval: 1,
+					next_end: new Date(Date.now() + (zoneIndex + 6) * 60_000).toISOString(),
+					next_start: new Date(Date.now() + (zoneIndex + 5) * 60_000).toISOString(),
+					runtime: 1,
+					valve: scenario.variants[variant].valves[zoneIndex],
+				})
+			)
+			await enableSchedulerVariants(client, scenario)
+
+			const plannedEnd = Date.now() + 2_500
+			const secondPlannedEnd = plannedEnd + 2_500
+			for (const variant of IRRIGATION_VARIANTS) {
+				const entities = scenario.variants[variant]
+				for (const zoneIndex of [0, 1]) {
+					const status = await waitForScheduledStatus(client, entities.helpers[zoneIndex])
+					await setHelper(client, entities.helpers[zoneIndex], {
+						...status,
+						next_end: new Date(zoneIndex === 0 ? plannedEnd : secondPlannedEnd).toISOString(),
+						next_start: new Date(zoneIndex === 0 ? Date.now() - 60_000 : plannedEnd).toISOString(),
+					})
+				}
+			}
+			await settle(250)
+			await client.clearEvents()
+
+			try {
+				for (const variant of IRRIGATION_VARIANTS) {
+					const entities = scenario.variants[variant]
+					expect((await client.getState(entities.valves[0]))?.state).toBe('off')
+					expect((await client.getState(entities.valves[1]))?.state).toBe('off')
+					await client.expectNoServiceCall({ domain: 'switch', entityId: entities.valves[0], service: 'turn_on' }, { timeoutMs: 150 })
+				}
+
+				expect(await client.fireScheduledTime(scenario.startTime)).toBe(2)
+
+				for (const variant of IRRIGATION_VARIANTS) {
+					const entities = scenario.variants[variant]
+					await client.waitForState(entities.valves[0], { state: 'on' })
+					expect((await client.getState(entities.valves[1]))?.state).toBe('off')
+				}
+
+				await settle(Math.max(0, plannedEnd - Date.now() - 250))
+				for (const variant of IRRIGATION_VARIANTS) {
+					const entities = scenario.variants[variant]
+					expect((await client.getState(entities.valves[0]))?.state).toBe('on')
+					expect((await client.getState(entities.valves[1]))?.state).toBe('off')
+				}
+
+				for (const variant of IRRIGATION_VARIANTS) {
+					const entities = scenario.variants[variant]
+					await client.waitForState(entities.valves[1], { state: 'on' }, { timeoutMs: 5_000 })
+					await client.waitForState(entities.valves[0], { state: 'off' })
+					await waitForZoneStatus(client, entities.helpers[0], (status) => typeof status.last_end === 'string')
+				}
+
+				await settle(Math.max(0, secondPlannedEnd - Date.now() - 250))
+				for (const variant of IRRIGATION_VARIANTS) {
+					const entities = scenario.variants[variant]
+					expect((await client.getState(entities.valves[1]))?.state).toBe('on')
+				}
+
+				for (const variant of IRRIGATION_VARIANTS) {
+					const entities = scenario.variants[variant]
+					await client.waitForState(entities.valves[1], { state: 'off' }, { timeoutMs: 5_000 })
+					await waitForZoneStatus(client, entities.helpers[1], (status) => typeof status.last_end === 'string')
+
+					const calls = (await client.serviceCalls({ domain: 'switch' })).filter((call) => entities.valves.some((entityId) => callsForEntity([call], entityId).length > 0))
+					expect(normalizeServiceNames(calls)).toEqual(['switch.turn_on', 'switch.turn_off', 'switch.turn_on', 'switch.turn_off'])
+				}
+			} finally {
+				for (const variant of IRRIGATION_VARIANTS) {
+					const entities = scenario.variants[variant]
+					await setAutomation(client, entities.automation, false)
+					await setSwitch(client, entities.valves[0], false)
+					await setSwitch(client, entities.valves[1], false)
+				}
+			}
+		})
+	})
+
 	test('replans safely when a configured helper is manually cleared', async () => {
 		const scenario = IRRIGATION_SCHEDULER_SCENARIOS.emptyHelper
 		await withScenarioDiagnostics(schedulerScenarioEntityIds(scenario), async (client) => {

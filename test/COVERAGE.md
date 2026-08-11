@@ -69,6 +69,7 @@ regressions, not variant-specific expectations.
 | Daily interval anchor   | `last_end` before or after the daily start selects the correct previous watering period                              | `interval`       |
 | Invalid zones           | Malformed, non-object, and valveless helper values are ignored                                                        | `invalid`        |
 | Cleared helper          | Manually clearing a configured helper triggers safe replanning rather than being mistaken for an internal update      | `emptyHelper`    |
+| Scheduled execution     | The daily trigger runs two preplanned zones in order, keeping each active until its own `next_end`                     | `timeTrigger`    |
 | Pump and valve ordering | Competing valves stop before the pump starts, and the current valve starts after pump settling                       | `active`         |
 | Exclusive control       | Stopped competing zones receive `last_end` only when their recorded completion is missing or stale                   | `active`         |
 | Control window          | Recent watering is cleaned up; devices outside the 30-minute ownership window are left untouched                     | `recentWindow`, `outsideWindow` |
@@ -102,8 +103,7 @@ The tests intentionally preserve:
   installs the repository source without YAML reserialization.
 - Network discovery and real integrations are excluded because the container has
   no network interface beyond loopback.
-- Long-duration soak behavior, automation queue exhaustion, and timing at the
-  exact scheduler boundary are not tested.
+- Long-duration soak behavior and automation queue exhaustion are not tested.
 - Every possible selector combination is not enumerated; scenarios focus on
   behaviorally distinct branches.
 - Debug log wording and incidental whitespace are not compatibility contracts.
