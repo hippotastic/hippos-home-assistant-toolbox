@@ -39,15 +39,12 @@ The harness marks the end of Home Assistant startup and inspects every
 subsequent container log entry before shutdown. Unexpected Home Assistant
 `WARNING`, `ERROR`, or `CRITICAL` entries fail validation even when all state
 and service-call assertions passed. Repeated messages are grouped in the
-failure output. The only allowlist entries are recognizable warnings emitted by
-the frozen Irrigation reference blueprints; published blueprints receive no
-warning exemptions.
+failure output. There are currently no warning exemptions.
 
 The generated Home Assistant configuration contains:
 
 - a separate validator config that instantiates every published blueprint;
 - the published blueprints from `blueprints/automation`;
-- temporary committed-version references for the Irrigation blueprints;
 - one automation instance per runtime scenario;
 - dedicated entities for every scenario;
 - deterministic test implementations for covers, lights, and switches.
@@ -66,12 +63,6 @@ suite inside the same Home Assistant container used by the blueprint tests.
 Assertions describe the intended behavior explicitly. They remain the contract
 for future blueprint revisions instead of treating an older implementation as
 the expected result.
-
-During the Irrigation revision, current and reference automations receive
-identical inputs but own separate status helpers, valves, and pumps. Neither
-variant is automatically authoritative. The references and their duplicate
-automation instances are removed after the recommended versions are accepted;
-the behavior tests remain.
 
 ## Test Case Style
 
@@ -94,11 +85,12 @@ that hide the state transitions relevant to the test.
 For example:
 
 ```ts
-await withSensorScenario(SENSOR_SCENARIOS.delay, async ({ scenario, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+await withSensorScenario(SENSOR_SCENARIOS.delay, async ({ scenario, setBoolean, expectNoOutputChanges, expectOutputToBecome }) => {
   // If presence is detected while the required condition is not met,
   // expect the output to remain off
   await setBoolean(scenario.inputs[0], true)
-  await expectOutputToRemain('off', { forMs: 500 })
+  await expectOutputToBecome('off', { withinMs: 0 })
+  await expectNoOutputChanges({ forMs: 500 })
 
   // If the required condition becomes met inside the off-delay window,
   // expect the output to turn on
@@ -115,9 +107,33 @@ the scenario, raw client, and bound test functions to the callback. Destructure
 only the functions used by that test. Use `expectOutputToBecome` for
 transitions; by default, the expected state must be reached within 500 ms. Pass
 `withinMs` only when the behavior intentionally takes longer. Use
-`expectOutputToRemain` when the state must already match and remain unchanged
-for the supplied `forMs` period. Generic Home Assistant operations remain
-available through `client`.
+`expectNoOutputChanges` after the expected state has been established; it
+preserves the state observed at the start of the assertion for the supplied
+`forMs` period. `expectNoOutputUpdates` additionally rejects matching service
+calls and is reserved for behavior where even an idempotent device command is
+significant. Generic Home Assistant operations remain available through
+`client`.
+
+`withCoverScenario` follows the same structure and supplies bound operations
+for automatic control, modes, sun position, helper state, and the physical
+cover state. `expectHelperToBecome` and `expectCoverToBecome` wait for an
+explicit expected state. `expectNoHelperChanges` observes only visible helper
+state changes, while `expectNoCoverUpdates` also rejects movement service
+calls. This distinction keeps assertions focused on effects that matter in
+Home Assistant: an identical `input_text` write creates no History or Logbook
+entry, while an idempotent cover command can still reach physical hardware.
+All scenario fixtures reuse the same central `ToBecome`, `NoChanges`, and
+`NoUpdates` expectation logic.
+
+The irrigation fixtures also separate neutral initialization from the
+behavioral setup in each test. `setZoneHelper` supplies the scenario's valve
+entity automatically;
+`setRawZoneHelper` is reserved for deliberately malformed fixture data.
+`startSchedulers` stabilizes that setup, clears its events, and then enables
+the scenario automation. Calculation tests switch their automation explicitly
+with `setAutomationEnabled`. A scheduler fixture's
+`relativeTime` uses one fixed scenario anchor and supports only the `minutes`
+and `milliseconds` offsets required by the runtime tests.
 
 ## Test-Only Scalar Values
 
@@ -233,7 +249,6 @@ test/
       fixtures/
         configuration.yaml
         custom_components/blueprint_test/
-        reference-blueprints/
       vitest.config.ts
     vitest.config.ts
   vitest.shared.ts

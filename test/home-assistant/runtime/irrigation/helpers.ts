@@ -1,58 +1,217 @@
-import type { BlueprintRuntimeClient } from '../../harness/client.ts'
+import { isDeepStrictEqual } from 'node:util'
+import { withScenarioDiagnostics, type BlueprintRuntimeClient, type BlueprintServiceCall } from '../../harness/client.ts'
+import { callsForEntity } from '../helpers/assertions.ts'
+import { createEntityStateExpectation, type StateExpectation, type StateHoldOptions, type StatePredicate, type StateTransitionOptions } from '../helpers/state-expectations.ts'
 import { settle } from '../helpers/timing.ts'
-import { IRRIGATION_VARIANTS, type IrrigationCalculationScenario, type IrrigationSchedulerScenario, type IrrigationVariant } from './scenarios.ts'
+import type { IrrigationCalculationScenario, IrrigationSchedulerScenario } from './scenarios.ts'
 
 export type ZoneStatus = Record<string, unknown> & {
 	interval?: number
 	last_end?: string
-	next_end?: string
 	next_start?: string
+	next_end?: string
 	runtime?: number
 	valve?: string
 }
 
-export async function initializeCalculationScenario(
-	client: BlueprintRuntimeClient,
-	scenario: IrrigationCalculationScenario,
-	options: { helperValue?: string; rainfall?: string; temperature?: string } = {}
-): Promise<void> {
-	await client.setState(scenario.sensors.rainfall, options.rainfall ?? '0')
-	await client.setState(scenario.sensors.temperature, options.temperature ?? '20')
-
-	for (const variant of IRRIGATION_VARIANTS) {
-		const entities = scenario.variants[variant]
-		await setAutomation(client, entities.automation, false)
-		await setSwitch(client, entities.valve, false)
-		await setHelper(client, entities.helper, options.helperValue ?? '{}')
-	}
-
-	await settle()
-	await client.clearEvents()
+type RelativeTimeOffset = {
+	milliseconds?: number
+	minutes?: number
 }
 
-export async function initializeSchedulerScenario(
-	client: BlueprintRuntimeClient,
-	scenario: IrrigationSchedulerScenario,
-	statusFor: (variant: IrrigationVariant, zoneIndex: number) => string
-): Promise<void> {
-	for (const variant of IRRIGATION_VARIANTS) {
-		const entities = scenario.variants[variant]
-		await setAutomation(client, entities.automation, false)
-		await setSwitch(client, entities.pump, false)
-		for (const [zoneIndex, valve] of entities.valves.entries()) {
-			await setSwitch(client, valve, false)
-			await setHelper(client, entities.helpers[zoneIndex], statusFor(variant, zoneIndex))
+type IrrigationCall = {
+	service: string
+	target: 'pump' | `valve:${number}`
+}
+
+type ZoneStatusExpectation = StateExpectation<ZoneStatus>
+
+type CalculationScenarioFixture<TScenario extends IrrigationCalculationScenario> = {
+	scenario: TScenario
+	client: BlueprintRuntimeClient
+	entities: TScenario['entities']
+	/** Waits until the parsed zone helper equals the expected status or satisfies the supplied predicate */
+	expectHelperToBecome: (expected: ZoneStatusExpectation, options?: StateTransitionOptions) => Promise<ZoneStatus>
+	/** Rejects visible helper state changes during the observation period */
+	expectNoHelperChanges: (options?: { forMs?: number }) => Promise<void>
+	/** Immediately enables or disables the calculation automation without clearing recorded events */
+	setAutomationEnabled: (enabled: boolean) => Promise<void>
+	/** Updates both climate sensor states used by the calculation */
+	setClimate: (climate: { rainfall: string; temperature: string }) => Promise<void>
+	/** Writes an exact helper value without adding the scenario valve, including deliberately invalid data */
+	setRawZoneHelper: (value: string | ZoneStatus) => Promise<void>
+	/** Writes a JSON zone status and automatically supplies the scenario valve */
+	setZoneHelper: (status: ZoneStatus) => Promise<void>
+	/** Waits for a valve logbook message containing the supplied text */
+	waitForValveLog: (text: string) => Promise<BlueprintServiceCall>
+}
+
+type SchedulerScenarioFixture<TScenario extends IrrigationSchedulerScenario> = {
+	scenario: TScenario
+	client: BlueprintRuntimeClient
+	entities: TScenario['entities']
+	/** Waits for the pump to reach the expected state within the optional transition timeout */
+	expectPumpToBecome: (state: 'off' | 'on', options?: StateTransitionOptions) => Promise<void>
+	/** Waits for a zone valve to reach the expected state within the optional transition timeout */
+	expectValveToBecome: (zoneIndex: number, state: 'off' | 'on', options?: StateTransitionOptions) => Promise<void>
+	/** Rejects visible zone valve state changes during the observation period */
+	expectNoValveChanges: (zoneIndex: number, options: StateHoldOptions) => Promise<void>
+	/** Fires the configured daily time and returns the number of matching automations triggered */
+	fireScheduledTime: () => Promise<number>
+	/** Returns pump and valve switch calls in Home Assistant firing order */
+	irrigationCalls: () => Promise<IrrigationCall[]>
+	/** Returns an ISO timestamp offset from the scenario's fixed creation-time anchor */
+	relativeTime: (offset: RelativeTimeOffset) => string
+	/** Sets the physical pump state through its real switch service */
+	setPump: (enabled: boolean) => Promise<void>
+	/** Writes an exact zone helper value without adding its valve, including deliberately invalid data */
+	setRawZoneHelper: (zoneIndex: number, value: string | ZoneStatus) => Promise<void>
+	/** Sets a physical zone valve through its real switch service */
+	setValve: (zoneIndex: number, enabled: boolean) => Promise<void>
+	/** Writes a JSON zone status and automatically supplies the matching zone valve */
+	setZoneHelper: (zoneIndex: number, status: ZoneStatus) => Promise<void>
+	/** Stabilizes setup, clears recorded events, enables the scheduler, and returns its start timestamp */
+	startSchedulers: () => Promise<number>
+	/** Waits for the scheduler's completion logbook message */
+	waitForSchedulingFinished: () => Promise<void>
+	/** Waits for the scheduler's start logbook message */
+	waitForSchedulingStarted: () => Promise<void>
+	/** Waits for a zone valve logbook message containing the supplied text */
+	waitForValveLog: (zoneIndex: number, text: string) => Promise<BlueprintServiceCall>
+	/** Waits until a parsed zone helper satisfies the supplied predicate */
+	waitForZoneHelper: (zoneIndex: number, predicate: (status: ZoneStatus) => boolean, options?: { timeoutMs?: number }) => Promise<ZoneStatus>
+}
+
+const DEFAULT_IRRIGATION_STATE_HOLD_MS = 350
+
+/** Initializes a calculation scenario and runs it with diagnostics, cleanup, and bound test operations */
+export async function withCalculationScenario<TScenario extends IrrigationCalculationScenario, TResult>(
+	scenario: TScenario,
+	run: (fixture: CalculationScenarioFixture<TScenario>) => Promise<TResult>
+): Promise<TResult> {
+	return withScenarioDiagnostics(calculationScenarioEntityIds(scenario), async (client) => {
+		const { entities } = scenario
+		await initializeCalculationScenario(client, scenario)
+		const helperState = createEntityStateExpectation(client, entities.helper, (state) => parseZoneStatus(state.state), {
+			matches: isDeepStrictEqual,
+			revision: (state) => state.last_updated,
+		})
+
+		try {
+			return await run({
+				scenario,
+				client,
+				entities,
+				expectHelperToBecome: async (expected, options) => {
+					const status = await helperState.expectToBecome(zoneStatusPredicate(expected), options)
+					if (!status) throw new Error(`Expected ${entities.helper} to contain a zone status`)
+					return status
+				},
+				expectNoHelperChanges: async (options = {}) => {
+					const forMs = options.forMs ?? DEFAULT_IRRIGATION_STATE_HOLD_MS
+					await helperState.expectNoChanges({ forMs })
+				},
+				setAutomationEnabled: (enabled) => setAutomation(client, entities.automation, enabled),
+				setClimate: async ({ rainfall, temperature }) => {
+					await client.setState(scenario.sensors.rainfall, rainfall)
+					await client.setState(scenario.sensors.temperature, temperature)
+				},
+				setRawZoneHelper: (value) => setHelper(client, entities.helper, value),
+				setZoneHelper: (status) => setHelper(client, entities.helper, { ...status, valve: entities.valve }),
+				waitForValveLog: (text) => waitForLogMessage(client, entities.valve, text),
+			})
+		} finally {
+			await setAutomation(client, entities.automation, false)
+			await setSwitch(client, entities.valve, false)
 		}
-	}
+	})
+}
 
+/** Initializes a scheduler scenario and runs it with diagnostics, cleanup, and bound test operations */
+export async function withSchedulerScenario<TScenario extends IrrigationSchedulerScenario, TResult>(
+	scenario: TScenario,
+	run: (fixture: SchedulerScenarioFixture<TScenario>) => Promise<TResult>
+): Promise<TResult> {
+	return withScenarioDiagnostics(schedulerScenarioEntityIds(scenario), async (client) => {
+		const { entities } = scenario
+		await initializeSchedulerScenario(client, scenario)
+		const anchorTime = Date.now()
+		const pumpState = createEntityStateExpectation(client, entities.pump, (state) => state.state)
+		const valveStates = entities.valves.map((valve) => createEntityStateExpectation(client, valve, (state) => state.state))
+
+		try {
+			return await run({
+				scenario,
+				client,
+				entities,
+				expectPumpToBecome: async (state, options) => {
+					await pumpState.expectToBecome(state, options)
+				},
+				expectValveToBecome: async (zoneIndex, state, options) => {
+					await zoneEntity(valveStates, zoneIndex).expectToBecome(state, options)
+				},
+				expectNoValveChanges: (zoneIndex, options) => zoneEntity(valveStates, zoneIndex).expectNoChanges(options),
+				fireScheduledTime: () => client.fireScheduledTime(scenario.startTime),
+				irrigationCalls: () => readIrrigationCalls(client, entities),
+				relativeTime: (offset) => relativeTime(anchorTime, offset),
+				setPump: (enabled) => setSwitch(client, entities.pump, enabled),
+				setRawZoneHelper: (zoneIndex, value) => setHelper(client, zoneEntity(entities.helpers, zoneIndex), value),
+				setValve: (zoneIndex, enabled) => setSwitch(client, zoneEntity(entities.valves, zoneIndex), enabled),
+				setZoneHelper: (zoneIndex, status) =>
+					setHelper(client, zoneEntity(entities.helpers, zoneIndex), {
+						...status,
+						valve: zoneEntity(entities.valves, zoneIndex),
+					}),
+				startSchedulers: async () => {
+					await settle()
+					await client.clearEvents()
+					const startedAt = Date.now()
+					await setAutomation(client, entities.automation, true)
+					return startedAt
+				},
+				waitForSchedulingFinished: () => waitForSchedulingLog(client, 'Finished scheduling'),
+				waitForSchedulingStarted: () => waitForSchedulingLog(client, 'Creating or updating irrigation schedule'),
+				waitForValveLog: (zoneIndex, text) => waitForLogMessage(client, zoneEntity(entities.valves, zoneIndex), text),
+				waitForZoneHelper: (zoneIndex, predicate, options) => waitForZoneHelper(client, zoneEntity(entities.helpers, zoneIndex), predicate, options),
+			})
+		} finally {
+			await setAutomation(client, entities.automation, false)
+			await setSwitch(client, entities.pump, false)
+			for (const valve of entities.valves) {
+				await setSwitch(client, valve, false)
+			}
+		}
+	})
+}
+
+async function initializeCalculationScenario(client: BlueprintRuntimeClient, scenario: IrrigationCalculationScenario): Promise<void> {
+	await client.setState(scenario.sensors.rainfall, '0')
+	await client.setState(scenario.sensors.temperature, '20')
+	await setAutomation(client, scenario.entities.automation, false)
+	await setSwitch(client, scenario.entities.valve, false)
+	await setHelper(client, scenario.entities.helper, '{}')
 	await settle()
 	await client.clearEvents()
 }
 
+async function initializeSchedulerScenario(client: BlueprintRuntimeClient, scenario: IrrigationSchedulerScenario): Promise<void> {
+	const { entities } = scenario
+	await setAutomation(client, entities.automation, false)
+	await setSwitch(client, entities.pump, false)
+	for (const [zoneIndex, valve] of entities.valves.entries()) {
+		await setSwitch(client, valve, false)
+		await setHelper(client, entities.helpers[zoneIndex], '{}')
+	}
+	await settle()
+	await client.clearEvents()
+}
+
+/** Enables or disables an automation through its real Home Assistant service */
 export async function setAutomation(client: BlueprintRuntimeClient, entityId: string, enabled: boolean): Promise<void> {
 	await client.callService('automation', enabled ? 'turn_on' : 'turn_off', { entity_id: entityId })
 }
 
+/** Writes a string or JSON-serialized zone status to an `input_text` entity */
 export async function setHelper(client: BlueprintRuntimeClient, entityId: string, value: string | ZoneStatus): Promise<void> {
 	await client.callService('input_text', 'set_value', {
 		entity_id: entityId,
@@ -60,17 +219,19 @@ export async function setHelper(client: BlueprintRuntimeClient, entityId: string
 	})
 }
 
+/** Turns a switch entity on or off through its real Home Assistant service */
 export async function setSwitch(client: BlueprintRuntimeClient, entityId: string, enabled: boolean): Promise<void> {
 	await client.callService('switch', enabled ? 'turn_on' : 'turn_off', { entity_id: entityId })
 }
 
-export async function waitForZoneStatus(
+/** Polls and parses a zone helper until its value satisfies the supplied predicate */
+export async function waitForZoneHelper(
 	client: BlueprintRuntimeClient,
 	entityId: string,
 	predicate: (status: ZoneStatus) => boolean,
 	options: { timeoutMs?: number } = {}
 ): Promise<ZoneStatus> {
-	const deadline = Date.now() + (options.timeoutMs ?? 5_000)
+	const deadline = Date.now() + (options.timeoutMs ?? 5000)
 
 	while (Date.now() < deadline) {
 		const state = await client.getState(entityId)
@@ -87,15 +248,54 @@ export async function waitForZoneStatus(
 	throw new Error(`Timed out waiting for zone status ${entityId}; current=${state?.state ?? 'missing'}`)
 }
 
-export function calculationScenarioEntityIds(scenario: IrrigationCalculationScenario): string[] {
-	return [scenario.sensors.rainfall, scenario.sensors.temperature, ...IRRIGATION_VARIANTS.flatMap((variant) => Object.values(scenario.variants[variant]))]
+function calculationScenarioEntityIds(scenario: IrrigationCalculationScenario): string[] {
+	return [scenario.sensors.rainfall, scenario.sensors.temperature, ...Object.values(scenario.entities)]
 }
 
-export function schedulerScenarioEntityIds(scenario: IrrigationSchedulerScenario): string[] {
-	return IRRIGATION_VARIANTS.flatMap((variant) => {
-		const entities = scenario.variants[variant]
-		return [entities.automation, entities.pump, ...entities.helpers, ...entities.valves]
+function schedulerScenarioEntityIds(scenario: IrrigationSchedulerScenario): string[] {
+	return [scenario.entities.automation, scenario.entities.pump, ...scenario.entities.helpers, ...scenario.entities.valves]
+}
+
+function zoneStatusPredicate(expected: ZoneStatusExpectation): StatePredicate<ZoneStatus | null> {
+	return (status) => status !== null && (typeof expected === 'function' ? expected(status) : isDeepStrictEqual(status, expected))
+}
+
+async function readIrrigationCalls(client: BlueprintRuntimeClient, entities: IrrigationSchedulerScenario['entities']): Promise<IrrigationCall[]> {
+	const calls = await client.serviceCalls({ domain: 'switch' })
+	return calls.flatMap((call): IrrigationCall[] => {
+		if (callsForEntity([call], entities.pump).length > 0) {
+			return [{ service: call.service, target: 'pump' }]
+		}
+		const zoneIndex = entities.valves.findIndex((valve) => callsForEntity([call], valve).length > 0)
+		return zoneIndex < 0 ? [] : [{ service: call.service, target: `valve:${zoneIndex}` }]
 	})
+}
+
+async function waitForSchedulingLog(client: BlueprintRuntimeClient, message: string): Promise<void> {
+	await client.waitForServiceCall({ domain: 'logbook', service: 'log', data: { message } })
+}
+
+async function waitForLogMessage(client: BlueprintRuntimeClient, entityId: string, text: string): Promise<BlueprintServiceCall> {
+	const deadline = Date.now() + 5000
+	while (Date.now() < deadline) {
+		const call = (await client.serviceCalls({ domain: 'logbook', entityId, service: 'log' })).find((candidate) => String(candidate.serviceData.message).includes(text))
+		if (call) return call
+		await settle(25)
+	}
+	throw new Error(`Timed out waiting for logbook message containing ${JSON.stringify(text)} for ${entityId}`)
+}
+
+function relativeTime(anchorTime: number, offset: RelativeTimeOffset): string {
+	const milliseconds = (offset.minutes ?? 0) * 60000 + (offset.milliseconds ?? 0)
+	return new Date(anchorTime + milliseconds).toISOString()
+}
+
+function zoneEntity<TEntity>(entities: readonly TEntity[], zoneIndex: number): TEntity {
+	const entity = entities[zoneIndex]
+	if (entity === undefined) {
+		throw new Error(`Zone index ${zoneIndex} is outside the configured range of ${entities.length} zones`)
+	}
+	return entity
 }
 
 function parseZoneStatus(value: string): ZoneStatus | null {

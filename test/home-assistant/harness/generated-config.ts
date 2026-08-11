@@ -1,13 +1,7 @@
 import type { DocumentOptions, SchemaOptions, ToStringOptions } from 'yaml'
 import { stringify } from 'yaml'
 import { COVER_SCENARIOS } from '../runtime/cover-automation/scenarios.ts'
-import {
-	IRRIGATION_CALCULATION_SCENARIOS,
-	IRRIGATION_END_TO_END,
-	IRRIGATION_SCHEDULER_SCENARIOS,
-	IRRIGATION_VARIANTS,
-	type IrrigationVariant,
-} from '../runtime/irrigation/scenarios.ts'
+import { IRRIGATION_CALCULATION_SCENARIOS, IRRIGATION_END_TO_END, IRRIGATION_SCHEDULER_SCENARIOS } from '../runtime/irrigation/scenarios.ts'
 import { SENSOR_SCENARIOS } from '../runtime/sensor-state-machine/scenarios.ts'
 
 type Automation = {
@@ -68,90 +62,73 @@ function sensorAutomations(): Automation[] {
 	})
 }
 
-function irrigationBlueprintPath(blueprint: 'irrigation_scheduler' | 'irrigation_zone_calculation', variant: IrrigationVariant): string {
-	const directory = variant === 'current' ? 'hippotastic' : 'hippotastic/reference'
-	return `${directory}/${blueprint}.yaml`
-}
-
 function irrigationCalculationAutomations(): Automation[] {
-	return Object.values(IRRIGATION_CALCULATION_SCENARIOS).flatMap((scenario) =>
-		IRRIGATION_VARIANTS.map((variant) => {
-			const entities = scenario.variants[variant]
-			return {
-				alias: `Fixture irrigation calculation ${scenario.id} ${variant}`,
-				id: objectId(entities.automation),
-				initial_state: false,
-				use_blueprint: {
-					input: {
-						base_runtime_minutes: scenario.baseRuntimeMinutes,
-						max_temperature_of_last_24h_entity: scenario.sensors.temperature,
-						rainfall_percentage_of_last_24h_entity: scenario.sensors.rainfall,
-						status_helper_entity: entities.helper,
-						valve_entity: entities.valve,
-						watering_interval_days: scenario.intervalDays,
-					},
-					path: irrigationBlueprintPath('irrigation_zone_calculation', variant),
-				},
-			}
-		})
-	)
+	return Object.values(IRRIGATION_CALCULATION_SCENARIOS).map((scenario) => ({
+		alias: `Fixture irrigation calculation ${scenario.id}`,
+		id: objectId(scenario.entities.automation),
+		initial_state: false,
+		use_blueprint: {
+			input: {
+				base_runtime_minutes: scenario.baseRuntimeMinutes,
+				max_temperature_of_last_24h_entity: scenario.sensors.temperature,
+				rainfall_percentage_of_last_24h_entity: scenario.sensors.rainfall,
+				status_helper_entity: scenario.entities.helper,
+				valve_entity: scenario.entities.valve,
+				watering_interval_days: scenario.intervalDays,
+			},
+			path: 'hippotastic/irrigation_zone_calculation.yaml',
+		},
+	}))
 }
 
 function irrigationSchedulerAutomations(): Automation[] {
-	return Object.values(IRRIGATION_SCHEDULER_SCENARIOS).flatMap((scenario) =>
-		IRRIGATION_VARIANTS.map((variant) => {
-			const entities = scenario.variants[variant]
-			return {
-				alias: `Fixture irrigation scheduler ${scenario.id} ${variant}`,
-				id: objectId(entities.automation),
-				initial_state: false,
-				use_blueprint: {
-					input: {
-						irrigation_start_time: scenario.startTime,
-						master_pump_entity: scenario.withPump ? entities.pump : [],
-						zone_status_helper_entities: entities.helpers,
-					},
-					path: irrigationBlueprintPath('irrigation_scheduler', variant),
-				},
-			}
-		})
-	)
+	return Object.values(IRRIGATION_SCHEDULER_SCENARIOS).map((scenario) => ({
+		alias: `Fixture irrigation scheduler ${scenario.id}`,
+		id: objectId(scenario.entities.automation),
+		initial_state: false,
+		use_blueprint: {
+			input: {
+				irrigation_start_time: scenario.startTime,
+				master_pump_entity: scenario.withPump ? scenario.entities.pump : [],
+				zone_status_helper_entities: scenario.entities.helpers,
+			},
+			path: 'hippotastic/irrigation_scheduler.yaml',
+		},
+	}))
 }
 
 function irrigationEndToEndAutomations(): Automation[] {
-	return IRRIGATION_VARIANTS.flatMap((variant) => {
-		const entities = IRRIGATION_END_TO_END.variants[variant]
-		return [
-			{
-				alias: `Fixture irrigation end-to-end calculation ${variant}`,
-				id: objectId(entities.calculationAutomation),
-				initial_state: false,
-				use_blueprint: {
-					input: {
-						base_runtime_minutes: 10,
-						max_temperature_of_last_24h_entity: IRRIGATION_END_TO_END.sensors.temperature,
-						rainfall_percentage_of_last_24h_entity: IRRIGATION_END_TO_END.sensors.rainfall,
-						status_helper_entity: entities.helper,
-						valve_entity: entities.valve,
-						watering_interval_days: 2,
-					},
-					path: irrigationBlueprintPath('irrigation_zone_calculation', variant),
+	const { entities } = IRRIGATION_END_TO_END
+	return [
+		{
+			alias: 'Fixture irrigation end-to-end calculation',
+			id: objectId(entities.calculationAutomation),
+			initial_state: false,
+			use_blueprint: {
+				input: {
+					base_runtime_minutes: 10,
+					max_temperature_of_last_24h_entity: IRRIGATION_END_TO_END.sensors.temperature,
+					rainfall_percentage_of_last_24h_entity: IRRIGATION_END_TO_END.sensors.rainfall,
+					status_helper_entity: entities.helper,
+					valve_entity: entities.valve,
+					watering_interval_days: 2,
 				},
+				path: 'hippotastic/irrigation_zone_calculation.yaml',
 			},
-			{
-				alias: `Fixture irrigation end-to-end scheduler ${variant}`,
-				id: objectId(entities.schedulerAutomation),
-				initial_state: false,
-				use_blueprint: {
-					input: {
-						irrigation_start_time: IRRIGATION_END_TO_END.startTime,
-						zone_status_helper_entities: [entities.helper],
-					},
-					path: irrigationBlueprintPath('irrigation_scheduler', variant),
+		},
+		{
+			alias: 'Fixture irrigation end-to-end scheduler',
+			id: objectId(entities.schedulerAutomation),
+			initial_state: false,
+			use_blueprint: {
+				input: {
+					irrigation_start_time: IRRIGATION_END_TO_END.startTime,
+					zone_status_helper_entities: [entities.helper],
 				},
+				path: 'hippotastic/irrigation_scheduler.yaml',
 			},
-		]
-	})
+		},
+	]
 }
 
 function irrigationAutomations(): Automation[] {
@@ -195,9 +172,9 @@ export function generatedFixtureFiles(): Record<string, string> {
 			] as const
 	)
 	const irrigationInputTexts = [
-		...irrigationCalculationScenarios.flatMap((scenario) => IRRIGATION_VARIANTS.map((variant) => scenario.variants[variant].helper)),
-		...irrigationSchedulerScenarios.flatMap((scenario) => IRRIGATION_VARIANTS.flatMap((variant) => scenario.variants[variant].helpers)),
-		...IRRIGATION_VARIANTS.map((variant) => IRRIGATION_END_TO_END.variants[variant].helper),
+		...irrigationCalculationScenarios.map((scenario) => scenario.entities.helper),
+		...irrigationSchedulerScenarios.flatMap((scenario) => scenario.entities.helpers),
+		IRRIGATION_END_TO_END.entities.helper,
 	].map((entityId) => [objectId(entityId), { initial: '{}', max: 255 }] as const)
 	const covers = coverScenarios.map((scenario) => ({
 		id: objectId(scenario.entities.cover),
@@ -212,9 +189,9 @@ export function generatedFixtureFiles(): Record<string, string> {
 		...(scenario.withCustomActions ? [objectId(scenario.entities.marker)] : []),
 	])
 	const irrigationSwitches = [
-		...irrigationCalculationScenarios.flatMap((scenario) => IRRIGATION_VARIANTS.map((variant) => scenario.variants[variant].valve)),
-		...irrigationSchedulerScenarios.flatMap((scenario) => IRRIGATION_VARIANTS.flatMap((variant) => [scenario.variants[variant].pump, ...scenario.variants[variant].valves])),
-		...IRRIGATION_VARIANTS.map((variant) => IRRIGATION_END_TO_END.variants[variant].valve),
+		...irrigationCalculationScenarios.map((scenario) => scenario.entities.valve),
+		...irrigationSchedulerScenarios.flatMap((scenario) => [scenario.entities.pump, ...scenario.entities.valves]),
+		IRRIGATION_END_TO_END.entities.valve,
 	].map(objectId)
 	const yamlOptions: DocumentOptions & SchemaOptions & ToStringOptions = {
 		lineWidth: 0,

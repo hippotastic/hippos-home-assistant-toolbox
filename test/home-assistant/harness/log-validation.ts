@@ -51,14 +51,3 @@ export function formatHomeAssistantLogIssues(issues: HomeAssistantLogIssue[]): s
 		})
 		.join('\n\n')
 }
-
-export function isKnownReferenceBlueprintWarning(issue: HomeAssistantLogIssue): boolean {
-	if (issue.logger !== 'homeassistant.helpers.template' || !issue.message.startsWith("Template variable warning: 'dict object' has no attribute")) return false
-
-	// The frozen reference blueprints retain old padded templates and unsafe field access.
-	return (
-		/ {20,}%}/.test(issue.message) ||
-		issue.message.includes('old_status.valve') ||
-		(issue.message.includes('(not repeat.item.last_end) or') && issue.message.includes('repeat.item.next_start | as_datetime'))
-	)
-}

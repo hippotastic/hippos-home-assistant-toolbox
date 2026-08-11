@@ -5,7 +5,7 @@ import { SENSOR_SCENARIOS } from './scenarios.ts'
 
 describe("Hippo's Sensor-based State Machine", () => {
 	test('turns on for any sensor and off only after all sensors turn off', async () => {
-		await withSensorScenario(SENSOR_SCENARIOS.transitions, async ({ scenario, client, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+		await withSensorScenario(SENSOR_SCENARIOS.transitions, async ({ scenario, client, setBoolean, expectNoOutputChanges, expectOutputToBecome }) => {
 			// If any input sensor turns on, expect the output to turn on
 			await setBoolean(scenario.inputs[0], true)
 			await expectOutputToBecome('on')
@@ -14,7 +14,8 @@ describe("Hippo's Sensor-based State Machine", () => {
 			await client.clearEvents()
 			await setBoolean(scenario.inputs[1], true)
 			await setBoolean(scenario.inputs[0], false)
-			await expectOutputToRemain('on', { forMs: 100 })
+			await expectOutputToBecome('on', { withinMs: 0 })
+			await expectNoOutputChanges({ forMs: 100 })
 
 			// If the final active sensor turns off, expect the output to turn off
 			await setBoolean(scenario.inputs[1], false)
@@ -23,11 +24,11 @@ describe("Hippo's Sensor-based State Machine", () => {
 	})
 
 	test('enforces required-on and required-off conditions in both directions', async () => {
-		await withSensorScenario(SENSOR_SCENARIOS.conditions, async ({ scenario, setBoolean, expectNoCalls, expectOutputToBecome }) => {
+		await withSensorScenario(SENSOR_SCENARIOS.conditions, async ({ scenario, setBoolean, expectNoOutputUpdates, expectOutputToBecome }) => {
 			// If presence is detected while the required-on condition is false,
 			// expect the output to remain off
 			await setBoolean(scenario.inputs[0], true)
-			await expectNoCalls([{ domain: scenario.outputDomain, entityId: scenario.entities.output, service: 'turn_on' }])
+			await expectNoOutputUpdates()
 
 			// If the required-on condition becomes true during presence, expect the output to turn on
 			await setBoolean(scenario.conditionOn!, true)
@@ -49,7 +50,7 @@ describe("Hippo's Sensor-based State Machine", () => {
 	})
 
 	test('uses a real 0.1-minute off delay and its condition grace window', async () => {
-		await withSensorScenario(SENSOR_SCENARIOS.delay, async ({ scenario, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+		await withSensorScenario(SENSOR_SCENARIOS.delay, async ({ scenario, setBoolean, expectNoOutputChanges, expectOutputToBecome }) => {
 			// If presence is detected while all required conditions are met,
 			// expect the output to turn on
 			await setBoolean(scenario.conditionOn!, true)
@@ -59,7 +60,8 @@ describe("Hippo's Sensor-based State Machine", () => {
 			// The scenario configures a 0.1-minute (6000 ms) off delay,
 			// so if presence ends, expect the output to remain on for the first 5000 ms
 			await setBoolean(scenario.inputs[0], false)
-			await expectOutputToRemain('on', { forMs: 5000 })
+			await expectOutputToBecome('on', { withinMs: 0 })
+			await expectNoOutputChanges({ forMs: 5000 })
 
 			// After another 1000 ms, the output should turn off (5000 + 1000 = 6000 ms off delay)
 			// but we wait up to 3000 ms to reduce test flakiness
@@ -69,12 +71,14 @@ describe("Hippo's Sensor-based State Machine", () => {
 			// expect the output to remain off
 			await setBoolean(scenario.conditionOn!, false)
 			await setBoolean(scenario.inputs[0], true)
-			await expectOutputToRemain('off', { forMs: 500 })
+			await expectOutputToBecome('off', { withinMs: 0 })
+			await expectNoOutputChanges({ forMs: 500 })
 
 			// If presence ends while the required condition is not met,
 			// expect the output to still remain off
 			await setBoolean(scenario.inputs[0], false)
-			await expectOutputToRemain('off', { forMs: 500 })
+			await expectOutputToBecome('off', { withinMs: 0 })
+			await expectNoOutputChanges({ forMs: 500 })
 
 			// If the required condition becomes met briefly after presence ends
 			// (while we're in the off-delay window), expect the output to turn on
@@ -84,7 +88,7 @@ describe("Hippo's Sensor-based State Machine", () => {
 	})
 
 	test('ignores unknown sensors while retaining the all-invalid safety guard', async () => {
-		await withSensorScenario(SENSOR_SCENARIOS.invalid, async ({ scenario, client, setBoolean, expectNoCalls, expectOutputToBecome, expectOutputToRemain }) => {
+		await withSensorScenario(SENSOR_SCENARIOS.invalid, async ({ scenario, client, setBoolean, expectNoOutputUpdates, expectOutputToBecome }) => {
 			// If the only active sensor becomes unknown while another valid sensor is off,
 			// expect the output to turn off
 			await setBoolean(scenario.inputs[0], true)
@@ -101,18 +105,18 @@ describe("Hippo's Sensor-based State Machine", () => {
 			await client.setState(scenario.inputs[1], 'unavailable')
 			await client.clearEvents()
 			await client.setState(scenario.inputs[0], 'unknown')
-			await expectOutputToRemain('on', { forMs: 100 })
-			await expectNoCalls([{ domain: scenario.outputDomain, entityId: scenario.entities.output, service: 'turn_off' }])
+			await expectOutputToBecome('on', { withinMs: 0 })
+			await expectNoOutputUpdates()
 		})
 	})
 
 	test('expires only when every valid sensor is older than the maximum duration', async () => {
-		await withSensorScenario(SENSOR_SCENARIOS.maxDuration, async ({ scenario, client, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+		await withSensorScenario(SENSOR_SCENARIOS.maxDuration, async ({ scenario, client, setBoolean, expectNoOutputChanges, expectOutputToBecome }) => {
 			// If at least one active sensor is recent, expect an older valid sensor not to expire the output
 			await client.setState(scenario.inputs[1], 'off', { lastChangedAgeSeconds: 120 })
 			await setBoolean(scenario.inputs[0], true)
 			await expectOutputToBecome('on')
-			await expectOutputToRemain('on', { forMs: 100 })
+			await expectNoOutputChanges({ forMs: 100 })
 
 			// If every valid sensor is older than the one-minute maximum duration,
 			// expect the output to turn off
@@ -120,13 +124,14 @@ describe("Hippo's Sensor-based State Machine", () => {
 			await expectOutputToBecome('off')
 		})
 
-		await withSensorScenario(SENSOR_SCENARIOS.domainBoolean, async ({ scenario, client, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+		await withSensorScenario(SENSOR_SCENARIOS.domainBoolean, async ({ scenario, client, setBoolean, expectNoOutputChanges, expectOutputToBecome }) => {
 			// If maximum duration is disabled, expect an old active sensor not to expire the output
 			await setBoolean(scenario.inputs[0], true)
 			await expectOutputToBecome('on')
 			await client.clearEvents()
 			await client.setState(scenario.inputs[0], 'on', { lastChangedAgeSeconds: 120 })
-			await expectOutputToRemain('on', { forMs: 100 })
+			await expectOutputToBecome('on', { withinMs: 0 })
+			await expectNoOutputChanges({ forMs: 100 })
 		})
 	})
 
@@ -160,11 +165,12 @@ describe("Hippo's Sensor-based State Machine", () => {
 	})
 
 	test('reconciles an input change made while the automation was disabled', async () => {
-		await withSensorScenario(SENSOR_SCENARIOS.reconcile, async ({ scenario, client, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+		await withSensorScenario(SENSOR_SCENARIOS.reconcile, async ({ scenario, client, setBoolean, expectNoOutputChanges, expectOutputToBecome }) => {
 			// If presence starts while the automation is disabled, expect no immediate output change
 			await client.callService('automation', 'turn_off', { entity_id: scenario.entities.automation })
 			await setBoolean(scenario.inputs[0], true)
-			await expectOutputToRemain('off', { forMs: 500 })
+			await expectOutputToBecome('off', { withinMs: 0 })
+			await expectNoOutputChanges({ forMs: 500 })
 			await client.clearEvents()
 
 			// If the automation is re-enabled during presence, expect it to reconcile and turn the output on
@@ -174,7 +180,7 @@ describe("Hippo's Sensor-based State Machine", () => {
 	})
 
 	test('suppresses startup-driven turn-off until the configured uptime sensor is old enough', async () => {
-		await withSensorScenario(SENSOR_SCENARIOS.startup, async ({ scenario, client, setBoolean, expectOutputToBecome, expectOutputToRemain }) => {
+		await withSensorScenario(SENSOR_SCENARIOS.startup, async ({ scenario, client, setBoolean, expectNoOutputChanges, expectOutputToBecome }) => {
 			// The blueprint protects the first 30 seconds after startup
 			// If presence ends during that period, expect the output to remain on
 			await client.setState('sensor.uptime', new Date().toISOString())
@@ -182,7 +188,8 @@ describe("Hippo's Sensor-based State Machine", () => {
 			await expectOutputToBecome('on')
 			await client.clearEvents()
 			await setBoolean(scenario.inputs[0], false)
-			await expectOutputToRemain('on', { forMs: 1000 })
+			await expectOutputToBecome('on', { withinMs: 0 })
+			await expectNoOutputChanges({ forMs: 1000 })
 
 			// If Home Assistant has been running for 60 seconds, expect the pending turn-off to proceed
 			await client.setState('sensor.uptime', new Date(Date.now() - 60000).toISOString())

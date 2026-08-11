@@ -1,44 +1,47 @@
-import { withScenarioDiagnostics, type BlueprintRuntimeClient, type ServiceCallMatch } from '../../harness/client.ts'
-import { callsForEntity, expectNoCalls as expectNoClientCalls, normalizeServiceNames } from '../helpers/assertions.ts'
+import { withScenarioDiagnostics, type BlueprintRuntimeClient } from '../../harness/client.ts'
+import { callsForEntity, normalizeServiceNames } from '../helpers/assertions.ts'
 import { setBoolean as setBooleanEntity } from '../helpers/entities.ts'
+import { createEntityStateExpectation, type StateHoldOptions, type StateTransitionOptions } from '../helpers/state-expectations.ts'
 import { settle } from '../helpers/timing.ts'
 import type { SensorScenario } from './scenarios.ts'
-
-type OutputStateTransitionOptions = {
-	withinMs?: number
-}
-
-type OutputStateHoldOptions = {
-	forMs: number
-}
-
-const DEFAULT_OUTPUT_STATE_TIMEOUT_MS = 500
-const OUTPUT_STATE_HOLD_POLL_INTERVAL_MS = 50
 
 type SensorScenarioFixture<TScenario extends SensorScenario> = {
 	scenario: TScenario
 	client: BlueprintRuntimeClient
+	/** Returns the ordered custom-action service names recorded for the marker and output entities */
 	customActionServiceNames: () => Promise<string[]>
-	expectNoCalls: (matches: ServiceCallMatch[], timeoutMs?: number) => Promise<void>
-	expectOutputToBecome: (state: 'off' | 'on', options?: OutputStateTransitionOptions) => Promise<void>
-	expectOutputToRemain: (state: 'off' | 'on', options: OutputStateHoldOptions) => Promise<void>
+	/** Waits for the output to reach the expected state within the optional transition timeout */
+	expectOutputToBecome: (state: 'off' | 'on', options?: StateTransitionOptions) => Promise<void>
+	/** Rejects visible output state changes during the observation period */
+	expectNoOutputChanges: (options: StateHoldOptions) => Promise<void>
+	/** Rejects output state changes and output service calls during the observation period */
+	expectNoOutputUpdates: (options?: StateHoldOptions) => Promise<void>
+	/** Sets an input or condition entity through its real `input_boolean` service */
 	setBoolean: (entityId: string, value: boolean) => Promise<void>
 }
 
+/** Initializes a sensor scenario and runs it with diagnostics and bound test operations */
 export async function withSensorScenario<TScenario extends SensorScenario, TResult>(
 	scenario: TScenario,
 	run: (fixture: SensorScenarioFixture<TScenario>) => Promise<TResult>
 ): Promise<TResult> {
 	return withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
-		await initializeSensorScenario(client, scenario)
+		const outputState = createEntityStateExpectation(client, scenario.entities.output, (state) => state.state, {
+			updates: [{ domain: scenario.outputDomain, entityId: scenario.entities.output }],
+		})
+		await initializeSensorScenario(client, scenario, async () => {
+			await outputState.expectToBecome('off')
+		})
 
 		return run({
 			scenario,
 			client,
 			customActionServiceNames: () => readCustomActionServiceNames(client, scenario),
-			expectNoCalls: (matches, timeoutMs) => expectNoClientCalls(client, matches, timeoutMs),
-			expectOutputToBecome: (state, options) => expectOutputToBecome(client, scenario, state, options),
-			expectOutputToRemain: (state, options) => expectOutputToRemain(client, scenario, state, options),
+			expectNoOutputChanges: (options) => outputState.expectNoChanges(options),
+			expectNoOutputUpdates: (options = { forMs: 350 }) => outputState.expectNoUpdates(options),
+			expectOutputToBecome: async (state, options) => {
+				await outputState.expectToBecome(state, options)
+			},
 			setBoolean: (entityId, value) => setBooleanEntity(client, entityId, value),
 		})
 	})
@@ -51,7 +54,7 @@ async function readCustomActionServiceNames(client: BlueprintRuntimeClient, scen
 	return normalizeServiceNames(relevantCalls)
 }
 
-async function initializeSensorScenario(client: BlueprintRuntimeClient, scenario: SensorScenario): Promise<void> {
+async function initializeSensorScenario(client: BlueprintRuntimeClient, scenario: SensorScenario, expectOutputOff: () => Promise<void>): Promise<void> {
 	for (const entityId of scenario.inputs) {
 		await setBooleanEntity(client, entityId, false)
 	}
@@ -68,31 +71,10 @@ async function initializeSensorScenario(client: BlueprintRuntimeClient, scenario
 	if (scenario.withCustomActions) {
 		await client.callService('switch', 'turn_off', { entity_id: scenario.entities.marker })
 	}
-	await expectOutputToBecome(client, scenario, 'off')
+	await expectOutputOff()
 
 	await settle()
 	await client.clearEvents()
-}
-
-async function expectOutputToBecome(client: BlueprintRuntimeClient, scenario: SensorScenario, state: 'off' | 'on', options: OutputStateTransitionOptions = {}): Promise<void> {
-	await client.waitForState(scenario.entities.output, { state }, { timeoutMs: options.withinMs ?? DEFAULT_OUTPUT_STATE_TIMEOUT_MS })
-}
-
-async function expectOutputToRemain(client: BlueprintRuntimeClient, scenario: SensorScenario, state: 'off' | 'on', options: OutputStateHoldOptions): Promise<void> {
-	const initialState = await client.getState(scenario.entities.output)
-	if (initialState?.state !== state) {
-		throw new Error(`Expected ${scenario.entities.output} to be ${state} immediately; current=${JSON.stringify(initialState)}`)
-	}
-
-	const holdDeadline = Date.now() + options.forMs
-
-	while (Date.now() < holdDeadline) {
-		await settle(Math.min(OUTPUT_STATE_HOLD_POLL_INTERVAL_MS, holdDeadline - Date.now()))
-		const currentState = await client.getState(scenario.entities.output)
-		if (currentState?.state !== state || currentState.last_changed !== initialState.last_changed) {
-			throw new Error(`Expected ${scenario.entities.output} to remain ${state} for ${options.forMs} ms; current=${JSON.stringify(currentState)}`)
-		}
-	}
 }
 
 function scenarioEntityIds(scenario: SensorScenario): string[] {

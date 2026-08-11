@@ -138,12 +138,6 @@ export default [
 			'yml/plain-scalar': 'off',
 		},
 	},
-	{
-		files: ['test/home-assistant/runtime/fixtures/reference-blueprints/**/*.yaml', 'test/home-assistant/runtime/fixtures/reference-blueprints/**/*.yml'],
-		rules: {
-			'max-len': 'off',
-		},
-	},
 	...tsTypeCheckedConfigs,
 	{
 		files: ['**/*.ts', '**/*.tsx', '**/*.mts', '**/*.cts'],

@@ -6,7 +6,7 @@ import type { TestProject } from 'vitest/node'
 import { requestHomeAssistant, type BlueprintRuntimeDiagnostics } from './client.ts'
 import { applyBlueprintTestValueOverrides } from './blueprint-test-overrides.ts'
 import { expectedAutomationStates, expectedFixtureStateEntityIds, generatedFixtureFiles } from './generated-config.ts'
-import { formatHomeAssistantLogIssues, isKnownReferenceBlueprintWarning, unexpectedHomeAssistantLogIssues } from './log-validation.ts'
+import { formatHomeAssistantLogIssues, unexpectedHomeAssistantLogIssues } from './log-validation.ts'
 
 type HarnessOptions = {
 	image: string
@@ -75,11 +75,9 @@ function prepareConfig(repoRoot: string): string {
 	const configDir = mkdtempSync(join(tmpdir(), 'ha-blueprint-runtime-test.'))
 	const runtimeFixtureDir = join(repoRoot, 'test', 'home-assistant', 'runtime', 'fixtures')
 	const targetBlueprintDir = join(configDir, 'blueprints', 'automation', 'hippotastic')
-	const targetReferenceDir = join(targetBlueprintDir, 'reference')
 	const targetTestIntegrationDir = join(configDir, 'custom_components', 'blueprint_test')
 
 	mkdirSync(targetBlueprintDir, { recursive: true })
-	mkdirSync(targetReferenceDir, { recursive: true })
 	cpSync(join(runtimeFixtureDir, 'configuration.yaml'), join(configDir, 'configuration.yaml'))
 	cpSync(join(runtimeFixtureDir, 'custom_components', 'blueprint_test'), targetTestIntegrationDir, { recursive: true })
 	renameSync(join(targetTestIntegrationDir, 'manifest.fixture.json'), join(targetTestIntegrationDir, 'manifest.json'))
@@ -88,11 +86,6 @@ function prepareConfig(repoRoot: string): string {
 		.filter((name) => name.endsWith('.yaml'))
 		.sort()) {
 		copyRuntimeBlueprint(join(repoRoot, 'blueprints', 'automation', file), join(targetBlueprintDir, basename(file)))
-	}
-	for (const file of readdirSync(join(runtimeFixtureDir, 'reference-blueprints'))
-		.filter((name) => name.endsWith('.yaml'))
-		.sort()) {
-		copyRuntimeBlueprint(join(runtimeFixtureDir, 'reference-blueprints', file), join(targetReferenceDir, basename(file)))
 	}
 	for (const [file, source] of Object.entries(generatedFixtureFiles())) {
 		writeFileSync(join(configDir, file), source, 'utf8')
@@ -208,7 +201,7 @@ async function teardownRuntimeFixture(fixture: RuntimeFixture): Promise<void> {
 	try {
 		// Let Home Assistant flush warnings caused by the final awaited action.
 		await delay(100)
-		const issues = unexpectedHomeAssistantLogIssues(completeLogs(fixture).slice(fixture.runtimeLogStart), isKnownReferenceBlueprintWarning)
+		const issues = unexpectedHomeAssistantLogIssues(completeLogs(fixture).slice(fixture.runtimeLogStart))
 		if (issues.length > 0) {
 			logError = new Error(`Home Assistant emitted unexpected runtime log entries:\n\n${formatHomeAssistantLogIssues(issues)}`)
 		}
