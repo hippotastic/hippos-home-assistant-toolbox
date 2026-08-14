@@ -29,6 +29,24 @@ function coverAutomations(): Automation[] {
 	}))
 }
 
+function legacyAdoptionAutomations(): Automation[] {
+	const scenario = COVER_SCENARIOS.default
+	const automation = (id: string): Automation => ({
+		alias: `Fixture legacy blueprint adoption ${id}`,
+		id: `fixture_legacy_blueprint_adoption_${id}`,
+		initial_state: false,
+		use_blueprint: {
+			input: {
+				...scenario.commonInputs,
+				cover_entity: scenario.entities.cover,
+				cover_status_helper_entity: scenario.entities.helper,
+			},
+			path: 'hippo/cover_automation.yaml',
+		},
+	})
+	return [automation('one'), automation('two')]
+}
+
 function sensorAutomations(): Automation[] {
 	return Object.values(SENSOR_SCENARIOS).map((scenario) => {
 		const input: Record<string, unknown> = {
@@ -200,7 +218,7 @@ export function generatedFixtureFiles(): Record<string, string> {
 	}
 
 	return {
-		'automations.yaml': stringify([...coverAutomations(), ...sensorAutomations(), ...irrigationAutomations()], yamlOptions),
+		'automations.yaml': stringify([...coverAutomations(), ...legacyAdoptionAutomations(), ...sensorAutomations(), ...irrigationAutomations()], yamlOptions),
 		'fixture_covers.yaml': stringify(covers, yamlOptions),
 		'fixture_lights.yaml': stringify(unique(lights), yamlOptions),
 		'fixture_states.yaml': stringify(initialFixtureStates(), yamlOptions),
@@ -223,6 +241,7 @@ export function generatedFixtureFiles(): Record<string, string> {
 export function expectedAutomationStates(): Array<{ entityId: string; state: 'off' | 'on' }> {
 	return [
 		...[...coverAutomations(), ...sensorAutomations()].map((automation) => ({ entityId: `automation.${automation.id}`, state: 'on' as const })),
+		...legacyAdoptionAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'off' as const })),
 		...irrigationAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'off' as const })),
 	]
 }

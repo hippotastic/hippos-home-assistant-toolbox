@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 import time
 from typing import Any
 
@@ -44,6 +45,9 @@ class BlueprintTestView(HomeAssistantView):
 
         if command == "diagnostics":
             return web.json_response(_diagnostics(hass))
+
+        if command == "blueprint_adoption_result":
+            return web.json_response(hass.data[DOMAIN]["blueprint_adoption_result"])
 
         return web.json_response({"error": "unknown command"}, status=404)
 
@@ -125,6 +129,11 @@ class BlueprintTestView(HomeAssistantView):
             await asyncio.sleep(0)
             await asyncio.sleep(0)
             return web.json_response({"fired": fired})
+
+        if command == "run_blueprint_adoption":
+            result = await _run_blueprint_adoption(hass)
+            hass.data[DOMAIN]["blueprint_adoption_result"] = result
+            return web.json_response(result)
 
         if command == "diagnostics":
             return web.json_response(_diagnostics(hass))
@@ -263,6 +272,103 @@ def _serializable(value: Any) -> Any:
         return value
 
     return str(value)
+
+
+async def _run_blueprint_adoption(hass: HomeAssistant) -> dict[str, Any]:
+    """Exercise production adoption against a loaded legacy automation."""
+
+    from custom_components.hippos_toolbox.hashing import blueprint_hash
+    from custom_components.hippos_toolbox.manager import BlueprintManager
+    from custom_components.hippos_toolbox.models import CatalogEntry, RemoteSnapshot
+
+    blueprint_id = "cover_automation"
+    legacy_reference = "hippo/cover_automation.yaml"
+    managed_reference = "hippotastic/cover_automation.yaml"
+    legacy_path = Path(
+        hass.config.path("blueprints", "automation", legacy_reference)
+    )
+    managed_path = Path(
+        hass.config.path("blueprints", "automation", managed_reference)
+    )
+    source = await hass.async_add_executor_job(_read_utf8, managed_path)
+    entry = CatalogEntry(
+        id=blueprint_id,
+        name="Hippo's Cover Automation",
+        domain="automation",
+        path="blueprints/automation/cover_automation.yaml",
+        sha256=blueprint_hash(source),
+        status="active",
+    )
+    snapshot = RemoteSnapshot(
+        entries=(entry,),
+        revision="integration-test",
+        commit_sha="a" * 40,
+        release_url="https://example.invalid/integration-test",
+    )
+    automation_component = hass.data["automation"]
+    automation_entity_ids = (
+        "automation.fixture_legacy_blueprint_adoption_one",
+        "automation.fixture_legacy_blueprint_adoption_two",
+    )
+
+    class StaticApi:
+        async def async_fetch_blueprint(
+            self, _snapshot: RemoteSnapshot, _entry: CatalogEntry
+        ) -> str:
+            return source
+
+    def referenced_blueprints() -> list[str | None]:
+        entities = (
+            automation_component.get_entity(entity_id)
+            for entity_id in automation_entity_ids
+        )
+        return [
+            None if entity is None else entity.referenced_blueprint
+            for entity in entities
+        ]
+
+    def in_use(reference: str) -> int:
+        return sum(
+            entity.referenced_blueprint == reference
+            for entity in automation_component.entities
+        )
+
+    before_states = [hass.states.get(entity_id) for entity_id in automation_entity_ids]
+    assert all(state is not None for state in before_states)
+    before = {
+        "automation_states": [state.state for state in before_states],
+        "legacy_in_use": in_use(legacy_reference),
+        "managed_in_use": in_use(managed_reference),
+        "references": referenced_blueprints(),
+    }
+    manager = BlueprintManager(hass, StaticApi())
+    manager.snapshot = snapshot
+    restored = await manager.async_restore_blueprint(blueprint_id)
+    automations_path = Path(hass.config.path("automations.yaml"))
+    automations_source = await hass.async_add_executor_job(
+        _read_utf8, automations_path
+    )
+    after_states = [hass.states.get(entity_id) for entity_id in automation_entity_ids]
+    assert all(state is not None for state in after_states)
+    after = {
+        "automation_states": [state.state for state in after_states],
+        "legacy_in_use": in_use(legacy_reference),
+        "managed_in_use": in_use(managed_reference),
+        "references": referenced_blueprints(),
+    }
+    return {
+        "after": after,
+        "automations_use_legacy_path": legacy_reference in automations_source,
+        "automations_use_managed_path": managed_reference in automations_source,
+        "before": before,
+        "legacy_file_exists": await hass.async_add_executor_job(legacy_path.exists),
+        "managed_file_exists": await hass.async_add_executor_job(managed_path.exists),
+        "restored": restored,
+    }
+
+
+def _read_utf8(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
 
 
 async def _wait_state(hass: HomeAssistant, entity_id: str, expected_state: str, timeout: float) -> dict[str, Any]:

@@ -95,6 +95,7 @@ class BlueprintManager:
             record = managed.get(entry.id)
             recorded_hash = record.get("hash") if isinstance(record, dict) else None
             recorded_path = record.get("path") if isinstance(record, dict) else None
+            legacy_conflict = False
 
             if actual_hash is None and record is None:
                 adoptable_path = await self.hass.async_add_executor_job(
@@ -105,8 +106,23 @@ class BlueprintManager:
                     actual_hash = await self.hass.async_add_executor_job(
                         self._hash_file, path
                     )
+            elif actual_hash is not None and record is not None:
+                adoptable_path = await self.hass.async_add_executor_job(
+                    self._find_adoptable_path, entry
+                )
+                if adoptable_path is not None:
+                    adoptable_hash = await self.hass.async_add_executor_job(
+                        self._hash_file, adoptable_path
+                    )
+                    if adoptable_hash != actual_hash:
+                        path = adoptable_path
+                        actual_hash = adoptable_hash
+                        legacy_conflict = True
 
-            if actual_hash is None:
+            if legacy_conflict:
+                status = STATUS_MODIFIED
+                conflict_ids.append(entry.id)
+            elif actual_hash is None:
                 status = STATUS_MISSING
                 update_ids.append(entry.id)
             elif actual_hash == entry.sha256:
@@ -214,7 +230,7 @@ class BlueprintManager:
 
         await self._async_install_ids(data.snapshot, list(data.update_ids))
 
-    async def async_restore_blueprint(self, blueprint_id: str) -> None:
+    async def async_restore_blueprint(self, blueprint_id: str) -> bool:
         """Explicitly replace a modified local file with the published version."""
 
         snapshot = self.snapshot or await self.api.async_fetch_snapshot()
@@ -229,7 +245,24 @@ class BlueprintManager:
         if entry is None:
             raise HomeAssistantError(f"Blueprint {blueprint_id} is no longer active")
 
-        await self._async_install_ids(snapshot, [blueprint_id], allow_modified=True)
+        adoptable_path = await self.hass.async_add_executor_job(
+            self._find_adoptable_path, entry
+        )
+        adopted_paths = (
+            {blueprint_id: adoptable_path} if adoptable_path is not None else None
+        )
+        await self._async_install_ids(
+            snapshot,
+            [blueprint_id],
+            allow_modified=True,
+            adopted_paths=adopted_paths,
+        )
+
+        evaluated = await self.async_evaluate(snapshot)
+        restored_state = next(
+            state for state in evaluated.blueprints if state.entry.id == blueprint_id
+        )
+        return restored_state.status == STATUS_CURRENT
 
     async def _async_install_ids(
         self,
@@ -275,12 +308,17 @@ class BlueprintManager:
                 sources[blueprint_id],
             )
             if adopted_path := (adopted_paths or {}).get(blueprint_id):
-                await self.hass.async_add_executor_job(
+                migration_complete = await self.hass.async_add_executor_job(
                     self._migrate_adopted_blueprint,
                     adopted_path,
                     path,
                     entry,
                 )
+                if migration_complete:
+                    await self._async_remove_blueprint_consumers(
+                        entry.domain,
+                        self._blueprint_reference(adopted_path, entry),
+                    )
             self._managed_state[blueprint_id] = {
                 "hash": entry.sha256,
                 "path": entry.path,
@@ -416,12 +454,11 @@ class BlueprintManager:
         adopted_path: Path,
         installed_path: Path,
         entry: CatalogEntry,
-    ) -> None:
+    ) -> bool:
         """Move references to the managed path without breaking unknown consumers."""
 
-        domain_root = Path(self.hass.config.path("blueprints", entry.domain))
-        old_reference = adopted_path.relative_to(domain_root).as_posix()
-        new_reference = installed_path.relative_to(domain_root).as_posix()
+        old_reference = self._blueprint_reference(adopted_path, entry)
+        new_reference = self._blueprint_reference(installed_path, entry)
 
         all_references_migrated = self._migrate_blueprint_references(
             old_reference, new_reference
@@ -436,6 +473,11 @@ class BlueprintManager:
                 adopted_path,
                 old_reference,
             )
+        return all_references_migrated
+
+    def _blueprint_reference(self, path: Path, entry: CatalogEntry) -> str:
+        domain_root = Path(self.hass.config.path("blueprints", entry.domain))
+        return path.relative_to(domain_root).as_posix()
 
     def _migrate_blueprint_references(
         self, old_reference: str, new_reference: str
@@ -587,12 +629,25 @@ class BlueprintManager:
 
     async def _async_reload_domains(self, domains: set[str]) -> None:
         for domain in sorted(domains):
-            blueprint_manager = self.hass.data.get("blueprint", {}).get(domain)
-            if blueprint_manager is not None:
-                await blueprint_manager.async_reset_cache()
-
             if self.hass.services.has_service(domain, "reload"):
                 await self.hass.services.async_call(domain, "reload", blocking=True)
+
+    async def _async_remove_blueprint_consumers(
+        self, domain: str, blueprint_reference: str
+    ) -> None:
+        """Force HA to recreate consumers whose path changed but content did not."""
+
+        component = self.hass.data.get(domain)
+        if component is None or not hasattr(component, "async_remove_entity"):
+            return
+
+        entity_ids = [
+            entity.entity_id
+            for entity in component.entities
+            if getattr(entity, "referenced_blueprint", None) == blueprint_reference
+        ]
+        for entity_id in entity_ids:
+            await component.async_remove_entity(entity_id)
 
     def _sync_issues(self, data: CoordinatorData) -> None:
         conflicts = set(data.conflict_ids)

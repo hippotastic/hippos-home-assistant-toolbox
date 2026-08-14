@@ -44,6 +44,7 @@ export async function setupRuntimeFixture(project: TestProject, repoRoot: string
 
 	try {
 		await waitForFixture(fixture)
+		requestHomeAssistant(containerName, 'run_blueprint_adoption', {}, 'POST')
 		requestHomeAssistant(containerName, 'clear_events', {}, 'POST')
 		fixture.runtimeLogStart = completeLogs(fixture).length
 		project.provide('haBlueprintContainerName', containerName)
@@ -75,11 +76,18 @@ function prepareConfig(repoRoot: string): string {
 	const configDir = mkdtempSync(join(tmpdir(), 'ha-blueprint-runtime-test.'))
 	const runtimeFixtureDir = join(repoRoot, 'test', 'home-assistant', 'runtime', 'fixtures')
 	const targetBlueprintDir = join(configDir, 'blueprints', 'automation', 'hippotastic')
+	const targetLegacyBlueprintDir = join(configDir, 'blueprints', 'automation', 'hippo')
 	const targetTestIntegrationDir = join(configDir, 'custom_components', 'blueprint_test')
+	const targetToolboxIntegrationDir = join(configDir, 'custom_components', 'hippos_toolbox')
 
 	mkdirSync(targetBlueprintDir, { recursive: true })
+	mkdirSync(targetLegacyBlueprintDir, { recursive: true })
 	cpSync(join(runtimeFixtureDir, 'configuration.yaml'), join(configDir, 'configuration.yaml'))
 	cpSync(join(runtimeFixtureDir, 'custom_components', 'blueprint_test'), targetTestIntegrationDir, { recursive: true })
+	cpSync(join(repoRoot, 'custom_components', 'hippos_toolbox'), targetToolboxIntegrationDir, {
+		filter: (source) => basename(source) !== '__pycache__',
+		recursive: true,
+	})
 	renameSync(join(targetTestIntegrationDir, 'manifest.fixture.json'), join(targetTestIntegrationDir, 'manifest.json'))
 
 	for (const file of readdirSync(join(repoRoot, 'blueprints', 'automation'))
@@ -87,6 +95,9 @@ function prepareConfig(repoRoot: string): string {
 		.sort()) {
 		copyRuntimeBlueprint(join(repoRoot, 'blueprints', 'automation', file), join(targetBlueprintDir, basename(file)))
 	}
+	const legacyCoverSourcePath = join(repoRoot, 'blueprints', 'automation', 'cover_automation.yaml')
+	const legacyCoverSource = applyBlueprintTestValueOverrides(readFileSync(legacyCoverSourcePath, 'utf8'), legacyCoverSourcePath)
+	writeFileSync(join(targetLegacyBlueprintDir, 'cover_automation.yaml'), `${legacyCoverSource.trimEnd()}\n\n# Local pre-integration version\n`, 'utf8')
 	for (const [file, source] of Object.entries(generatedFixtureFiles())) {
 		writeFileSync(join(configDir, file), source, 'utf8')
 	}

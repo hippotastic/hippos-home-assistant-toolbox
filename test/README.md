@@ -60,7 +60,11 @@ required input.
 
 The regression tests for the repository's Home Assistant integration live in
 `test/home-assistant/hippos-toolbox-integration`. They execute their Python test
-suite inside the same Home Assistant container used by the blueprint tests.
+suite inside the same Home Assistant container used by the blueprint tests. A
+startup scenario also loads an existing automation from the legacy `hippo/`
+directory, migrates it through the production manager, reloads automations, and
+verifies that Home Assistant now counts the managed `hippotastic/` blueprint as
+in use. This reuses the shared container and adds no second Home Assistant boot.
 
 Assertions describe the intended behavior explicitly. They remain the contract
 for future blueprint revisions instead of treating an older implementation as

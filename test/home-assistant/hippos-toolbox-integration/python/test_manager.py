@@ -201,6 +201,88 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.installed_path().exists())
         self.assertEqual(path.read_text(encoding="utf-8"), "locally changed")
 
+    async def test_rediscovers_a_legacy_conflict_after_an_incomplete_restore(
+        self,
+    ) -> None:
+        source = "blueprint:\n  name: Example\n  domain: automation\n"
+        entry = catalog_entry(source)
+        installed_path = self.installed_path()
+        installed_path.parent.mkdir(parents=True)
+        installed_path.write_text(source, encoding="utf-8")
+        adopted_path = self.adoptable_path()
+        adopted_path.parent.mkdir(parents=True)
+        adopted_path.write_text("locally changed", encoding="utf-8")
+        self.manager._state["blueprints"][entry.id] = {
+            "hash": entry.sha256,
+            "path": entry.path,
+        }
+
+        data = await self.manager.async_evaluate(snapshot(entry))
+
+        self.assertEqual(data.blueprints[0].status, STATUS_MODIFIED)
+        self.assertEqual(data.blueprints[0].installed_path, str(adopted_path))
+        self.assertEqual(data.conflict_ids, (entry.id,))
+
+    async def test_restore_migrates_a_legacy_conflict_and_its_references(self) -> None:
+        source = "blueprint:\n  name: Example\n  domain: automation\n"
+        entry = catalog_entry(source)
+        installed_path = self.installed_path()
+        installed_path.parent.mkdir(parents=True)
+        installed_path.write_text(source, encoding="utf-8")
+        adopted_path = self.adoptable_path()
+        adopted_path.parent.mkdir(parents=True)
+        adopted_path.write_text("locally changed", encoding="utf-8")
+        automations_path = self.root / "automations.yaml"
+        automations_path.write_text(
+            "- id: example\n"
+            "  use_blueprint:\n"
+            "    path: hippo/example.yaml\n",
+            encoding="utf-8",
+        )
+        self.manager._state["blueprints"][entry.id] = {
+            "hash": entry.sha256,
+            "path": entry.path,
+        }
+        self.manager.api = FakeApi(source)
+        self.manager.snapshot = snapshot(entry)
+
+        restored = await self.manager.async_restore_blueprint(entry.id)
+
+        self.assertTrue(restored)
+        self.assertFalse(adopted_path.exists())
+        self.assertIn(
+            "path: hippotastic/example.yaml",
+            automations_path.read_text(encoding="utf-8"),
+        )
+
+    async def test_restore_stays_unresolved_when_a_reference_cannot_be_migrated(
+        self,
+    ) -> None:
+        source = "blueprint:\n  name: Example\n  domain: automation\n"
+        entry = catalog_entry(source)
+        adopted_path = self.adoptable_path()
+        adopted_path.parent.mkdir(parents=True)
+        adopted_path.write_text("locally changed", encoding="utf-8")
+        automations_path = self.root / "automations.yaml"
+        automations_path.write_text(
+            "- id: example\n"
+            "  use_blueprint: {path: hippo/example.yaml, input: {}}\n",
+            encoding="utf-8",
+        )
+        self.manager.api = FakeApi(source)
+        self.manager.snapshot = snapshot(entry)
+
+        with self.assertLogs(
+            "custom_components.hippos_toolbox.manager", level="WARNING"
+        ):
+            restored = await self.manager.async_restore_blueprint(entry.id)
+
+        self.assertFalse(restored)
+        self.assertTrue(adopted_path.exists())
+        self.assertIn(
+            "hippo/example.yaml", automations_path.read_text(encoding="utf-8")
+        )
+
     async def test_migrates_adopted_blueprint_files_and_references(self) -> None:
         source = (
             "blueprint:\n"

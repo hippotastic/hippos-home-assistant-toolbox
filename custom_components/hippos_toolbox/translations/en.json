@@ -44,16 +44,27 @@
     "local_modified": {
       "fix_flow": {
         "abort": {
-          "integration_not_configured": "The integration is no longer configured."
+          "integration_not_configured": "The integration is no longer configured.",
+          "issue_ignored": "The local file for **{blueprint_name}** was left unchanged, and this Repair has been ignored. The integration will not overwrite this file while it differs from the published version.",
+          "migration_incomplete": "The published version of **{blueprint_name}** was installed, but at least one reference to `{path}` could not be migrated safely. The old file was kept, and the Repair remains open. Update the remaining `use_blueprint.path` reference manually and check for updates again."
         },
         "step": {
           "init": {
-            "description": "The local blueprint `{blueprint_id}` has changes. Its current file will be backed up and replaced with the latest published version. This cannot merge local changes.",
-            "title": "Restore published blueprint"
+            "description": "The local file for **{blueprint_name}** at `{path}` differs from the published version. The integration has not overwritten it and cannot update this blueprint until you choose how to handle the local changes.\n\nNo file will be changed merely by opening this Repair.",
+            "menu_options": {
+              "ignore": "Keep the local version and ignore this Repair",
+              "restore": "Replace it with the published version"
+            },
+            "title": "Resolve local changes in {blueprint_name}"
+          },
+          "restore": {
+            "description": "The current file at `{path}` will be backed up and replaced with the latest published version of **{blueprint_name}**. Local edits cannot be merged.\n\nIf the file is still located under `hippo/`, existing YAML `use_blueprint.path` references will be migrated to `hippotastic/`. If any reference cannot be migrated safely, the old file will be kept.\n\nSelect **Submit** to confirm the replacement.",
+            "title": "Replace local {blueprint_name}"
           }
         }
       },
-      "title": "Blueprint has local changes"
+      "description": "The local file for **{blueprint_name}** at `{path}` differs from the published version. It has not been overwritten. Open this Repair to choose whether to replace it or keep the local version.",
+      "title": "Local changes in {blueprint_name}"
     }
   }
 }
