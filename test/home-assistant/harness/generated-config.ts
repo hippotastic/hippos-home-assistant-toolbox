@@ -1,6 +1,7 @@
 import type { DocumentOptions, SchemaOptions, ToStringOptions } from 'yaml'
 import { stringify } from 'yaml'
 import { COVER_SCENARIOS } from '../runtime/cover-automation/scenarios.ts'
+import { EMA_SCENARIO } from '../runtime/exponential-moving-average/scenarios.ts'
 import { IRRIGATION_CALCULATION_SCENARIOS, IRRIGATION_END_TO_END, IRRIGATION_SCHEDULER_SCENARIOS } from '../runtime/irrigation/scenarios.ts'
 import { SENSOR_SCENARIOS } from '../runtime/sensor-state-machine/scenarios.ts'
 
@@ -27,6 +28,25 @@ function coverAutomations(): Automation[] {
 			path: 'hippotastic/cover_automation.yaml',
 		},
 	}))
+}
+
+function exponentialMovingAverageAutomations(): Automation[] {
+	return [
+		{
+			alias: 'Fixture exponential moving average',
+			id: objectId(EMA_SCENARIO.entities.automation),
+			initial_state: EMA_SCENARIO.initial.automationEnabled,
+			use_blueprint: {
+				input: {
+					average_entity: EMA_SCENARIO.entities.average,
+					input_entity: EMA_SCENARIO.entities.input,
+					period_length: EMA_SCENARIO.periodLength,
+					precision: EMA_SCENARIO.precision,
+				},
+				path: 'hippotastic/exponential_moving_average.yaml',
+			},
+		},
+	]
 }
 
 function legacyAdoptionAutomations(): Automation[] {
@@ -218,20 +238,24 @@ export function generatedFixtureFiles(): Record<string, string> {
 	}
 
 	return {
-		'automations.yaml': stringify([...coverAutomations(), ...legacyAdoptionAutomations(), ...sensorAutomations(), ...irrigationAutomations()], yamlOptions),
+		'automations.yaml': stringify(
+			[...coverAutomations(), ...exponentialMovingAverageAutomations(), ...legacyAdoptionAutomations(), ...sensorAutomations(), ...irrigationAutomations()],
+			yamlOptions
+		),
 		'fixture_covers.yaml': stringify(covers, yamlOptions),
 		'fixture_lights.yaml': stringify(unique(lights), yamlOptions),
 		'fixture_states.yaml': stringify(initialFixtureStates(), yamlOptions),
 		'fixture_switches.yaml': stringify(unique([...switches, ...irrigationSwitches]), yamlOptions),
 		'input_booleans.yaml': stringify(Object.fromEntries(inputBooleans.map((entityId) => [objectId(entityId), { initial: false }])), yamlOptions),
 		'input_numbers.yaml': stringify(
-			Object.fromEntries(
-				coverScenarios.flatMap((scenario) =>
+			Object.fromEntries([
+				...coverScenarios.flatMap((scenario) =>
 					scenario.externalAngleInitial === undefined
 						? []
 						: [[objectId(scenario.commonInputs.default_angle_entity as string), { initial: scenario.externalAngleInitial, max: 100, min: -2, step: 1 }]]
-				)
-			),
+				),
+				[objectId(EMA_SCENARIO.entities.average), { initial: EMA_SCENARIO.initial.average, max: 1000, min: -1000, step: 0.1 }],
+			]),
 			yamlOptions
 		),
 		'input_texts.yaml': stringify(Object.fromEntries([...inputTexts, ...irrigationInputTexts]), yamlOptions),
@@ -241,6 +265,10 @@ export function generatedFixtureFiles(): Record<string, string> {
 export function expectedAutomationStates(): Array<{ entityId: string; state: 'off' | 'on' }> {
 	return [
 		...[...coverAutomations(), ...sensorAutomations()].map((automation) => ({ entityId: `automation.${automation.id}`, state: 'on' as const })),
+		...exponentialMovingAverageAutomations().map((automation) => ({
+			entityId: `automation.${automation.id}`,
+			state: EMA_SCENARIO.initial.automationEnabled ? ('on' as const) : ('off' as const),
+		})),
 		...legacyAdoptionAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'off' as const })),
 		...irrigationAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'off' as const })),
 	]
@@ -257,6 +285,11 @@ function initialFixtureStates(): Array<{ attributes: Record<string, unknown>; en
 		IRRIGATION_END_TO_END.sensors.temperature,
 	]
 	return [
+		{
+			attributes: {},
+			entity_id: EMA_SCENARIO.entities.input,
+			state: EMA_SCENARIO.initial.input,
+		},
 		...Object.values(COVER_SCENARIOS).map((scenario) => ({
 			attributes: { azimuth: 180, elevation: 10 },
 			entity_id: scenario.controls.sunEntity,

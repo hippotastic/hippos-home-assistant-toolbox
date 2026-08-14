@@ -50,7 +50,7 @@
         },
         "step": {
           "init": {
-            "description": "The local file for **{blueprint_name}** at `{path}` differs from the published version. The integration has not overwritten it and cannot update this blueprint until you choose how to handle the local changes.\n\nNo file will be changed merely by opening this Repair.",
+            "description": "The local file for **{blueprint_name}** at `{path}` differs from the published version. The integration has not overwritten it and cannot update this blueprint until you choose how to handle the local changes.",
             "menu_options": {
               "ignore": "Keep the local version and ignore this Repair",
               "restore": "Replace it with the published version"

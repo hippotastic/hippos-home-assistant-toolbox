@@ -10,6 +10,14 @@
     },
     {
       "domain": "automation",
+      "id": "exponential_moving_average",
+      "name": "Hippo's Time-Based Exponential Moving Average (EMA)",
+      "path": "blueprints/automation/exponential_moving_average.yaml",
+      "sha256": "c24f9cd07663db2da73cd0ce873c6cc4305a61b3693d9b574a6f8ae0817c330f",
+      "status": "active"
+    },
+    {
+      "domain": "automation",
       "id": "irrigation_scheduler",
       "name": "Hippo's Irrigation Scheduler",
       "path": "blueprints/automation/irrigation_scheduler.yaml",

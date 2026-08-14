@@ -247,6 +247,10 @@ test/
         cover-automation.test.ts
         helpers.ts
         scenarios.ts
+      exponential-moving-average/
+        exponential-moving-average.test.ts
+        helpers.ts
+        scenarios.ts
       sensor-state-machine/
         sensor-state-machine.test.ts
         helpers.ts

@@ -11,6 +11,14 @@
       night_mode_entity: input_boolean.fixture_night_mode
       lockout_prevention_entity: input_boolean.fixture_lockout_prevention
 
+- id: validate_exponential_moving_average
+  alias: Validate Hippo's Time-Based Exponential Moving Average
+  use_blueprint:
+    path: hippotastic/exponential_moving_average.yaml
+    input:
+      input_entity: sensor.fixture_ema_input
+      average_entity: input_number.fixture_ema_average
+
 - id: validate_irrigation_scheduler
   alias: Validate Hippo's Irrigation Scheduler
   use_blueprint:

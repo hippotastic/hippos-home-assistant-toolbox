@@ -43,6 +43,17 @@ that remain stable across future implementations.
 | Reconciliation         | Enabling an automation reconciles input changes made while it was disabled                                | `reconcile`                                    |
 | Startup guard          | The configurable uptime sensor suppresses startup turn-off for 30 seconds; an old uptime releases it      | `startup`                                      |
 
+## Time-Based Exponential Moving Average
+
+| Area              | Required behavior                                                                                | Runtime scenario |
+| ----------------- | ------------------------------------------------------------------------------------------------ | ---------------- |
+| Repeated sampling | Every sampling cycle moves the average again even when the source sensor state remains unchanged | `default`        |
+| EMA formula       | Period length 4 applies alpha 0.4 to both the initial and subsequent samples                      | `default`        |
+| Precision         | The calculated EMA is limited to the configured decimal places before being stored                | `default`        |
+| Directed rounding | A rising average rounds upward and a falling average rounds downward so each sample can advance    | `default`        |
+| No-op updates     | A source value that rounds to the stored average does not write the number helper                 | `default`        |
+| Invalid input     | A nonnumeric source state such as `unavailable` does not write the number helper                  | `default`        |
+
 ## Irrigation Zone Calculation
 
 | Area                  | Required behavior                                                                                   | Runtime scenario          |

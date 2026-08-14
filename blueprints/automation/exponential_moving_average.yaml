@@ -1,0 +1,110 @@
+blueprint:
+  name: Hippo's Time-Based Exponential Moving Average (EMA)
+  description: >
+    Samples a numeric sensor once per minute and stores its exponential moving
+    average in a number helper. Time-based sampling continues moving the average
+    toward the latest input even when the source sensor does not report a new state.
+
+    The number helper's current value is used as the starting average, allowing
+    the calculation to continue from a value restored after a restart.
+
+    (V1.0)
+  domain: automation
+  source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/exponential_moving_average.yaml
+  author: Hippo
+  homeassistant:
+    min_version: 2024.6.0
+
+  input:
+    input_entity:
+      name: Input sensor
+      description: The numeric sensor whose value is sampled once per minute.
+      selector:
+        entity:
+          domain: sensor
+
+    average_entity:
+      name: Average helper
+      description: The number helper that stores the current moving average.
+      selector:
+        entity:
+          domain: input_number
+
+    period_length:
+      name: EMA period length
+      description: >
+        Controls how strongly older samples influence the average. Higher values
+        produce a smoother average that reacts more slowly to changes.
+      default: 4
+      selector:
+        number:
+          min: 2
+          max: 100
+          step: 1
+          unit_of_measurement: samples
+          mode: box
+
+    precision:
+      name: Precision
+      description: >
+        The number of decimal places stored in the average helper. Results are
+        rounded toward the input value so the stored average cannot stall between
+        two precision steps.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 5
+          step: 1
+          unit_of_measurement: decimal places
+          mode: box
+
+mode: single
+max_exceeded: silent
+
+trigger_variables:
+  input_entity: !input input_entity
+  average_entity: !input average_entity
+  period_length: !input period_length
+  precision: !input precision
+
+trigger:
+  # Sample once per minute
+  - platform: time_pattern
+    seconds: "0"
+
+condition:
+  # Only calculate with numeric input and helper values
+  - condition: template
+    value_template: >-
+      {{ is_number(states(input_entity)) and is_number(states(average_entity)) }}
+
+  # Only write a new average when the precision-normalized input differs
+  - condition: template
+    value_template: >-
+      {{
+        states(input_entity) | float | round(precision) !=
+        states(average_entity) | float | round(precision)
+      }}
+
+variables:
+  new_value: "{{ states(input_entity) | float(0) }}"
+  old_average: "{{ states(average_entity) | float(0) }}"
+  alpha: "{{ 2 / (period_length + 1) }}"
+
+action:
+  - action: input_number.set_value
+    target:
+      entity_id: !input average_entity
+    data:
+      # Round toward the input so every sample can advance the stored average
+      # Rising example: 10.2 + 0.4 * (10.26 - 10.2) = 10.224 -> 10.3 at precision 1
+      # Falling example: 10.3 + 0.4 * (10.24 - 10.3) = 10.276 -> 10.2 at precision 1
+      value: >-
+        {{
+          (
+            alpha * new_value +
+            (1 - alpha) * old_average
+          )
+          | round(precision, 'ceil' if new_value > old_average else 'floor')
+        }}

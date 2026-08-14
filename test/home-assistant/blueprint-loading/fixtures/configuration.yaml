@@ -25,6 +25,11 @@ input_number:
     min: 0
     max: 100
     step: 1
+  fixture_ema_average:
+    initial: 0
+    min: -1000
+    max: 1000
+    step: 0.1
 
 input_text:
   fixture_cover_status:
@@ -37,6 +42,8 @@ template:
       - name: Fixture Binary Sensor
         state: "off"
   - sensor:
+      - name: Fixture EMA Input
+        state: "20"
       - name: Fixture Rainfall Percentage
         state: "0"
       - name: Fixture Temperature
