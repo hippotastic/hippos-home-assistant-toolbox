@@ -6,6 +6,7 @@ from datetime import datetime
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 from typing import Any
@@ -18,6 +19,7 @@ from homeassistant.util import yaml as yaml_util
 
 from .api import ToolboxApi
 from .const import (
+    ADOPTABLE_BLUEPRINT_DIRECTORIES,
     BACKUP_COUNT,
     DOMAIN,
     GITHUB_RAW_ROOT,
@@ -36,6 +38,15 @@ STATUS_CURRENT = "current"
 STATUS_MISSING = "missing"
 STATUS_MODIFIED = "modified"
 STATUS_UPDATE_AVAILABLE = "update_available"
+
+_USE_BLUEPRINT_PATTERN = re.compile(
+    r"^(?P<indent> *)(?:-\s+)?use_blueprint\s*:\s*(?:#.*)?$"
+)
+_BLUEPRINT_PATH_PATTERN = re.compile(
+    r"^(?P<prefix>\s*path\s*:\s*)"
+    r"(?:(?P<single>'[^']*')|(?P<double>\"[^\"]*\")|(?P<plain>[^#\s]+))"
+    r"(?P<suffix>\s*(?:#.*)?)$"
+)
 
 
 class BlueprintManager:
@@ -78,22 +89,35 @@ class BlueprintManager:
             if entry.status != "active":
                 continue
 
-            path = self._installed_path(entry)
+            canonical_path = self._installed_path(entry)
+            path = canonical_path
             actual_hash = await self.hass.async_add_executor_job(self._hash_file, path)
             record = managed.get(entry.id)
             recorded_hash = record.get("hash") if isinstance(record, dict) else None
             recorded_path = record.get("path") if isinstance(record, dict) else None
+
+            if actual_hash is None and record is None:
+                adoptable_path = await self.hass.async_add_executor_job(
+                    self._find_adoptable_path, entry
+                )
+                if adoptable_path is not None:
+                    path = adoptable_path
+                    actual_hash = await self.hass.async_add_executor_job(
+                        self._hash_file, path
+                    )
 
             if actual_hash is None:
                 status = STATUS_MISSING
                 update_ids.append(entry.id)
             elif actual_hash == entry.sha256:
                 status = STATUS_CURRENT
-                if record is None:
+                if record is None and path == canonical_path:
                     await self.hass.async_add_executor_job(
                         self._backup_file, path, entry
                     )
-                if recorded_hash != entry.sha256 or recorded_path != entry.path:
+                if path == canonical_path and (
+                    recorded_hash != entry.sha256 or recorded_path != entry.path
+                ):
                     managed[entry.id] = {"hash": entry.sha256, "path": entry.path}
                     changed_state = True
             elif recorded_hash is not None and actual_hash == recorded_hash:
@@ -130,26 +154,52 @@ class BlueprintManager:
             for state in data.blueprints
             if state.status == STATUS_MISSING and state.entry.id not in managed
         ]
+        adopted_paths: dict[str, Path] = {}
         legacy_import_ids: list[str] = []
 
         for state in data.blueprints:
-            if state.entry.id in managed or state.status != STATUS_MODIFIED:
+            if state.entry.id in managed:
                 continue
+
+            state_path = Path(state.installed_path)
+            if state_path in self._adoptable_paths(state.entry):
+                if state.status == STATUS_CURRENT:
+                    adopted_paths[state.entry.id] = state_path
+                    continue
+
+                if state.status == STATUS_MODIFIED:
+                    is_managed_import = await self.hass.async_add_executor_job(
+                        self._is_matching_legacy_import,
+                        state_path,
+                        state.entry,
+                    )
+                    if is_managed_import:
+                        adopted_paths[state.entry.id] = state_path
+                continue
+
+            if state.status != STATUS_MODIFIED:
+                continue
+
             is_managed_import = await self.hass.async_add_executor_job(
                 self._is_matching_legacy_import,
-                Path(state.installed_path),
+                state_path,
                 state.entry,
             )
             if is_managed_import:
                 legacy_import_ids.append(state.entry.id)
 
-        if missing_ids:
-            await self._async_install_ids(data.snapshot, missing_ids)
+        initial_install_ids = [*missing_ids, *adopted_paths]
+        if initial_install_ids:
+            await self._async_install_ids(
+                data.snapshot,
+                initial_install_ids,
+                adopted_paths=adopted_paths,
+            )
         if legacy_import_ids:
             await self._async_install_ids(
                 data.snapshot, legacy_import_ids, allow_modified=True
             )
-        if not missing_ids and not legacy_import_ids:
+        if not initial_install_ids and not legacy_import_ids:
             await self._store.async_save(self._state)
 
         evaluated = await self.async_evaluate(data.snapshot)
@@ -187,6 +237,7 @@ class BlueprintManager:
         blueprint_ids: list[str],
         *,
         allow_modified: bool = False,
+        adopted_paths: dict[str, Path] | None = None,
     ) -> None:
         """Download, verify, and atomically install selected blueprints."""
 
@@ -223,6 +274,13 @@ class BlueprintManager:
                 entry,
                 sources[blueprint_id],
             )
+            if adopted_path := (adopted_paths or {}).get(blueprint_id):
+                await self.hass.async_add_executor_job(
+                    self._migrate_adopted_blueprint,
+                    adopted_path,
+                    path,
+                    entry,
+                )
             self._managed_state[blueprint_id] = {
                 "hash": entry.sha256,
                 "path": entry.path,
@@ -246,16 +304,40 @@ class BlueprintManager:
         return blueprints
 
     def _installed_path(self, entry: CatalogEntry) -> Path:
-        relative_source = entry.path.removeprefix(f"blueprints/{entry.domain}/")
-        relative_path = Path(relative_source)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
-            raise HomeAssistantError(f"Unsafe blueprint path: {entry.path}")
+        relative_path = self._relative_source_path(entry)
 
         return Path(
             self.hass.config.path(
                 "blueprints", entry.domain, MANAGED_DIRECTORY, *relative_path.parts
             )
         )
+
+    def _adoptable_paths(self, entry: CatalogEntry) -> tuple[Path, ...]:
+        relative_path = self._relative_source_path(entry)
+        return tuple(
+            Path(
+                self.hass.config.path(
+                    "blueprints", entry.domain, directory, *relative_path.parts
+                )
+            )
+            for directory in ADOPTABLE_BLUEPRINT_DIRECTORIES
+        )
+
+    def _find_adoptable_path(self, entry: CatalogEntry) -> Path | None:
+        return next(
+            (path for path in self._adoptable_paths(entry) if path.exists()), None
+        )
+
+    @staticmethod
+    def _relative_source_path(entry: CatalogEntry) -> Path:
+        prefix = f"blueprints/{entry.domain}/"
+        if not entry.path.startswith(prefix):
+            raise HomeAssistantError(f"Unsafe blueprint path: {entry.path}")
+
+        relative_path = Path(entry.path.removeprefix(prefix))
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise HomeAssistantError(f"Unsafe blueprint path: {entry.path}")
+        return relative_path
 
     @staticmethod
     def _hash_file(path: Path) -> str | None:
@@ -321,6 +403,180 @@ class BlueprintManager:
                 file.write(source)
                 file.flush()
                 os.fsync(file.fileno())
+            os.replace(temporary_name, path)
+        except Exception:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+            raise
+
+    def _migrate_adopted_blueprint(
+        self,
+        adopted_path: Path,
+        installed_path: Path,
+        entry: CatalogEntry,
+    ) -> None:
+        """Move references to the managed path without breaking unknown consumers."""
+
+        domain_root = Path(self.hass.config.path("blueprints", entry.domain))
+        old_reference = adopted_path.relative_to(domain_root).as_posix()
+        new_reference = installed_path.relative_to(domain_root).as_posix()
+
+        all_references_migrated = self._migrate_blueprint_references(
+            old_reference, new_reference
+        )
+        self._backup_file(adopted_path, entry)
+        if all_references_migrated:
+            adopted_path.unlink()
+        else:
+            _LOGGER.warning(
+                "Kept adopted blueprint %s because at least one reference to %s "
+                "could not be migrated safely",
+                adopted_path,
+                old_reference,
+            )
+
+    def _migrate_blueprint_references(
+        self, old_reference: str, new_reference: str
+    ) -> bool:
+        """Rewrite block-style blueprint references in YAML configuration files."""
+
+        config_root = Path(self.hass.config.path())
+        all_references_migrated = True
+
+        for path in self._configuration_yaml_files(config_root):
+            try:
+                source = path.read_text(encoding="utf-8")
+            except OSError:
+                all_references_migrated = False
+                _LOGGER.warning("Could not inspect %s during blueprint adoption", path)
+                continue
+
+            migrated = self._replace_blueprint_reference(
+                source, old_reference, new_reference
+            )
+            if migrated != source:
+                try:
+                    self._backup_configuration_file(path, config_root)
+                    self._write_text_atomic(path, migrated)
+                except OSError:
+                    all_references_migrated = False
+                    _LOGGER.exception(
+                        "Could not migrate blueprint references in %s", path
+                    )
+                    continue
+
+            if old_reference in migrated:
+                all_references_migrated = False
+
+        return all_references_migrated
+
+    @staticmethod
+    def _configuration_yaml_files(config_root: Path) -> list[Path]:
+        paths: list[Path] = []
+        for root, directories, files in os.walk(config_root):
+            root_path = Path(root)
+            if root_path == config_root:
+                directories[:] = [
+                    directory
+                    for directory in directories
+                    if directory not in {".storage", "blueprints"}
+                ]
+
+            paths.extend(
+                root_path / filename
+                for filename in files
+                if Path(filename).suffix.lower() in {".yaml", ".yml"}
+                and not (root_path / filename).is_symlink()
+            )
+        return sorted(paths)
+
+    @staticmethod
+    def _replace_blueprint_reference(
+        source: str, old_reference: str, new_reference: str
+    ) -> str:
+        lines = source.splitlines(keepends=True)
+        use_blueprint_indent: int | None = None
+
+        for index, line in enumerate(lines):
+            content = line.rstrip("\r\n")
+            stripped = content.lstrip()
+            indentation = len(content) - len(stripped)
+
+            if use_blueprint_indent is not None:
+                if (
+                    stripped
+                    and not stripped.startswith("#")
+                    and indentation <= use_blueprint_indent
+                ):
+                    use_blueprint_indent = None
+                elif indentation > use_blueprint_indent:
+                    path_match = _BLUEPRINT_PATH_PATTERN.fullmatch(content)
+                    if path_match is not None:
+                        value_group = next(
+                            group
+                            for group in ("single", "double", "plain")
+                            if path_match.group(group) is not None
+                        )
+                        value = path_match.group(value_group)
+                        unquoted_value = (
+                            value[1:-1]
+                            if value_group in {"single", "double"}
+                            else value
+                        )
+                        if unquoted_value == old_reference:
+                            replacement = (
+                                f"{value[0]}{new_reference}{value[-1]}"
+                                if value_group in {"single", "double"}
+                                else new_reference
+                            )
+                            newline = line[len(content) :]
+                            lines[index] = (
+                                f"{path_match.group('prefix')}{replacement}"
+                                f"{path_match.group('suffix')}{newline}"
+                            )
+
+            use_blueprint_match = _USE_BLUEPRINT_PATTERN.fullmatch(content)
+            if use_blueprint_match is not None:
+                use_blueprint_indent = len(use_blueprint_match.group("indent"))
+
+        return "".join(lines)
+
+    def _backup_configuration_file(self, path: Path, config_root: Path) -> None:
+        relative_path = path.relative_to(config_root)
+        backup_directory = Path(
+            self.hass.config.path(
+                "blueprints",
+                ".hippos_toolbox_backups",
+                "configuration",
+                *relative_path.parent.parts,
+            )
+        )
+        backup_directory.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S.%f%z")
+        shutil.copy2(path, backup_directory / f"{path.name}.{timestamp}.bak")
+
+        backups = sorted(
+            backup_directory.glob(f"{path.name}.*.bak"),
+            key=lambda candidate: candidate.name,
+            reverse=True,
+        )
+        for expired in backups[BACKUP_COUNT:]:
+            expired.unlink()
+
+    @staticmethod
+    def _write_text_atomic(path: Path, source: str) -> None:
+        mode = path.stat().st_mode
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as file:
+                file.write(source)
+                file.flush()
+                os.fsync(file.fileno())
+            os.chmod(temporary_name, mode)
             os.replace(temporary_name, path)
         except Exception:
             try:

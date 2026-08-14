@@ -18,6 +18,11 @@ do not already exist locally are installed automatically.
 
 Blueprints previously imported from this repository through Home Assistant are
 recognized by their source URL, backed up, and adopted by the integration.
+Existing files under `/config/blueprints/<domain>/hippo/` are also recognized.
+During adoption, the integration moves them into its managed `hippotastic/`
+directory and updates existing `use_blueprint.path` references in YAML
+configuration files. If a reference cannot be rewritten safely, the old file is
+kept as a compatibility copy so the existing consumer continues to work.
 
 ## Updates
 

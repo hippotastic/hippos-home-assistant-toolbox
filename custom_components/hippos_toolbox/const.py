@@ -7,6 +7,7 @@ from homeassistant.const import Platform
 DOMAIN = "hippos_toolbox"
 NAME = "Hippo's Home Assistant Toolbox"
 MANAGED_DIRECTORY = "hippotastic"
+ADOPTABLE_BLUEPRINT_DIRECTORIES = ("hippo",)
 PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.UPDATE]
 UPDATE_INTERVAL = timedelta(days=1)
 
