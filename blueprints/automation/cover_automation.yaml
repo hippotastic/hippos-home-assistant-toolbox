@@ -778,7 +778,7 @@ action:
         value_template: "{{ new_angle_is_outside_tolerance }}"
     then:
       - delay:
-          milliseconds: 200
+          milliseconds: 200 # @blueprint-test-value 10
       # Perform cover angle homing if all of the following conditions are true:
       # - Cover angle homing is enabled
       # - We didn't change the cover position (which automatically homes the angle)
@@ -799,7 +799,7 @@ action:
             target:
               entity_id: "{{ cover_entity }}"
           - delay:
-              milliseconds: 2500
+              milliseconds: 2500 # @blueprint-test-value 50
       # Set the actual cover angle
       - action: cover.set_cover_tilt_position
         data:

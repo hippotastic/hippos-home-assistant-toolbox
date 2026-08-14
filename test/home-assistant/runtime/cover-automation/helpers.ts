@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from 'node:util'
 import { withScenarioDiagnostics, type BlueprintRuntimeClient } from '../../harness/client.ts'
+import { prepareNextAction } from '../helpers/actions.ts'
 import { setBoolean } from '../helpers/entities.ts'
-import { createEntityStateExpectation, DEFAULT_STATE_TRANSITION_TIMEOUT_MS, type StateTransitionOptions } from '../helpers/state-expectations.ts'
-import { settle } from '../helpers/timing.ts'
+import { createEntityStateExpectation, DEFAULT_STATE_TRANSITION_TIMEOUT_MS, type StateHoldOptions, type StateTransitionOptions } from '../helpers/state-expectations.ts'
 import type { CoverScenario } from './scenarios.ts'
 
 type ManagedCoverState = {
@@ -17,10 +17,6 @@ type ActualCoverState = {
 }
 
 type CoverMode = 'lockout' | 'night' | 'privacy' | 'sun'
-
-type CoverStateHoldOptions = {
-	forMs?: number
-}
 
 type NormalizedCoverCall = {
 	service: string
@@ -37,13 +33,15 @@ type CoverScenarioFixture<TScenario extends CoverScenario> = {
 	/** Waits for the physical cover to reach every position or angle supplied in `expected` */
 	expectCoverToBecome: (expected: ActualCoverState, options?: StateTransitionOptions) => Promise<void>
 	/** Rejects physical cover state changes and cover service calls during the observation period */
-	expectNoCoverUpdates: (options?: CoverStateHoldOptions) => Promise<void>
+	expectNoCoverUpdates: (options?: StateHoldOptions) => Promise<void>
 	/** Waits for both the helper state and its matching `input_text.set_value` write */
 	expectHelperToBecome: (expected: ManagedCoverState, options?: StateTransitionOptions) => Promise<void>
 	/** Rejects visible helper state changes during the observation period */
-	expectNoHelperChanges: (options?: CoverStateHoldOptions) => Promise<void>
+	expectNoHelperChanges: (options?: StateHoldOptions) => Promise<void>
 	/** Simulates an external or manual cover movement through the real cover services */
 	moveCover: (target: ActualCoverState) => Promise<void>
+	/** Finishes the previous automation run and starts a fresh event window for the next action */
+	prepareNextAction: () => Promise<void>
 	/** Enables or disables the scenario's automatic-control input */
 	setAutomaticControl: (enabled: boolean) => Promise<void>
 	/** Sets the scenario's optional external default-angle entity */
@@ -54,8 +52,6 @@ type CoverScenarioFixture<TScenario extends CoverScenario> = {
 	setSun: (position: { azimuth: number; elevation: number }) => Promise<void>
 }
 
-const DEFAULT_COVER_STATE_HOLD_MS = 350
-
 /** Initializes a cover scenario and runs it with diagnostics and bound test operations */
 export async function withCoverScenario<TScenario extends CoverScenario, TResult>(
 	scenario: TScenario,
@@ -65,10 +61,12 @@ export async function withCoverScenario<TScenario extends CoverScenario, TResult
 		await initializeCoverScenario(client, scenario)
 
 		const helperState = createEntityStateExpectation(client, scenario.entities.helper, (state) => parseManagedState(state.state), {
+			automationEntityIds: [scenario.entities.automation],
 			matches: isDeepStrictEqual,
 			revision: (state) => state.last_updated,
 		})
 		const coverState = createEntityStateExpectation(client, scenario.entities.cover, projectCoverState, {
+			automationEntityIds: [scenario.entities.automation],
 			matches: coverStateMatches,
 			revision: (state) => state.last_updated,
 			updates: [{ domain: 'cover', entityId: scenario.entities.cover }],
@@ -82,10 +80,7 @@ export async function withCoverScenario<TScenario extends CoverScenario, TResult
 			expectCoverToBecome: async (expected, options) => {
 				await coverState.expectToBecome(expected, options)
 			},
-			expectNoCoverUpdates: async (options = {}) => {
-				const forMs = options.forMs ?? DEFAULT_COVER_STATE_HOLD_MS
-				await coverState.expectNoUpdates({ forMs })
-			},
+			expectNoCoverUpdates: (options) => coverState.expectNoUpdates(options),
 			expectHelperToBecome: async (expected, options = {}) => {
 				const withinMs = options.withinMs ?? DEFAULT_STATE_TRANSITION_TIMEOUT_MS
 				const [call] = await Promise.all([
@@ -97,11 +92,9 @@ export async function withCoverScenario<TScenario extends CoverScenario, TResult
 					throw new Error(`Expected ${scenario.entities.helper} to be written as ${JSON.stringify(expected)}; written=${JSON.stringify(writtenState)}`)
 				}
 			},
-			expectNoHelperChanges: async (options = {}) => {
-				const forMs = options.forMs ?? DEFAULT_COVER_STATE_HOLD_MS
-				await helperState.expectNoChanges({ forMs })
-			},
+			expectNoHelperChanges: (options) => helperState.expectNoChanges(options),
 			moveCover: (target) => moveCover(client, scenario.entities.cover, target),
+			prepareNextAction: () => prepareNextAction(client, [scenario.entities.automation]),
 			setAutomaticControl: (enabled) => setBoolean(client, scenario.controls.automatic, enabled),
 			setExternalAngle: (value) => setExternalAngle(client, scenario, value),
 			setMode: (mode, enabled) => setBoolean(client, scenario.controls[mode], enabled),
@@ -154,8 +147,7 @@ async function initializeCoverScenario(client: BlueprintRuntimeClient, scenario:
 		},
 	})
 
-	await settle()
-	await client.clearEvents()
+	await prepareNextAction(client, [scenario.entities.automation])
 }
 
 async function setExternalAngle(client: BlueprintRuntimeClient, scenario: CoverScenario, value: number): Promise<void> {

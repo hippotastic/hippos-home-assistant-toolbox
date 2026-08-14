@@ -29,6 +29,7 @@ function sensorScenario(id: string, options: SensorScenarioOptions = {}) {
 			automation: `automation.fixture_sensor_${id}`,
 			marker: `switch.fixture_sensor_${id}_marker`,
 			output: `${outputDomain}.fixture_sensor_${id}_state`,
+			uptime: `sensor.fixture_sensor_${id}_uptime`,
 		},
 		withCustomActions: options.withCustomActions ?? false,
 	}

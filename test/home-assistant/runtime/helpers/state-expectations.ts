@@ -1,4 +1,4 @@
-import type { BlueprintRuntimeClient, BlueprintRuntimeState, ServiceCallMatch } from '../../harness/client.ts'
+import { eventMatchesServiceCall, type BlueprintRuntimeClient, type BlueprintRuntimeEvent, type BlueprintRuntimeState, type ServiceCallMatch } from '../../harness/client.ts'
 import { settle } from './timing.ts'
 
 export type StateTransitionOptions = {
@@ -6,13 +6,14 @@ export type StateTransitionOptions = {
 }
 
 export type StateHoldOptions = {
-	forMs: number
+	forMs?: number
 }
 
 export type StatePredicate<T> = (actual: T) => boolean
 export type StateExpectation<T> = T | StatePredicate<T>
 
 type StateExpectationOptions<T> = {
+	automationEntityIds?: string[]
 	description?: string
 	matches?: (actual: T, expected: T) => boolean
 	revision?: (state: BlueprintRuntimeState) => string
@@ -35,6 +36,7 @@ export function createEntityStateExpectation<T>(
 	options: StateExpectationOptions<T> = {}
 ) {
 	const description = options.description ?? entityId
+	const automationEntityIds = options.automationEntityIds ?? []
 	const matches = options.matches ?? Object.is
 	const revision = options.revision ?? ((state: BlueprintRuntimeState) => state.last_changed)
 	const updates = options.updates ?? []
@@ -42,12 +44,8 @@ export function createEntityStateExpectation<T>(
 		const state = await client.getState(entityId)
 		return state ? { revision: revision(state), value: project(state) } : null
 	}
-	const expectEntityNotToChange = async (holdOptions: StateHoldOptions): Promise<void> => {
-		const initial = await read()
-		if (!initial) {
-			throw new Error(`Expected ${description} to exist before checking for state changes`)
-		}
-		await expectNoChanges(read, initial, description, initial.value, holdOptions, matches)
+	const expectEntityNotToChange = async (holdOptions: StateHoldOptions = {}): Promise<void> => {
+		await expectNoActivity(client, automationEntityIds, entityId, read, description, holdOptions, matches)
 	}
 
 	return {
@@ -69,31 +67,71 @@ export function createEntityStateExpectation<T>(
 
 		expectNoChanges: expectEntityNotToChange,
 
-		async expectNoUpdates(holdOptions: StateHoldOptions): Promise<void> {
+		async expectNoUpdates(holdOptions: StateHoldOptions = {}): Promise<void> {
 			if (updates.length === 0) {
 				throw new Error(`No service-call matches are configured for ${description}`)
 			}
-			await Promise.all([expectEntityNotToChange(holdOptions), ...updates.map((update) => client.expectNoServiceCall(update, { timeoutMs: holdOptions.forMs }))])
+			await expectNoActivity(client, automationEntityIds, entityId, read, description, holdOptions, matches, updates)
 		},
 	}
 }
 
-async function expectNoChanges<T>(
+async function expectNoActivity<T>(
+	client: BlueprintRuntimeClient,
+	automationEntityIds: string[],
+	entityId: string,
 	read: () => Promise<StateObservation<T> | null>,
-	initial: StateObservation<T>,
 	description: string,
-	expected: T,
 	options: StateHoldOptions,
-	matches: (actual: T, expected: T) => boolean
+	matches: (actual: T, expected: T) => boolean,
+	updates: ServiceCallMatch[] = []
 ): Promise<void> {
+	if (options.forMs === undefined) {
+		if (automationEntityIds.length === 0) {
+			throw new Error(`No scenario automation is configured for the immediate ${description} assertion`)
+		}
+		await client.waitForActionToSettle(automationEntityIds)
+		const current = await read()
+		if (!current) {
+			throw new Error(`Expected ${description} to exist before checking for state changes`)
+		}
+		assertNoRecordedActivity(await client.events(), entityId, description, updates)
+		return
+	}
+
+	const initial = await read()
+	if (!initial) {
+		throw new Error(`Expected ${description} to exist before checking for state changes`)
+	}
+	const eventsBeforeHold = await client.events()
+	const firstObservedEventId = eventsBeforeHold.at(-1)?.id ?? 0
 	const deadline = Date.now() + options.forMs
 
 	while (Date.now() < deadline) {
 		await settle(Math.min(STATE_POLL_INTERVAL_MS, deadline - Date.now()))
 		const current = await read()
-		if (!current || !matches(current.value, expected) || current.revision !== initial.revision) {
-			throw expectationError(description, 'not change from', expected, current?.value ?? null, options.forMs)
+		if (!current || !matches(current.value, initial.value) || current.revision !== initial.revision) {
+			throw expectationError(description, 'not change from', initial.value, current?.value ?? null, options.forMs)
 		}
+	}
+
+	assertNoRecordedActivity(
+		(await client.events()).filter((event) => event.id > firstObservedEventId),
+		entityId,
+		description,
+		updates
+	)
+}
+
+function assertNoRecordedActivity(events: BlueprintRuntimeEvent[], entityId: string, description: string, updates: ServiceCallMatch[]): void {
+	const stateChange = events.find((event) => event.event_type === 'state_changed' && event.data.entity_id === entityId)
+	if (stateChange) {
+		throw new Error(`Expected no ${description} state changes; recorded event=${JSON.stringify(stateChange)}`)
+	}
+
+	const serviceCall = events.find((event) => updates.some((update) => eventMatchesServiceCall(event, update)))
+	if (serviceCall) {
+		throw new Error(`Expected no ${description} updates; recorded event=${JSON.stringify(serviceCall)}`)
 	}
 }
 

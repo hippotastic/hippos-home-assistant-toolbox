@@ -38,6 +38,7 @@ function sensorAutomations(): Automation[] {
 			max_on_duration_minutes: scenario.maxOnDurationMinutes,
 			off_delay_minutes: scenario.offDelayMinutes,
 			state_entity: scenario.entities.output,
+			uptime_entity: scenario.entities.uptime,
 		}
 
 		if (scenario.withCustomActions) {
@@ -247,10 +248,10 @@ function initialFixtureStates(): Array<{ attributes: Record<string, unknown>; en
 			entity_id: entityId,
 			state: entityId.endsWith('_rainfall') ? '0' : '20',
 		})),
-		{
+		...Object.values(SENSOR_SCENARIOS).map((scenario) => ({
 			attributes: {},
-			entity_id: 'sensor.uptime',
+			entity_id: scenario.entities.uptime,
 			state: '2000-01-01T00:00:00+00:00',
-		},
+		})),
 	]
 }

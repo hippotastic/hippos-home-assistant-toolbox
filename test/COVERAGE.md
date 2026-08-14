@@ -21,7 +21,7 @@ that remain stable across future implementations.
 | Missing position       | Tilt-only covers do not evaluate a missing position and still receive tilt calls                               | `tiltOnly`                                        |
 | Angle homing           | Intermediate tilt targets call `0` before the target                                                           | `homing`                                          |
 | Homing exclusions      | Disabled homing and extreme target angles skip the extra homing call                                           | `homingDisabled`, `homingExtreme`                 |
-| Availability           | An unavailable configured mode or unknown required cover blocks execution; omitted optional modes remain valid | `availability`, `requiredAvailability`, `minimal` |
+| Availability           | An unavailable configured mode or required cover blocks execution; omitted mode entities remain valid          | `availability`, `requiredAvailability`, `minimal` |
 | Status and calls       | Status helper JSON, cover call order, position, and angle are significant                                      | all cover scenarios                               |
 | User logs              | Mode changes, lockout protection, manual preservation, and movement summaries remain meaningful                | `default`, `modes`, `lockout`, `manual`           |
 

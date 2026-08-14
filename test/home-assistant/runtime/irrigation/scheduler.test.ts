@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { withScenarioDiagnostics } from '../../harness/client.ts'
-import { settle } from '../helpers/timing.ts'
+import { prepareNextAction as prepareScenarioAction } from '../helpers/actions.ts'
 import { setAutomation, setHelper, setSwitch, waitForZoneHelper, withSchedulerScenario, type ZoneStatus } from './helpers.ts'
 import { IRRIGATION_END_TO_END, IRRIGATION_SCHEDULER_SCENARIOS } from './scenarios.ts'
 
@@ -10,7 +10,17 @@ describe("Hippo's Irrigation Scheduler", () => {
 	test('waters the complete preplanned sequence when the configured daily time is reached', async () => {
 		await withSchedulerScenario(
 			IRRIGATION_SCHEDULER_SCENARIOS.timeTrigger,
-			async ({ client, expectValveToBecome, expectNoValveChanges, fireScheduledTime, irrigationCalls, relativeTime, setZoneHelper, startSchedulers, waitForZoneHelper }) => {
+			async ({
+				expectValveToBecome,
+				expectNoValveChanges,
+				fireScheduledTime,
+				irrigationCalls,
+				prepareNextAction,
+				relativeTime,
+				setZoneHelper,
+				startSchedulers,
+				waitForZoneHelper,
+			}) => {
 				await setZoneHelper(0, {
 					interval: 1,
 					next_start: relativeTime({ minutes: 5 }),
@@ -25,8 +35,8 @@ describe("Hippo's Irrigation Scheduler", () => {
 				})
 				await startSchedulers()
 
-				const plannedEnd = relativeTime({ milliseconds: 2500 })
-				const secondPlannedEnd = relativeTime({ milliseconds: 5000 })
+				const plannedEnd = relativeTime({ milliseconds: 800 })
+				const secondPlannedEnd = relativeTime({ milliseconds: 1600 })
 				for (const zoneIndex of [0, 1]) {
 					const status = await waitForZoneHelper(zoneIndex, (value) => typeof value.next_start === 'string' && typeof value.next_end === 'string')
 					await setZoneHelper(zoneIndex, {
@@ -35,13 +45,12 @@ describe("Hippo's Irrigation Scheduler", () => {
 						next_end: zoneIndex === 0 ? plannedEnd : secondPlannedEnd,
 					})
 				}
-				await settle(250)
-				await client.clearEvents()
+				await prepareNextAction()
 
 				// If the daily start has not fired, expect neither planned zone to water
 				await expectValveToBecome(0, 'off', { withinMs: 0 })
 				await expectValveToBecome(1, 'off', { withinMs: 0 })
-				await Promise.all([expectNoValveChanges(0, { forMs: 150 }), expectNoValveChanges(1, { forMs: 150 })])
+				await Promise.all([expectNoValveChanges(0, { forMs: 50 }), expectNoValveChanges(1, { forMs: 50 })])
 
 				// If the daily start fires, expect the first zone to start
 				// while the second zone remains off
@@ -49,7 +58,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 				await expectValveToBecome(0, 'on')
 				await expectValveToBecome(1, 'off', { withinMs: 0 })
 				// Until the first planned end, expect only the first zone to remain on
-				const firstHoldMs = Math.max(0, Date.parse(plannedEnd) - Date.now() - 250)
+				const firstHoldMs = Math.max(0, Date.parse(plannedEnd) - Date.now() - 100)
 				await Promise.all([expectNoValveChanges(0, { forMs: firstHoldMs }), expectNoValveChanges(1, { forMs: firstHoldMs })])
 
 				// At the first planned end, expect watering to continue with the second zone
@@ -57,7 +66,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 				await expectValveToBecome(0, 'off')
 				await waitForZoneHelper(0, (status) => typeof status.last_end === 'string')
 				// Until the second planned end, expect the second zone to remain on
-				const secondHoldMs = Math.max(0, Date.parse(secondPlannedEnd) - Date.now() - 250)
+				const secondHoldMs = Math.max(0, Date.parse(secondPlannedEnd) - Date.now() - 100)
 				await expectNoValveChanges(1, { forMs: secondHoldMs })
 
 				// At the final planned end, expect both zones to be off
@@ -77,14 +86,14 @@ describe("Hippo's Irrigation Scheduler", () => {
 	test('replans safely when a configured helper is manually cleared', async () => {
 		await withSchedulerScenario(
 			IRRIGATION_SCHEDULER_SCENARIOS.emptyHelper,
-			async ({ client, setRawZoneHelper, setZoneHelper, startSchedulers, waitForSchedulingStarted, waitForZoneHelper }) => {
+			async ({ prepareNextAction, setRawZoneHelper, setZoneHelper, startSchedulers, waitForSchedulingStarted, waitForZoneHelper }) => {
 				await setZoneHelper(0, { interval: 1, runtime: 1 })
 				await startSchedulers()
 				await waitForZoneHelper(0, (status) => typeof status.next_start === 'string' && typeof status.next_end === 'string')
 
 				// If a configured helper is manually cleared,
 				// expect the scheduler to create a fresh plan without failing
-				await client.clearEvents()
+				await prepareNextAction()
 				await setRawZoneHelper(0, '')
 				await waitForSchedulingStarted()
 			}
@@ -255,12 +264,12 @@ describe("Hippo's Irrigation Scheduler", () => {
 				await setZoneHelper(0, {
 					interval: 1,
 					next_start: relativeTime({ minutes: -1 }),
-					next_end: relativeTime({ milliseconds: 1500 }),
+					next_end: relativeTime({ milliseconds: 500 }),
 					runtime: 1,
 				})
 				await setZoneHelper(1, {
 					interval: 1,
-					next_start: relativeTime({ milliseconds: 1500 }),
+					next_start: relativeTime({ milliseconds: 500 }),
 					next_end: relativeTime({ minutes: 1 }),
 					runtime: 1,
 				})
@@ -285,12 +294,12 @@ describe("Hippo's Irrigation Scheduler", () => {
 	test('ignores schedule-only helper changes but reacts to material status changes', async () => {
 		await withSchedulerScenario(
 			IRRIGATION_SCHEDULER_SCENARIOS.triggerFilter,
-			async ({ client, entities, setZoneHelper, startSchedulers, waitForSchedulingStarted, waitForZoneHelper }) => {
+			async ({ client, entities, expectNoSchedulingUpdates, prepareNextAction, setZoneHelper, startSchedulers, waitForSchedulingStarted, waitForZoneHelper }) => {
 				await setZoneHelper(0, { interval: 1, runtime: 1 })
 				await startSchedulers()
 
 				const status: ZoneStatus = await waitForZoneHelper(0, (value) => typeof value.next_start === 'string' && typeof value.next_end === 'string')
-				await settle(350)
+				await prepareNextAction()
 
 				// If only generated schedule timestamps change,
 				// expect the scheduler not to create another plan
@@ -299,19 +308,19 @@ describe("Hippo's Irrigation Scheduler", () => {
 					next_start: new Date(Date.parse(status.next_start!) + 60000).toISOString(),
 					next_end: new Date(Date.parse(status.next_end!) + 60000).toISOString(),
 				})
-				await client.clearEvents()
-				await client.expectNoServiceCall({ domain: 'logbook', service: 'log', data: { message: 'Creating or updating irrigation schedule' } }, { timeoutMs: 300 })
+				// The test copy settles helper triggers for 100 ms,
+				// so expect no scheduling update throughout that delayed trigger window
+				await expectNoSchedulingUpdates({ forMs: 150 })
 
 				// If a material zone value changes, expect the scheduler to replan
-				await client.clearEvents()
+				await prepareNextAction()
 				await setZoneHelper(0, { ...status, runtime: 2 })
 				await waitForSchedulingStarted()
 
 				// If a helper becomes unavailable, expect no attempt to replan it
-				await settle(250)
-				await client.clearEvents()
+				await prepareNextAction()
 				await client.setState(entities.helpers[0], 'unavailable')
-				await client.expectNoServiceCall({ domain: 'logbook', service: 'log', data: { message: 'Creating or updating irrigation schedule' } }, { timeoutMs: 300 })
+				await expectNoSchedulingUpdates()
 			}
 		)
 	})
@@ -341,8 +350,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 			await setSwitch(client, entities.valve, false)
 			await setHelper(client, entities.helper, '{}')
 			await setAutomation(client, entities.schedulerAutomation, true)
-			await settle(250)
-			await client.clearEvents()
+			await prepareScenarioAction(client, [entities.calculationAutomation, entities.schedulerAutomation])
 
 			// If climate calculation produces a 14-minute runtime,
 			// expect the scheduler to turn it into a matching plan without starting early

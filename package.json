@@ -8,13 +8,14 @@
     "lint": "eslint . && pnpm catalog:check",
     "lint:fix": "eslint . --fix",
     "lint:strict": "eslint . --max-warnings 0 && pnpm catalog:check",
+    "test": "pnpm test:unit && pnpm test:ha",
     "test:ha": "vitest run --config test/home-assistant/vitest.config.ts",
     "test:ha:blueprint-loading": "vitest run --config test/home-assistant/blueprint-loading/vitest.config.ts",
     "test:ha:hippos-toolbox-integration": "vitest run --config test/home-assistant/hippos-toolbox-integration/vitest.config.ts",
     "test:ha:runtime": "vitest run --config test/home-assistant/runtime/vitest.config.ts",
     "test:unit": "vitest run --config test/unit/vitest.config.ts",
     "typecheck": "tsc --noEmit",
-    "validate": "pnpm lint:strict && pnpm typecheck && pnpm test:unit && pnpm test:ha"
+    "validate": "pnpm lint:strict && pnpm typecheck && pnpm test"
   },
   "packageManager": "pnpm@10.6.1",
   "dependencies": {

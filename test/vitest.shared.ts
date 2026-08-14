@@ -5,12 +5,12 @@ export const TEST_REPORTERS = ['tree'] as const
 export function homeAssistantTestConfig(include: string[]) {
 	return defineConfig({
 		test: {
-			fileParallelism: false,
+			fileParallelism: true,
 			globalSetup: ['test/home-assistant/harness/global-setup.ts'],
 			hookTimeout: 150_000,
 			include,
 			isolate: false,
-			maxWorkers: 1,
+			maxWorkers: 3,
 			pool: 'forks',
 			reporters: [...TEST_REPORTERS],
 			setupFiles: ['test/home-assistant/harness/setup.ts'],

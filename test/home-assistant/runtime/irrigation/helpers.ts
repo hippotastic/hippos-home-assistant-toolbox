@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util'
 import { withScenarioDiagnostics, type BlueprintRuntimeClient, type BlueprintServiceCall } from '../../harness/client.ts'
 import { callsForEntity } from '../helpers/assertions.ts'
+import { expectNoServiceCallsAfterAction, prepareNextAction } from '../helpers/actions.ts'
 import { createEntityStateExpectation, type StateExpectation, type StateHoldOptions, type StatePredicate, type StateTransitionOptions } from '../helpers/state-expectations.ts'
 import { settle } from '../helpers/timing.ts'
 import type { IrrigationCalculationScenario, IrrigationSchedulerScenario } from './scenarios.ts'
@@ -34,6 +35,8 @@ type CalculationScenarioFixture<TScenario extends IrrigationCalculationScenario>
 	expectHelperToBecome: (expected: ZoneStatusExpectation, options?: StateTransitionOptions) => Promise<ZoneStatus>
 	/** Rejects visible helper state changes during the observation period */
 	expectNoHelperChanges: (options?: { forMs?: number }) => Promise<void>
+	/** Finishes the previous automation run and starts a fresh event window for the next action */
+	prepareNextAction: () => Promise<void>
 	/** Immediately enables or disables the calculation automation without clearing recorded events */
 	setAutomationEnabled: (enabled: boolean) => Promise<void>
 	/** Updates both climate sensor states used by the calculation */
@@ -55,13 +58,17 @@ type SchedulerScenarioFixture<TScenario extends IrrigationSchedulerScenario> = {
 	/** Waits for a zone valve to reach the expected state within the optional transition timeout */
 	expectValveToBecome: (zoneIndex: number, state: 'off' | 'on', options?: StateTransitionOptions) => Promise<void>
 	/** Rejects visible zone valve state changes during the observation period */
-	expectNoValveChanges: (zoneIndex: number, options: StateHoldOptions) => Promise<void>
+	expectNoValveChanges: (zoneIndex: number, options?: StateHoldOptions) => Promise<void>
+	/** Rejects a scheduling run caused by the preceding scenario action */
+	expectNoSchedulingUpdates: (options?: StateHoldOptions) => Promise<void>
 	/** Fires the configured daily time and returns the number of matching automations triggered */
 	fireScheduledTime: () => Promise<number>
 	/** Returns pump and valve switch calls in Home Assistant firing order */
 	irrigationCalls: () => Promise<IrrigationCall[]>
 	/** Returns an ISO timestamp offset from the scenario's fixed creation-time anchor */
 	relativeTime: (offset: RelativeTimeOffset) => string
+	/** Finishes the previous automation run and starts a fresh event window for the next action */
+	prepareNextAction: () => Promise<void>
 	/** Sets the physical pump state through its real switch service */
 	setPump: (enabled: boolean) => Promise<void>
 	/** Writes an exact zone helper value without adding its valve, including deliberately invalid data */
@@ -82,8 +89,6 @@ type SchedulerScenarioFixture<TScenario extends IrrigationSchedulerScenario> = {
 	waitForZoneHelper: (zoneIndex: number, predicate: (status: ZoneStatus) => boolean, options?: { timeoutMs?: number }) => Promise<ZoneStatus>
 }
 
-const DEFAULT_IRRIGATION_STATE_HOLD_MS = 350
-
 /** Initializes a calculation scenario and runs it with diagnostics, cleanup, and bound test operations */
 export async function withCalculationScenario<TScenario extends IrrigationCalculationScenario, TResult>(
 	scenario: TScenario,
@@ -93,6 +98,7 @@ export async function withCalculationScenario<TScenario extends IrrigationCalcul
 		const { entities } = scenario
 		await initializeCalculationScenario(client, scenario)
 		const helperState = createEntityStateExpectation(client, entities.helper, (state) => parseZoneStatus(state.state), {
+			automationEntityIds: [entities.automation],
 			matches: isDeepStrictEqual,
 			revision: (state) => state.last_updated,
 		})
@@ -107,10 +113,8 @@ export async function withCalculationScenario<TScenario extends IrrigationCalcul
 					if (!status) throw new Error(`Expected ${entities.helper} to contain a zone status`)
 					return status
 				},
-				expectNoHelperChanges: async (options = {}) => {
-					const forMs = options.forMs ?? DEFAULT_IRRIGATION_STATE_HOLD_MS
-					await helperState.expectNoChanges({ forMs })
-				},
+				expectNoHelperChanges: (options) => helperState.expectNoChanges(options),
+				prepareNextAction: () => prepareNextAction(client, [entities.automation]),
 				setAutomationEnabled: (enabled) => setAutomation(client, entities.automation, enabled),
 				setClimate: async ({ rainfall, temperature }) => {
 					await client.setState(scenario.sensors.rainfall, rainfall)
@@ -135,9 +139,10 @@ export async function withSchedulerScenario<TScenario extends IrrigationSchedule
 	return withScenarioDiagnostics(schedulerScenarioEntityIds(scenario), async (client) => {
 		const { entities } = scenario
 		await initializeSchedulerScenario(client, scenario)
-		const anchorTime = Date.now()
-		const pumpState = createEntityStateExpectation(client, entities.pump, (state) => state.state)
-		const valveStates = entities.valves.map((valve) => createEntityStateExpectation(client, valve, (state) => state.state))
+		let anchorTime = Date.now()
+		const expectationOptions = { automationEntityIds: [entities.automation] }
+		const pumpState = createEntityStateExpectation(client, entities.pump, (state) => state.state, expectationOptions)
+		const valveStates = entities.valves.map((valve) => createEntityStateExpectation(client, valve, (state) => state.state, expectationOptions))
 
 		try {
 			return await run({
@@ -151,8 +156,20 @@ export async function withSchedulerScenario<TScenario extends IrrigationSchedule
 					await zoneEntity(valveStates, zoneIndex).expectToBecome(state, options)
 				},
 				expectNoValveChanges: (zoneIndex, options) => zoneEntity(valveStates, zoneIndex).expectNoChanges(options),
+				expectNoSchedulingUpdates: (options) =>
+					expectNoServiceCallsAfterAction(
+						client,
+						[entities.automation],
+						{
+							data: { message: 'Creating or updating irrigation schedule' },
+							domain: 'logbook',
+							service: 'log',
+						},
+						options
+					),
 				fireScheduledTime: () => client.fireScheduledTime(scenario.startTime),
 				irrigationCalls: () => readIrrigationCalls(client, entities),
+				prepareNextAction: () => prepareNextAction(client, [entities.automation]),
 				relativeTime: (offset) => relativeTime(anchorTime, offset),
 				setPump: (enabled) => setSwitch(client, entities.pump, enabled),
 				setRawZoneHelper: (zoneIndex, value) => setHelper(client, zoneEntity(entities.helpers, zoneIndex), value),
@@ -163,8 +180,8 @@ export async function withSchedulerScenario<TScenario extends IrrigationSchedule
 						valve: zoneEntity(entities.valves, zoneIndex),
 					}),
 				startSchedulers: async () => {
-					await settle()
-					await client.clearEvents()
+					await prepareNextAction(client, [entities.automation])
+					anchorTime = Date.now()
 					const startedAt = Date.now()
 					await setAutomation(client, entities.automation, true)
 					return startedAt
@@ -190,8 +207,7 @@ async function initializeCalculationScenario(client: BlueprintRuntimeClient, sce
 	await setAutomation(client, scenario.entities.automation, false)
 	await setSwitch(client, scenario.entities.valve, false)
 	await setHelper(client, scenario.entities.helper, '{}')
-	await settle()
-	await client.clearEvents()
+	await prepareNextAction(client, [scenario.entities.automation])
 }
 
 async function initializeSchedulerScenario(client: BlueprintRuntimeClient, scenario: IrrigationSchedulerScenario): Promise<void> {
@@ -202,8 +218,7 @@ async function initializeSchedulerScenario(client: BlueprintRuntimeClient, scena
 		await setSwitch(client, valve, false)
 		await setHelper(client, entities.helpers[zoneIndex], '{}')
 	}
-	await settle()
-	await client.clearEvents()
+	await prepareNextAction(client, [entities.automation])
 }
 
 /** Enables or disables an automation through its real Home Assistant service */

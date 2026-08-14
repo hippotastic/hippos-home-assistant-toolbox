@@ -8,7 +8,7 @@ type CoverScenarioOptions = {
 	initialTilt?: number
 	lockoutAngle?: number
 	lockoutPosition?: number
-	omitOptionalModes?: boolean
+	omitModeEntities?: boolean
 	nightAngle?: number
 	nightPosition?: number
 	privacyAngle?: number
@@ -26,7 +26,7 @@ export type CoverScenario = ReturnType<typeof coverScenario>
 
 function coverScenario(id: string, options: CoverScenarioOptions = {}) {
 	const inputPrefix = `fixture_cover_${id}`
-	const optionalModeEntity = (mode: string): string | never[] => (options.omitOptionalModes ? [] : `input_boolean.${inputPrefix}_${mode}`)
+	const modeEntity = (mode: string): string | never[] => (options.omitModeEntities ? [] : `input_boolean.${inputPrefix}_${mode}`)
 	const commonInputs: Record<string, unknown> = {
 		automatic_control_enabled_entity: `input_boolean.${inputPrefix}_automatic_control`,
 		cover_angle_homing: options.coverAngleHoming ?? true,
@@ -34,19 +34,19 @@ function coverScenario(id: string, options: CoverScenarioOptions = {}) {
 		default_angle_entity: options.defaultAngleEntity ?? [],
 		default_position: options.defaultPosition ?? 80,
 		lockout_prevention_angle: options.lockoutAngle ?? 100,
-		lockout_prevention_entity: optionalModeEntity('lockout'),
+		lockout_prevention_entity: modeEntity('lockout'),
 		lockout_prevention_position: options.lockoutPosition ?? 90,
 		night_mode_angle: options.nightAngle ?? 15,
-		night_mode_entity: optionalModeEntity('night'),
+		night_mode_entity: modeEntity('night'),
 		night_mode_position: options.nightPosition ?? 10,
 		privacy_mode_angle: options.privacyAngle ?? 25,
-		privacy_mode_entity: optionalModeEntity('privacy'),
+		privacy_mode_entity: modeEntity('privacy'),
 		privacy_mode_position: options.privacyPosition ?? 40,
 		sun_entity: `sun.${inputPrefix}`,
 		sun_protection_angle: options.sunAngle ?? 30,
 		sun_protection_cover_azimuth: options.sunAzimuth ?? 180,
 		sun_protection_cover_side_angle: options.sunSideAngle ?? 40,
-		sun_protection_entity: optionalModeEntity('sun'),
+		sun_protection_entity: modeEntity('sun'),
 		sun_protection_min_elevation: options.sunElevation ?? 25,
 		sun_protection_position: options.sunPosition ?? 70,
 	}
@@ -107,7 +107,7 @@ export const COVER_SCENARIOS = {
 		lockoutAngle: 70,
 	}),
 	manual: coverScenario('manual', { defaultPosition: 70, defaultAngle: 40, initialPosition: 70, initialTilt: 40 }),
-	minimal: coverScenario('minimal', { defaultPosition: 65, defaultAngle: 35, omitOptionalModes: true }),
+	minimal: coverScenario('minimal', { defaultPosition: 65, defaultAngle: 35, omitModeEntities: true }),
 	modes: coverScenario('modes'),
 	positionOnly: coverScenario('position_only', { defaultPosition: 70, defaultAngle: 35, supportsTilt: false }),
 	requiredAvailability: coverScenario('required_availability', { defaultPosition: 70, defaultAngle: 40 }),

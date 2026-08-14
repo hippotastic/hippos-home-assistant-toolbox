@@ -1,8 +1,8 @@
 import { withScenarioDiagnostics, type BlueprintRuntimeClient } from '../../harness/client.ts'
 import { callsForEntity, normalizeServiceNames } from '../helpers/assertions.ts'
+import { prepareNextAction } from '../helpers/actions.ts'
 import { setBoolean as setBooleanEntity } from '../helpers/entities.ts'
 import { createEntityStateExpectation, type StateHoldOptions, type StateTransitionOptions } from '../helpers/state-expectations.ts'
-import { settle } from '../helpers/timing.ts'
 import type { SensorScenario } from './scenarios.ts'
 
 type SensorScenarioFixture<TScenario extends SensorScenario> = {
@@ -13,9 +13,11 @@ type SensorScenarioFixture<TScenario extends SensorScenario> = {
 	/** Waits for the output to reach the expected state within the optional transition timeout */
 	expectOutputToBecome: (state: 'off' | 'on', options?: StateTransitionOptions) => Promise<void>
 	/** Rejects visible output state changes during the observation period */
-	expectNoOutputChanges: (options: StateHoldOptions) => Promise<void>
+	expectNoOutputChanges: (options?: StateHoldOptions) => Promise<void>
 	/** Rejects output state changes and output service calls during the observation period */
 	expectNoOutputUpdates: (options?: StateHoldOptions) => Promise<void>
+	/** Finishes the previous automation run and starts a fresh event window for the next action */
+	prepareNextAction: () => Promise<void>
 	/** Sets an input or condition entity through its real `input_boolean` service */
 	setBoolean: (entityId: string, value: boolean) => Promise<void>
 }
@@ -27,6 +29,7 @@ export async function withSensorScenario<TScenario extends SensorScenario, TResu
 ): Promise<TResult> {
 	return withScenarioDiagnostics(scenarioEntityIds(scenario), async (client) => {
 		const outputState = createEntityStateExpectation(client, scenario.entities.output, (state) => state.state, {
+			automationEntityIds: [scenario.entities.automation],
 			updates: [{ domain: scenario.outputDomain, entityId: scenario.entities.output }],
 		})
 		await initializeSensorScenario(client, scenario, async () => {
@@ -38,10 +41,11 @@ export async function withSensorScenario<TScenario extends SensorScenario, TResu
 			client,
 			customActionServiceNames: () => readCustomActionServiceNames(client, scenario),
 			expectNoOutputChanges: (options) => outputState.expectNoChanges(options),
-			expectNoOutputUpdates: (options = { forMs: 350 }) => outputState.expectNoUpdates(options),
+			expectNoOutputUpdates: (options) => outputState.expectNoUpdates(options),
 			expectOutputToBecome: async (state, options) => {
 				await outputState.expectToBecome(state, options)
 			},
+			prepareNextAction: () => prepareNextAction(client, [scenario.entities.automation]),
 			setBoolean: (entityId, value) => setBooleanEntity(client, entityId, value),
 		})
 	})
@@ -73,8 +77,7 @@ async function initializeSensorScenario(client: BlueprintRuntimeClient, scenario
 	}
 	await expectOutputOff()
 
-	await settle()
-	await client.clearEvents()
+	await prepareNextAction(client, [scenario.entities.automation])
 }
 
 function scenarioEntityIds(scenario: SensorScenario): string[] {
@@ -85,5 +88,6 @@ function scenarioEntityIds(scenario: SensorScenario): string[] {
 		...scenario.inputs,
 		...(scenario.conditionOn ? [scenario.conditionOn] : []),
 		...(scenario.conditionOff ? [scenario.conditionOff] : []),
+		scenario.entities.uptime,
 	]
 }

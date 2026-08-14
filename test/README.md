@@ -32,8 +32,10 @@ Use `HA_IMAGE` to select another image and `HA_IMAGE_PULL_POLICY` with `never`,
 
 Vitest `globalSetup` creates one Home Assistant container for the HA-backed
 validation stage. Repository validation and runtime behavior execute in the
-same container. Test files execute sequentially with one worker and address
-Home Assistant through a small test-only integration.
+same container. Test files execute concurrently with up to three workers and
+address Home Assistant through a small test-only integration. Every scenario
+owns its entities and event cursor, so one test never clears or consumes
+another test's observations.
 
 The harness marks the end of Home Assistant startup and inspects every
 subsequent container log entry before shutdown. Unexpected Home Assistant
@@ -90,7 +92,7 @@ await withSensorScenario(SENSOR_SCENARIOS.delay, async ({ scenario, setBoolean, 
   // expect the output to remain off
   await setBoolean(scenario.inputs[0], true)
   await expectOutputToBecome('off', { withinMs: 0 })
-  await expectNoOutputChanges({ forMs: 500 })
+  await expectNoOutputChanges()
 
   // If the required condition becomes met inside the off-delay window,
   // expect the output to turn on
@@ -107,11 +109,15 @@ the scenario, raw client, and bound test functions to the callback. Destructure
 only the functions used by that test. Use `expectOutputToBecome` for
 transitions; by default, the expected state must be reached within 500 ms. Pass
 `withinMs` only when the behavior intentionally takes longer. Use
-`expectNoOutputChanges` after the expected state has been established; it
-preserves the state observed at the start of the assertion for the supplied
-`forMs` period. `expectNoOutputUpdates` additionally rejects matching service
-calls and is reserved for behavior where even an idempotent device command is
-significant. Generic Home Assistant operations remain available through
+`expectNoOutputChanges` to reject output state changes caused by the preceding
+action. Without `forMs`, the assertion waits for that scenario's automation to
+finish and evaluates its local event window, so an action that starts no
+automation completes quickly. Pass `forMs` only when behavior after the
+current automation run matters, such as a delayed or future time trigger.
+`expectNoOutputUpdates` additionally rejects matching service calls and is
+reserved for behavior where even an idempotent device command is significant.
+Use `prepareNextAction` between behavioral phases that should have independent
+event histories. Generic Home Assistant operations remain available through
 `client`.
 
 `withCoverScenario` follows the same structure and supplies bound operations
@@ -123,17 +129,19 @@ calls. This distinction keeps assertions focused on effects that matter in
 Home Assistant: an identical `input_text` write creates no History or Logbook
 entry, while an idempotent cover command can still reach physical hardware.
 All scenario fixtures reuse the same central `ToBecome`, `NoChanges`, and
-`NoUpdates` expectation logic.
+`NoUpdates` expectation logic. A fast negative assertion fails instead of
+silently passing when its automation remains inside a delay beyond the action
+settling timeout.
 
 The irrigation fixtures also separate neutral initialization from the
 behavioral setup in each test. `setZoneHelper` supplies the scenario's valve
 entity automatically;
 `setRawZoneHelper` is reserved for deliberately malformed fixture data.
-`startSchedulers` stabilizes that setup, clears its events, and then enables
-the scenario automation. Calculation tests switch their automation explicitly
-with `setAutomationEnabled`. A scheduler fixture's
-`relativeTime` uses one fixed scenario anchor and supports only the `minutes`
-and `milliseconds` offsets required by the runtime tests.
+`startSchedulers` finishes the setup action, starts a fresh local event window,
+renews the relative-time anchor, and then enables the scenario automation.
+Calculation tests switch their automation explicitly with
+`setAutomationEnabled`. A scheduler fixture's `relativeTime` supports only the
+`minutes` and `milliseconds` offsets required by the runtime tests.
 
 ## Test-Only Scalar Values
 
@@ -173,6 +181,8 @@ Every HA-backed Vitest invocation starts from a new, deterministic state:
   running, allows startup activity to settle, and clears the event buffer.
 - Each scenario owns its entities, so tests do not depend on resets performed by
   unrelated scenarios.
+- Runtime clients use monotonic local event cursors and detect when retained
+  event history would be too short for a reliable assertion.
 
 `KEEP_HA_BLUEPRINT_RUNTIME_TEST_CONFIG=1` keeps a failed run's generated config
 for inspection. A later run still creates a different temporary directory.
@@ -184,7 +194,7 @@ for inspection. A later run still creates a different temporary directory.
 - setting states with attributes and a controlled `last_changed` age;
 - calling real Home Assistant services;
 - waiting for states, attributes, and service calls;
-- asserting that a service call does not occur during a bounded interval;
+- waiting for scenario automations to finish the current action;
 - filtering service calls and evaluating their HA firing order;
 - printing scenario states and recent events when an assertion fails.
 
@@ -243,6 +253,7 @@ test/
         scheduler.test.ts
         zone-calculation.test.ts
       helpers/
+        actions.ts
         assertions.ts
         entities.ts
         timing.ts

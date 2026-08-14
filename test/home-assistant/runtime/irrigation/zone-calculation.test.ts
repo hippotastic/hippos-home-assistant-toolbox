@@ -101,9 +101,9 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 	})
 
 	test('keeps an already-current status unchanged', async () => {
-		await withCalculationScenario(IRRIGATION_CALCULATION_SCENARIOS.noOp, async ({ client, expectNoHelperChanges, setAutomationEnabled, setZoneHelper }) => {
+		await withCalculationScenario(IRRIGATION_CALCULATION_SCENARIOS.noOp, async ({ expectNoHelperChanges, prepareNextAction, setAutomationEnabled, setZoneHelper }) => {
 			await setZoneHelper({ interval: 1, runtime: 7 })
-			await client.clearEvents()
+			await prepareNextAction()
 
 			// If the calculated status is unchanged, expect no helper state change
 			await setAutomationEnabled(true)

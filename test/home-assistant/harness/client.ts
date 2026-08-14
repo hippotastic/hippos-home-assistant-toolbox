@@ -4,14 +4,14 @@ import { inject } from 'vitest'
 
 export type BlueprintRuntimeClient = {
 	callService(domain: string, service: string, data?: Record<string, unknown>): Promise<void>
-	clearEvents(): Promise<void>
 	diagnostics(): Promise<BlueprintRuntimeDiagnostics>
 	events(): Promise<BlueprintRuntimeEvent[]>
-	expectNoServiceCall(match: ServiceCallMatch, options?: WaitOptions): Promise<void>
 	fireScheduledTime(time: string): Promise<number>
 	getState(entityId: string): Promise<BlueprintRuntimeState | null>
 	serviceCalls(match?: ServiceCallMatch): Promise<BlueprintServiceCall[]>
 	setState(entityId: string, state: string, options?: SetStateOptions): Promise<void>
+	startEventWindow(): Promise<void>
+	waitForActionToSettle(automationEntityIds: string[], options?: WaitOptions): Promise<void>
 	waitForServiceCall(match: ServiceCallMatch, options?: WaitOptions): Promise<BlueprintServiceCall>
 	waitForState(entityId: string, expected: StateExpectation, options?: WaitOptions): Promise<BlueprintRuntimeState>
 }
@@ -22,8 +22,14 @@ export type BlueprintRuntimeDiagnostics = {
 }
 
 export type BlueprintRuntimeEvent = {
+	context: {
+		id: string
+		parent_id: string | null
+		user_id: string | null
+	}
 	data: Record<string, unknown>
 	event_type: string
+	id: number
 	time_fired: string
 }
 
@@ -152,12 +158,14 @@ export async function withScenarioDiagnostics<T>(entityIds: string[], run: (clie
 	const client = blueprintRuntimeClient()
 
 	try {
+		await client.startEventWindow()
 		return await run(client)
 	} catch (error) {
 		const diagnostics = await client.diagnostics()
 		const relevantStates = diagnostics.states.filter((state) => entityIds.includes(state.entity_id)).sort((left, right) => left.entity_id.localeCompare(right.entity_id))
+		const relevantEvents = relevantDiagnosticEvents(diagnostics.events, entityIds)
 		process.stderr.write(`\n--- Home Assistant scenario states ---\n${JSON.stringify(relevantStates, null, 2)}\n`)
-		process.stderr.write(`--- Home Assistant recent events ---\n${JSON.stringify(diagnostics.events.slice(-60), null, 2)}\n`)
+		process.stderr.write(`--- Home Assistant recent events ---\n${JSON.stringify(relevantEvents.slice(-60), null, 2)}\n`)
 		throw error
 	}
 }
@@ -185,6 +193,7 @@ export function requestHomeAssistant<T = unknown>(containerName: string, command
 }
 
 class DockerExecBlueprintRuntimeClient implements BlueprintRuntimeClient {
+	private eventCursor = 0
 	private readonly transport: DockerExecBridge
 
 	constructor(transport: DockerExecBridge) {
@@ -195,29 +204,12 @@ class DockerExecBlueprintRuntimeClient implements BlueprintRuntimeClient {
 		await this.request('call_service', { data, domain, service })
 	}
 
-	async clearEvents(): Promise<void> {
-		await this.request('clear_events', {})
-	}
-
 	diagnostics(): Promise<BlueprintRuntimeDiagnostics> {
 		return this.request<BlueprintRuntimeDiagnostics>('diagnostics', {}, 'GET')
 	}
 
 	async events(): Promise<BlueprintRuntimeEvent[]> {
-		return (await this.request<{ events: BlueprintRuntimeEvent[] }>('events', {})).events
-	}
-
-	async expectNoServiceCall(match: ServiceCallMatch, options: WaitOptions = {}): Promise<void> {
-		const timeoutMs = options.timeoutMs ?? 500
-		const deadline = Date.now() + timeoutMs
-
-		while (Date.now() < deadline) {
-			const calls = await this.serviceCalls(match)
-			if (calls.length > 0) {
-				throw new Error(`Unexpected service call: ${JSON.stringify(calls[0])}`)
-			}
-			await delay(50)
-		}
+		return (await this.request<{ events: BlueprintRuntimeEvent[] }>('events', { after_event_id: this.eventCursor })).events
 	}
 
 	async fireScheduledTime(time: string): Promise<number> {
@@ -229,15 +221,12 @@ class DockerExecBlueprintRuntimeClient implements BlueprintRuntimeClient {
 	}
 
 	async serviceCalls(match: ServiceCallMatch = {}): Promise<BlueprintServiceCall[]> {
-		return (
-			(await this.events())
-				.filter((event) => event.event_type === 'call_service')
-				// HA may dispatch event listeners asynchronously; time_fired preserves call order.
-				.sort((left, right) => left.time_fired.localeCompare(right.time_fired))
-				.map(serviceCallFromEvent)
-				.filter((call): call is BlueprintServiceCall => call !== null)
-				.filter((call) => serviceCallMatches(call, match))
-		)
+		return (await this.events())
+			.filter((event) => event.event_type === 'call_service')
+			.sort((left, right) => left.time_fired.localeCompare(right.time_fired) || left.id - right.id)
+			.map(serviceCallFromEvent)
+			.filter((call): call is BlueprintServiceCall => call !== null)
+			.filter((call) => serviceCallMatches(call, match))
 	}
 
 	async setState(entityId: string, state: string, options: SetStateOptions = {}): Promise<void> {
@@ -246,6 +235,18 @@ class DockerExecBlueprintRuntimeClient implements BlueprintRuntimeClient {
 			entity_id: entityId,
 			...(options.lastChangedAgeSeconds === undefined ? {} : { last_changed_age_seconds: options.lastChangedAgeSeconds }),
 			state,
+		})
+	}
+
+	async startEventWindow(): Promise<void> {
+		this.eventCursor = (await this.request<{ event_cursor: number }>('event_cursor', {})).event_cursor
+	}
+
+	async waitForActionToSettle(automationEntityIds: string[], options: WaitOptions = {}): Promise<void> {
+		await this.request('settle_action', {
+			after_event_id: this.eventCursor,
+			automation_entity_ids: automationEntityIds,
+			timeout: (options.timeoutMs ?? 500) / 1000,
 		})
 	}
 
@@ -398,6 +399,11 @@ function serviceCallFromEvent(event: BlueprintRuntimeEvent): BlueprintServiceCal
 	}
 }
 
+export function eventMatchesServiceCall(event: BlueprintRuntimeEvent, match: ServiceCallMatch): boolean {
+	const call = event.event_type === 'call_service' ? serviceCallFromEvent(event) : null
+	return call !== null && serviceCallMatches(call, match)
+}
+
 function serviceCallMatches(call: BlueprintServiceCall, match: ServiceCallMatch): boolean {
 	if (match.domain && call.domain !== match.domain) {
 		return false
@@ -421,6 +427,40 @@ function entityIds(call: BlueprintServiceCall): string[] {
 
 function stateMatches(state: BlueprintRuntimeState, expected: StateExpectation): boolean {
 	return (expected.state === undefined || state.state === expected.state) && (expected.attributes === undefined || partialRecordMatches(state.attributes, expected.attributes))
+}
+
+function relevantDiagnosticEvents(events: BlueprintRuntimeEvent[], entityIds: string[]): BlueprintRuntimeEvent[] {
+	const relevantEntities = new Set(entityIds)
+	const relevantContexts = new Set<string>()
+	const relevantEventIds = new Set<number>()
+	let foundMore = true
+
+	while (foundMore) {
+		foundMore = false
+		for (const event of events) {
+			if (relevantEventIds.has(event.id)) continue
+			const directlyRelevant = eventEntityIds(event).some((entityId) => relevantEntities.has(entityId))
+			const contextRelevant = relevantContexts.has(event.context.id) || (event.context.parent_id !== null && relevantContexts.has(event.context.parent_id))
+			if (!directlyRelevant && !contextRelevant) continue
+
+			relevantEventIds.add(event.id)
+			relevantContexts.add(event.context.id)
+			if (event.context.parent_id !== null) relevantContexts.add(event.context.parent_id)
+			foundMore = true
+		}
+	}
+
+	return events.filter((event) => relevantEventIds.has(event.id))
+}
+
+function eventEntityIds(event: BlueprintRuntimeEvent): string[] {
+	return [event.data.entity_id, recordValue(event.data.service_data, 'entity_id'), recordValue(event.data.target, 'entity_id')].flatMap((value) =>
+		typeof value === 'string' ? [value] : Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+	)
+}
+
+function recordValue(value: unknown, key: string): unknown {
+	return isRecord(value) ? value[key] : undefined
 }
 
 function partialRecordMatches(actual: Record<string, unknown>, expected: Record<string, unknown>): boolean {
