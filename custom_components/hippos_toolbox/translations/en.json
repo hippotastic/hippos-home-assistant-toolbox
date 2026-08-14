@@ -63,7 +63,6 @@
           }
         }
       },
-      "description": "The local file for **{blueprint_name}** at `{path}` differs from the published version. It has not been overwritten. Open this Repair to choose whether to replace it or keep the local version.",
       "title": "Local changes in {blueprint_name}"
     }
   }
