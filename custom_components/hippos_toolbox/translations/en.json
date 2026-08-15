@@ -14,12 +14,12 @@
     "step": {
       "init": {
         "data": {
-          "release_channel": "Release channel"
+          "update_channel": "Update channel"
         },
         "data_description": {
-          "release_channel": "Stable receives published blueprint updates. Beta receives changes early for testing and may be less reliable."
+          "update_channel": "Stable follows published releases. Development follows the latest blueprint changes on the main branch and may include changes that have not been released yet."
         },
-        "description": "Choose which blueprint catalog this Home Assistant instance follows.",
+        "description": "Choose which blueprint updates this Home Assistant instance follows.",
         "title": "Configure blueprint updates"
       }
     }

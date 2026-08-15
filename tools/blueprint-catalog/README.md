@@ -12,6 +12,10 @@ Run this after adding or editing a blueprint:
 pnpm catalog:sync
 ```
 
+The canonical `pnpm validate` command runs this synchronization automatically
+before checking the repository. The standalone command remains useful while
+editing or when only the generated catalog should be refreshed.
+
 The command scans `blueprints/automation`, `blueprints/script`, and
 `blueprints/template`, then updates `blueprints/catalog.json`. New files receive
 a stable ID derived from their path. Existing IDs are never changed
@@ -63,13 +67,12 @@ Before hashing, both the TypeScript tooling and Home Assistant integration:
 
 Whitespace inside the YAML document remains significant.
 
-## Release Channels
+## Update Channels
 
-Each release branch contains its own catalog. The integration reads `main` for
-the Stable channel and `beta` for the opt-in Beta channel. Run `pnpm
-catalog:sync` on the branch that contains the blueprint changes and commit the
-updated catalog alongside them.
+The integration reads the catalog from the latest published release for the
+Stable channel and directly from `main` for the opt-in Development channel. Run
+`pnpm catalog:sync` after changing blueprints and commit the updated catalog
+alongside them.
 
-After testing Beta in Home Assistant, promote both the blueprint sources and
-their catalog to `main`. Keep stable IDs and deprecation tombstones consistent
-between channels.
+Test the Development channel in Home Assistant before publishing a release.
+Stable IDs and deprecation tombstones remain part of the same catalog history.

@@ -394,22 +394,6 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(self.manager._is_matching_legacy_import(path, entry))
 
-    async def test_recognizes_a_legacy_beta_import(self) -> None:
-        entry = catalog_entry("blueprint:\n  name: Example\n  domain: automation")
-        path = self.installed_path()
-        path.parent.mkdir(parents=True)
-        path.write_text(
-            "blueprint:\n"
-            "  name: Example\n"
-            "  domain: automation\n"
-            "  source_url: https://raw.githubusercontent.com/hippotastic/"
-            "hippos-home-assistant-toolbox/beta/"
-            "blueprints/automation/example.yaml\n",
-            encoding="utf-8",
-        )
-
-        self.assertTrue(self.manager._is_matching_legacy_import(path, entry))
-
     async def test_only_three_backups_are_retained(self) -> None:
         entry = catalog_entry("blueprint:\n  name: Example\n  domain: automation")
         path = self.installed_path()

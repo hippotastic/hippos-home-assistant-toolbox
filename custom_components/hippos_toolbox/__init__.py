@@ -8,10 +8,10 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import ToolboxApi
 from .const import (
-    CONF_RELEASE_CHANNEL,
-    DEFAULT_RELEASE_CHANNEL,
+    CONF_UPDATE_CHANNEL,
+    DEFAULT_UPDATE_CHANNEL,
     PLATFORMS,
-    RELEASE_CHANNEL_BRANCHES,
+    normalize_update_channel,
 )
 from .coordinator import ToolboxCoordinator
 from .manager import BlueprintManager
@@ -34,16 +34,11 @@ async def async_setup_entry(
 ) -> bool:
     """Set up the toolbox and install missing blueprints."""
 
-    release_channel = entry.options.get(
-        CONF_RELEASE_CHANNEL, DEFAULT_RELEASE_CHANNEL
+    update_channel = normalize_update_channel(
+        entry.options.get(CONF_UPDATE_CHANNEL, DEFAULT_UPDATE_CHANNEL)
     )
-    if (
-        not isinstance(release_channel, str)
-        or release_channel not in RELEASE_CHANNEL_BRANCHES
-    ):
-        release_channel = DEFAULT_RELEASE_CHANNEL
 
-    api = ToolboxApi(async_get_clientsession(hass), release_channel)
+    api = ToolboxApi(async_get_clientsession(hass), update_channel)
     manager = BlueprintManager(hass, api)
     coordinator = ToolboxCoordinator(hass, entry, manager)
     await coordinator.async_config_entry_first_refresh()

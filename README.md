@@ -34,20 +34,21 @@ commit and reloads affected Home Assistant domains.
 Use the **Check for updates** button entity to run the catalog check immediately.
 This only checks for changes; it does not install them.
 
-### Release Channels
+### Update Channels
 
 Every installation follows the **Stable** channel by default; initial setup does
-not ask for a channel. Stable reads the blueprint catalog from the `main` branch.
+not ask for a channel. Stable reads the blueprint catalog from the latest
+published GitHub release.
 
 To test upcoming changes on one Home Assistant instance, open **Settings >
 Devices & services > Hippo's Home Assistant Toolbox > Configure** and select
-**Beta**. The integration reloads automatically and follows the `beta` branch.
-Beta revisions are prefixed with `beta-` in the update entity so they remain
-visibly distinct from stable releases. Switching back to Stable is supported at
-any time.
+**Development**. The integration reloads automatically and follows the latest
+catalog commit on `main`. Development revisions are prefixed with `development-`
+in the update entity so they remain visibly distinct from stable releases.
+Switching back to Stable is supported at any time.
 
-The Beta channel only affects blueprint content. HACS continues to update the
-integration itself normally.
+The Development channel only affects blueprint content. HACS continues to
+update the integration itself from published releases.
 
 Files are installed under:
 
@@ -126,17 +127,11 @@ Install dependencies with:
 pnpm install
 ```
 
-After adding or editing a blueprint, update the catalog:
-
-```sh
-pnpm catalog:sync
-```
-
-The catalog belongs to the checked-out branch. Develop and push preview changes
-on `beta`, including the synchronized `blueprints/catalog.json`, then select the
-Beta channel on a test Home Assistant instance. Promote the tested changes to
-`main` to publish them to Stable users. New blueprints and deprecation
-tombstones follow the same process.
+Commit blueprint changes and the synchronized `blueprints/catalog.json` to
+`main`, then select the Development channel on a test Home Assistant instance.
+Development users receive those changes directly from `main`; Stable users do
+not receive them until they are included in a published release. New blueprints
+and deprecation tombstones follow the same process.
 
 Run the canonical local validation suite:
 
@@ -144,16 +139,26 @@ Run the canonical local validation suite:
 pnpm validate
 ```
 
-`pnpm validate` is the complete local check and orders its work to fail early
-and quickly: ESLint and catalog consistency run first, followed by TypeScript
-and unit tests. Finally, one Vitest run starts a network-isolated Home Assistant
-container and executes both repository validation and blueprint runtime tests.
-Do not run additional checks before or after a successful validation unless the
-working tree changed. The YAML linter reports lines longer than 140 characters
-as warnings.
+`pnpm validate` is the complete local check. It first synchronizes the generated
+blueprint catalog so changed sources and their SHA-256 hashes cannot drift
+apart. It then orders checks to fail early and quickly: ESLint and catalog
+consistency run first, followed by TypeScript and unit tests. Finally, one
+Vitest run starts a network-isolated Home Assistant container and executes both
+repository validation and blueprint runtime tests. Commit an updated
+`blueprints/catalog.json` alongside its blueprint changes. Do not run additional
+checks before or after a successful validation unless the working tree changed.
+The YAML linter reports lines longer than 140 characters as warnings.
 
 GitHub Actions runs the Docker-free portion of the same validation flow. The
 full Home Assistant-backed suite remains local.
+
+### Releases
+
+User-visible changes carry a Changeset. Pushes to `main` maintain a draft
+release pull request containing the next semantic version and generated
+changelog. Merging that pull request synchronizes the integration manifest,
+creates the matching Git tag, and publishes a GitHub Release. The Stable update
+channel reads blueprint content from that immutable release.
 
 The shared validation and runtime container uses Docker networking mode `none`.
 No Python installation is required on the host; Python regression tests execute

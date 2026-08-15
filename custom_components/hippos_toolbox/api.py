@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 import re
 from typing import Any
+from urllib.parse import quote
 
 from aiohttp import ClientResponseError, ClientSession
 
@@ -13,11 +14,12 @@ from homeassistant.exceptions import HomeAssistantError
 from .const import (
     CATALOG_PATH,
     CATALOG_SCHEMA_VERSION,
+    DEVELOPMENT_BRANCH,
     GITHUB_API_ROOT,
     GITHUB_RAW_ROOT,
-    RELEASE_CHANNEL_BETA,
-    RELEASE_CHANNEL_BRANCHES,
     SUPPORTED_BLUEPRINT_DOMAINS,
+    UPDATE_CHANNEL_DEVELOPMENT,
+    UPDATE_CHANNEL_STABLE,
 )
 from .hashing import blueprint_hash
 from .models import CatalogEntry, RemoteSnapshot
@@ -30,12 +32,11 @@ class ToolboxApiError(HomeAssistantError):
 class ToolboxApi:
     """Load catalog revisions and blueprint source from GitHub."""
 
-    def __init__(self, session: ClientSession, release_channel: str) -> None:
+    def __init__(self, session: ClientSession, update_channel: str) -> None:
         """Initialize the client."""
 
         self._session = session
-        self._release_channel = release_channel
-        self._branch = RELEASE_CHANNEL_BRANCHES[release_channel]
+        self._update_channel = update_channel
 
     async def _async_get_json(self, url: str) -> Any:
         try:
@@ -60,11 +61,69 @@ class ToolboxApi:
             raise ToolboxApiError(f"Unable to load {url}: {err}") from err
 
     async def async_fetch_snapshot(self) -> RemoteSnapshot:
-        """Fetch the latest commit and catalog from that exact revision."""
+        """Fetch the selected channel and catalog from an immutable revision."""
+
+        if self._update_channel == UPDATE_CHANNEL_STABLE:
+            revision, commit_sha, release_url = (
+                await self._async_fetch_stable_revision()
+            )
+        elif self._update_channel == UPDATE_CHANNEL_DEVELOPMENT:
+            revision, commit_sha, release_url = (
+                await self._async_fetch_development_revision()
+            )
+        else:
+            raise ToolboxApiError(f"Unsupported update channel: {self._update_channel}")
+
+        source = await self._async_get_text(
+            f"{GITHUB_RAW_ROOT}/{commit_sha}/{CATALOG_PATH}"
+        )
+        entries = _parse_catalog(source)
+
+        return RemoteSnapshot(
+            entries=entries,
+            revision=revision,
+            commit_sha=commit_sha,
+            release_url=release_url,
+        )
+
+    async def _async_fetch_stable_revision(self) -> tuple[str, str, str]:
+        """Resolve the latest stable GitHub release to its exact commit."""
+
+        release = await self._async_get_json(f"{GITHUB_API_ROOT}/releases/latest")
+        if not isinstance(release, dict):
+            raise ToolboxApiError("GitHub returned invalid release metadata")
+
+        tag_name = release.get("tag_name")
+        release_url = release.get("html_url")
+        if (
+            not isinstance(tag_name, str)
+            or not tag_name
+            or not isinstance(release_url, str)
+            or release.get("draft") is True
+            or release.get("prerelease") is True
+        ):
+            raise ToolboxApiError("GitHub returned invalid stable release metadata")
+
+        commit = await self._async_get_json(
+            f"{GITHUB_API_ROOT}/commits/{quote(tag_name, safe='')}"
+        )
+        if not isinstance(commit, dict):
+            raise ToolboxApiError("GitHub returned invalid release commit metadata")
+
+        commit_sha = commit.get("sha")
+        if not isinstance(commit_sha, str) or not re.fullmatch(
+            r"[a-f0-9]{40}", commit_sha
+        ):
+            raise ToolboxApiError("GitHub returned an invalid release commit SHA")
+
+        return tag_name, commit_sha, release_url
+
+    async def _async_fetch_development_revision(self) -> tuple[str, str, str]:
+        """Resolve the newest catalog commit on the main development branch."""
 
         commits = await self._async_get_json(
             f"{GITHUB_API_ROOT}/commits?"
-            f"path={CATALOG_PATH}&sha={self._branch}&per_page=1"
+            f"path={CATALOG_PATH}&sha={DEVELOPMENT_BRANCH}&per_page=1"
         )
         if not isinstance(commits, list) or not commits:
             raise ToolboxApiError("GitHub returned no commit for the blueprint catalog")
@@ -87,19 +146,8 @@ class ToolboxApi:
         except ValueError as err:
             raise ToolboxApiError("GitHub returned an invalid commit date") from err
 
-        source = await self._async_get_text(f"{GITHUB_RAW_ROOT}/{commit_sha}/{CATALOG_PATH}")
-        entries = _parse_catalog(source)
-
-        revision = f"{date:%Y.%m.%d}.{commit_sha[:7]}"
-        if self._release_channel == RELEASE_CHANNEL_BETA:
-            revision = f"beta-{revision}"
-
-        return RemoteSnapshot(
-            entries=entries,
-            revision=revision,
-            commit_sha=commit_sha,
-            release_url=release_url,
-        )
+        revision = f"development-{date:%Y.%m.%d}.{commit_sha[:7]}"
+        return revision, commit_sha, release_url
 
     async def async_fetch_blueprint(
         self, snapshot: RemoteSnapshot, entry: CatalogEntry

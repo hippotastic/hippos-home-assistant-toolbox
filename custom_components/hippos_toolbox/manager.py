@@ -22,10 +22,10 @@ from .const import (
     ADOPTABLE_BLUEPRINT_DIRECTORIES,
     BACKUP_COUNT,
     DOMAIN,
+    DEVELOPMENT_BRANCH,
     GITHUB_RAW_ROOT,
     GITHUB_WEB_ROOT,
     MANAGED_DIRECTORY,
-    RELEASE_CHANNEL_BRANCHES,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
@@ -398,12 +398,8 @@ class BlueprintManager:
 
         source_url = blueprint.get("source_url")
         expected_urls = {
-            url
-            for branch in RELEASE_CHANNEL_BRANCHES.values()
-            for url in (
-                f"{GITHUB_WEB_ROOT}/blob/{branch}/{entry.path}",
-                f"{GITHUB_RAW_ROOT}/{branch}/{entry.path}",
-            )
+            f"{GITHUB_WEB_ROOT}/blob/{DEVELOPMENT_BRANCH}/{entry.path}",
+            f"{GITHUB_RAW_ROOT}/{DEVELOPMENT_BRANCH}/{entry.path}",
         }
         return source_url in expected_urls
 

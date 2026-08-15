@@ -1,4 +1,4 @@
-"""Regression tests for release-channel catalog fetching."""
+"""Regression tests for update-channel catalog fetching."""
 
 import json
 import unittest
@@ -8,20 +8,29 @@ from custom_components.hippos_toolbox.const import (
     CATALOG_PATH,
     GITHUB_API_ROOT,
     GITHUB_RAW_ROOT,
-    RELEASE_CHANNEL_BETA,
-    RELEASE_CHANNEL_STABLE,
+    UPDATE_CHANNEL_DEVELOPMENT,
+    UPDATE_CHANNEL_STABLE,
 )
 
 
 class FakeToolboxApi(ToolboxApi):
     """Return deterministic GitHub responses and record requested URLs."""
 
-    def __init__(self, release_channel: str) -> None:
-        super().__init__(None, release_channel)
+    def __init__(self, update_channel: str) -> None:
+        super().__init__(None, update_channel)
         self.requested_urls: list[str] = []
 
     async def _async_get_json(self, url: str):
         self.requested_urls.append(url)
+        if url.endswith("/releases/latest"):
+            return {
+                "tag_name": "v0.2.0",
+                "html_url": "https://github.com/example/releases/tag/v0.2.0",
+                "draft": False,
+                "prerelease": False,
+            }
+        if url.endswith("/commits/v0.2.0"):
+            return {"sha": "b" * 40}
         return [
             {
                 "sha": "a" * 40,
@@ -36,31 +45,37 @@ class FakeToolboxApi(ToolboxApi):
 
 
 class ToolboxApiTests(unittest.IsolatedAsyncioTestCase):
-    """Verify branch selection and user-visible revision labels."""
+    """Verify source selection and user-visible revision labels."""
 
-    async def test_stable_fetches_main_without_revision_prefix(self) -> None:
-        api = FakeToolboxApi(RELEASE_CHANNEL_STABLE)
+    async def test_stable_fetches_the_latest_published_release(self) -> None:
+        api = FakeToolboxApi(UPDATE_CHANNEL_STABLE)
 
         snapshot = await api.async_fetch_snapshot()
 
-        self.assertEqual(snapshot.revision, "2026.08.10.aaaaaaa")
+        self.assertEqual(snapshot.revision, "v0.2.0")
+        self.assertEqual(snapshot.commit_sha, "b" * 40)
+        self.assertEqual(
+            snapshot.release_url,
+            "https://github.com/example/releases/tag/v0.2.0",
+        )
         self.assertEqual(
             api.requested_urls,
             [
-                f"{GITHUB_API_ROOT}/commits?path={CATALOG_PATH}&sha=main&per_page=1",
-                f"{GITHUB_RAW_ROOT}/{'a' * 40}/{CATALOG_PATH}",
+                f"{GITHUB_API_ROOT}/releases/latest",
+                f"{GITHUB_API_ROOT}/commits/v0.2.0",
+                f"{GITHUB_RAW_ROOT}/{'b' * 40}/{CATALOG_PATH}",
             ],
         )
 
-    async def test_beta_fetches_beta_with_revision_prefix(self) -> None:
-        api = FakeToolboxApi(RELEASE_CHANNEL_BETA)
+    async def test_development_fetches_main_with_a_distinct_revision(self) -> None:
+        api = FakeToolboxApi(UPDATE_CHANNEL_DEVELOPMENT)
 
         snapshot = await api.async_fetch_snapshot()
 
-        self.assertEqual(snapshot.revision, "beta-2026.08.10.aaaaaaa")
+        self.assertEqual(snapshot.revision, "development-2026.08.10.aaaaaaa")
         self.assertEqual(
             api.requested_urls[0],
-            f"{GITHUB_API_ROOT}/commits?path={CATALOG_PATH}&sha=beta&per_page=1",
+            f"{GITHUB_API_ROOT}/commits?path={CATALOG_PATH}&sha=main&per_page=1",
         )
 
 

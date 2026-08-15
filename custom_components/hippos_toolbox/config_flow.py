@@ -9,12 +9,13 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
-    CONF_RELEASE_CHANNEL,
-    DEFAULT_RELEASE_CHANNEL,
+    CONF_UPDATE_CHANNEL,
+    DEFAULT_UPDATE_CHANNEL,
     DOMAIN,
     NAME,
-    RELEASE_CHANNEL_BETA,
-    RELEASE_CHANNEL_STABLE,
+    UPDATE_CHANNEL_DEVELOPMENT,
+    UPDATE_CHANNEL_STABLE,
+    normalize_update_channel,
 )
 
 
@@ -52,30 +53,27 @@ class ToolboxOptionsFlow(config_entries.OptionsFlowWithReload):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Select the release channel and reload after changes."""
+        """Select the update channel and reload after changes."""
 
         if user_input is not None:
             return self.async_create_entry(data=user_input)
 
-        current_channel = self.config_entry.options.get(
-            CONF_RELEASE_CHANNEL, DEFAULT_RELEASE_CHANNEL
+        current_channel = normalize_update_channel(
+            self.config_entry.options.get(
+                CONF_UPDATE_CHANNEL, DEFAULT_UPDATE_CHANNEL
+            )
         )
-        if current_channel not in (
-            RELEASE_CHANNEL_STABLE,
-            RELEASE_CHANNEL_BETA,
-        ):
-            current_channel = DEFAULT_RELEASE_CHANNEL
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_RELEASE_CHANNEL, default=current_channel
+                        CONF_UPDATE_CHANNEL, default=current_channel
                     ): vol.In(
                         {
-                            RELEASE_CHANNEL_STABLE: "Stable",
-                            RELEASE_CHANNEL_BETA: "Beta",
+                            UPDATE_CHANNEL_STABLE: "Stable",
+                            UPDATE_CHANNEL_DEVELOPMENT: "Development",
                         }
                     )
                 }
