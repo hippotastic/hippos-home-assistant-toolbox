@@ -1,6 +1,6 @@
 blueprint:
   name: Hippo's Irrigation Zone Calculation
-  description: |-
+  description: >-
     Create one automation per irrigation zone. It calculates the total watering
     demand for each planning cycle and stores it in a dedicated Text helper for
     the Irrigation Scheduler. Create that helper with a maximum length of 255
@@ -25,7 +25,7 @@ blueprint:
 
         status_helper_entity:
           name: Zone state helper
-          description: |-
+          description: >-
             Select a dedicated Text helper with a maximum length of 255 characters.
             Do not reuse it for another zone or edit its contents manually. Select
             this same helper later in the Irrigation Scheduler.
@@ -40,7 +40,7 @@ blueprint:
       input:
         base_runtime_minutes:
           name: Reference runtime
-          description: |-
+          description: >-
             The unadjusted total watering demand for one planning cycle, not the
             duration of every individual run. Weather may reduce this value to 0
             or increase it to 200%; low soil moisture may then double the
@@ -55,7 +55,7 @@ blueprint:
 
         watering_interval_days:
           name: Planning cycle length
-          description: |-
+          description: >-
             The number of days available to deliver the calculated total demand.
             For example, a three-day cycle may use the configured daily start times
             on all three days. Unscheduled demand expires when the next cycle begins.
@@ -69,7 +69,7 @@ blueprint:
 
         maximum_runtime_minutes:
           name: Maximum duration per run
-          description: |-
+          description: >-
             Limits one uninterrupted watering run; 0 means unlimited. This does not
             cap the total demand. The scheduler distributes a longer demand across
             later primary and secondary start times within the planning cycle.
@@ -88,7 +88,7 @@ blueprint:
       input:
         rainfall_percentage_of_last_24h_entity:
           name: Rain duration percentage — last 24 hours
-          description: |-
+          description: >-
             Select a History Statistics sensor reporting the percentage of the last
             24 hours during which rain was detected, from 0 to 100. This is not
             precipitation in millimetres. About 30 minutes of detected rain suppresses
@@ -101,7 +101,7 @@ blueprint:
 
         max_temperature_of_last_24h_entity:
           name: Maximum temperature — last 24 hours
-          description: |-
+          description: >-
             Select a sensor reporting degrees Celsius. Below 12 °C watering is
             disabled. From 25 to 35 °C the temperature adjustment increases
             progressively, up to 200% of the reference runtime — a maximum increase
@@ -118,7 +118,7 @@ blueprint:
       input:
         soil_moisture_entity:
           name: Soil moisture sensor
-          description: |-
+          description: >-
             An optional sensor reporting a numeric value from 0 to 100%. If it is
             unavailable, no soil-moisture adjustment is applied.
           default: []
@@ -129,7 +129,7 @@ blueprint:
 
         target_soil_moisture_percentage:
           name: Target soil moisture
-          description: |-
+          description: >-
             Used only when a soil-moisture sensor is selected. At or above the target,
             soil moisture does not reduce watering. Ten percentage points below the
             target add 50%; 20 or more add the maximum increase of 100%.

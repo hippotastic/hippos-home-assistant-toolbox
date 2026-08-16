@@ -1,6 +1,6 @@
 blueprint:
   name: Hippo's Irrigation Scheduler
-  description: |-
+  description: >-
     Create one scheduler after configuring the Irrigation Zone Calculation for
     every zone. Select each zone's dedicated Text helper exactly once and in the
     desired watering order. The scheduler runs one zone at a time and distributes
@@ -17,7 +17,7 @@ blueprint:
       input:
         zone_status_helper_entities:
           name: Zone state helpers
-          description: |-
+          description: >-
             Select the dedicated Text helper created for every zone. Use each helper
             exactly once. Zones that are ready at the same time run one after another
             in the order shown here.
@@ -32,7 +32,7 @@ blueprint:
       input:
         irrigation_start_time:
           name: Primary daily start time
-          description: |-
+          description: >-
             The first daily opportunity to water and the anchor of each planning
             cycle. Remaining demand may use this time again on following days before
             the cycle ends.
@@ -41,7 +41,7 @@ blueprint:
             time:
         secondary_irrigation_start_time:
           name: Additional daily start time
-          description: |-
+          description: >-
             Optional. Used only when demand remains because a zone reached its
             maximum duration per run. If this time is earlier than the primary time,
             it means the following morning. Leave empty to disable it.
@@ -55,7 +55,7 @@ blueprint:
       input:
         master_pump_entity:
           name: Master pump
-          description: |-
+          description: >-
             An optional switch shared by all zones. It starts 10 seconds before a
             zone valve and remains on while the scheduler hands over between zones.
           default: []

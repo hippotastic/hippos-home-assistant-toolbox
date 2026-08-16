@@ -5,7 +5,7 @@
       "id": "cover_automation",
       "name": "Hippo's Cover Automation",
       "path": "blueprints/automation/cover_automation.yaml",
-      "sha256": "7e08547ac60332ab95d3e729011bac39908a857f810908c0ea8c1e6ea0117a3c",
+      "sha256": "2fbd4b228487194f3e60a1afd5f6e08d0fe32f563a8032bc80c77251f6e7e64b",
       "status": "active"
     },
     {
@@ -21,7 +21,7 @@
       "id": "irrigation_scheduler",
       "name": "Hippo's Irrigation Scheduler",
       "path": "blueprints/automation/irrigation_scheduler.yaml",
-      "sha256": "e8be032c9dfc5bf773fe3596324c8bfcd38dfb32db87a3777ed05f3c8c0092a9",
+      "sha256": "c7d1badbe75f805a316f215e6679c5a10df679024794eca5a64ede80d376a4e9",
       "status": "active"
     },
     {
@@ -29,7 +29,7 @@
       "id": "irrigation_zone_calculation",
       "name": "Hippo's Irrigation Zone Calculation",
       "path": "blueprints/automation/irrigation_zone_calculation.yaml",
-      "sha256": "a788d1444f4ec935ca9951b0e9fda6ac55f956570b72fb449a688a00c217bd13",
+      "sha256": "c9e6aed3b9da0866f027675e83e305ffedf87c538ac66edf8d39583328f05e99",
       "status": "active"
     },
     {

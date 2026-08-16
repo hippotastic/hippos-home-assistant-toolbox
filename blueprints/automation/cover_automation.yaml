@@ -109,6 +109,7 @@ blueprint:
 
         sun_protection_cover_azimuth:
           name: Horizontal orientation of the cover center
+          # eslint-disable-next-line hippos/description-block-style -- The angle reference belongs on a separate line.
           description: |
             Horizontal angle (sun azimuth) in which the sun is perpendicular to the cover
             (0° = North, 90° = East, 180° = South, 270° = West).
@@ -121,6 +122,7 @@ blueprint:
 
         sun_protection_cover_side_angle:
           name: Horizontal angle of incidence (both sides)
+          # eslint-disable-next-line hippos/description-block-style -- The angle example belongs on a separate line.
           description: |
             Angle to the left and right of the cover center in which the sun still falls into the room
             (if the cover orientation is 180° and the angle of incidence 40°, the resulting range is 140° to 220°).
@@ -274,7 +276,7 @@ blueprint:
       input:
         lockout_prevention_entity:
           name: External input to trigger lockout prevention
-          description: |
+          description: >
             While this entity is set and turned on, the values here will override all values of the previous states.
 
             You can use this to force the cover to a more open position, e.g. to keep it open while a door is open.

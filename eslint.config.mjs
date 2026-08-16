@@ -9,6 +9,8 @@ import ymlPlugin from 'eslint-plugin-yml'
 import globals from 'globals'
 import * as yamlParser from 'yaml-eslint-parser'
 
+import hipposEslintPlugin from './tools/eslint-rules/description-block-style.mjs'
+
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 const tsTypeCheckedConfigs = tseslint.configs['flat/recommended-type-checked'].map((config) => ({
@@ -136,6 +138,15 @@ export default [
 			'yml/no-empty-sequence-entry': 'warn',
 			'yml/no-irregular-whitespace': 'off',
 			'yml/plain-scalar': 'off',
+		},
+	},
+	{
+		files: ['blueprints/automation/**/*.yaml', 'blueprints/automation/**/*.yml'],
+		plugins: {
+			hippos: hipposEslintPlugin,
+		},
+		rules: {
+			'hippos/description-block-style': 'warn',
 		},
 	},
 	...tsTypeCheckedConfigs,
