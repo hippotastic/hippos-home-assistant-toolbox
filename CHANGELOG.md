@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.5.3
+
+### Patch Changes
+
+- 884288d: Keep the Progressive Snapshot Camera connection overlay transparent outside its icon and compact drop shadow.
+
 ## 0.5.2
 
 ### Patch Changes
