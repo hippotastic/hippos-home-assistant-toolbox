@@ -29,7 +29,7 @@
       "id": "irrigation_zone_calculation",
       "name": "Hippo's Irrigation Zone Calculation",
       "path": "blueprints/automation/irrigation_zone_calculation.yaml",
-      "sha256": "afe3d020bbc83341afd46a185845a22be2efa18d07cb6a3ca4bd33a04114b397",
+      "sha256": "70a13d56ea9ea21b1826445f679cc132722b5fa8b3ad9b81e3ca71f47a33e7b2",
       "status": "active"
     },
     {

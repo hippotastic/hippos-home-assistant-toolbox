@@ -44,7 +44,8 @@ blueprint:
             The unadjusted total watering demand for one planning cycle, not the
             duration of every individual run. Temperature may reduce this value to
             0 or increase it to 200%; low soil moisture may then double the
-            temperature-adjusted result. Detected rain minutes are subtracted last.
+            temperature-adjusted result. The credited share of detected rain minutes
+            is subtracted last.
           default: 10
           selector:
             number:
@@ -91,14 +92,29 @@ blueprint:
           description: >-
             Select a History Statistics sensor reporting the percentage of the last
             24 hours during which rain was detected, from 0 to 100. This is not
-            precipitation in millimetres. Each detected rain minute is treated as one
-            minute already supplied and subtracted from the adjusted cycle demand.
-            An unavailable sensor is treated as no rain.
+            precipitation in millimetres. The configured share of detected rain
+            minutes is treated as already supplied and subtracted from the adjusted
+            cycle demand. An unavailable sensor is treated as no rain.
           selector:
             entity:
               filter:
                 - domain:
                     - sensor
+
+        rain_credit_percentage:
+          name: Rain credit percentage
+          description: >-
+            Controls how detected rain reduces the calculated watering demand. At
+            100%, each rain minute counts as one watering minute. Reduce this value
+            if only some rain reaches the soil, for example because of a roof or
+            plant canopy. Set it to 0 to ignore rain for this zone.
+          default: 100
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
 
         max_temperature_of_last_24h_entity:
           name: Maximum temperature — last 24 hours
@@ -150,6 +166,7 @@ trigger_variables:
   watering_interval_days: !input watering_interval_days
   maximum_runtime_minutes: !input maximum_runtime_minutes
   rainfall_percentage_of_last_24h_entity: !input rainfall_percentage_of_last_24h_entity
+  rain_credit_percentage: !input rain_credit_percentage
   max_temperature_of_last_24h_entity: !input max_temperature_of_last_24h_entity
   soil_moisture_entity: !input soil_moisture_entity
   target_soil_moisture_percentage: !input target_soil_moisture_percentage
@@ -173,6 +190,7 @@ variables:
   rainfall_pct: '{{ states(rainfall_percentage_of_last_24h_entity) | float(default=0) }}'
   max_temperature: '{{ states(max_temperature_of_last_24h_entity) | float(default=20) }}'
   rain_minutes: '{{ (24 * 60 * rainfall_pct / 100) | round(0, "ceil") | int }}'
+  credited_rain_minutes: '{{ (rain_minutes * rain_credit_percentage / 100) | round(0, "floor") | int }}'
   heat_factor: '{{ (0.7 + ([1, ([0, (max_temperature - 25) / 10] | max)] | min) * 1.3) | round(2) }}'
   cold_factor: '{{ iif(max_temperature < 12, 0, 1) }}'
   soil_moisture: >-
@@ -188,7 +206,7 @@ variables:
   gross_runtime_minutes: '{{ (base_runtime_minutes * demand_factor) | round(0, "ceil") | int }}'
   soil_adjustment_minutes: '{{ gross_runtime_minutes - temperature_runtime_minutes }}'
   # Cap the displayed rain credit so every logged component adds up to the final runtime.
-  applied_rain_minutes: '{{ [rain_minutes, gross_runtime_minutes] | min | int }}'
+  applied_rain_minutes: '{{ [credited_rain_minutes, gross_runtime_minutes] | min | int }}'
   runtime_minutes: '{{ gross_runtime_minutes - applied_rain_minutes }}'
   # Get current value of status helper
   status: >-
@@ -222,7 +240,9 @@ actions:
         + {{ soil_adjustment_minutes }} minutes due to soil (current:
         {{ "%g" | format(soil_moisture | round(1)) }}%, target:
         {{ "%g" | format(target_soil_moisture_percentage) }}%)
-        {%- endif %} - {{ applied_rain_minutes }} minutes of rain.
+        {%- endif %} - {{ applied_rain_minutes }} minutes of rain
+        {%- if rain_credit_percentage != 100 %} ({{ rain_credit_percentage }}% credit)
+        {%- endif %}.
       entity_id: '{{ valve_entity }}'
       domain: switch
   # Keep the shared helper within its known schema before updating calculation fields.

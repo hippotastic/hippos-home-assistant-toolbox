@@ -111,6 +111,7 @@ function irrigationCalculationAutomations(): Automation[] {
 				base_runtime_minutes: scenario.baseRuntimeMinutes,
 				maximum_runtime_minutes: scenario.maximumRuntimeMinutes,
 				max_temperature_of_last_24h_entity: scenario.sensors.temperature,
+				rain_credit_percentage: scenario.rainCreditPercentage,
 				rainfall_percentage_of_last_24h_entity: scenario.sensors.rainfall,
 				...(scenario.withMoistureSensor ? { soil_moisture_entity: scenario.sensors.moisture } : {}),
 				status_helper_entity: scenario.entities.helper,

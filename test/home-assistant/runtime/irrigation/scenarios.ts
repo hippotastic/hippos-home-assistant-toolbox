@@ -2,6 +2,7 @@ type IrrigationCalculationScenarioOptions = {
 	baseRuntimeMinutes?: number
 	intervalDays?: number
 	maximumRuntimeMinutes?: number
+	rainCreditPercentage?: number
 	targetMoisturePercentage?: number
 	withMoistureSensor?: boolean
 }
@@ -28,6 +29,7 @@ function irrigationCalculationScenario(id: string, options: IrrigationCalculatio
 		id,
 		intervalDays: options.intervalDays ?? 1,
 		maximumRuntimeMinutes: options.maximumRuntimeMinutes ?? 0,
+		rainCreditPercentage: options.rainCreditPercentage ?? 100,
 		sensors: {
 			moisture: `sensor.${prefix}_moisture`,
 			rainfall: `sensor.${prefix}_rainfall`,
@@ -62,7 +64,7 @@ export const IRRIGATION_CALCULATION_SCENARIOS = {
 	formula: irrigationCalculationScenario('formula'),
 	moisture: irrigationCalculationScenario('moisture', { maximumRuntimeMinutes: 60, targetMoisturePercentage: 60, withMoistureSensor: true }),
 	noOp: irrigationCalculationScenario('no_op'),
-	rainCredit: irrigationCalculationScenario('rain_credit', { baseRuntimeMinutes: 30, intervalDays: 2, withMoistureSensor: true }),
+	rainCredit: irrigationCalculationScenario('rain_credit', { baseRuntimeMinutes: 30, intervalDays: 2, rainCreditPercentage: 50, withMoistureSensor: true }),
 	reconcile: irrigationCalculationScenario('reconcile'),
 } as const
 

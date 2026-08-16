@@ -58,27 +58,40 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 		})
 	})
 
-	test('subtracts detected rain minutes from adjusted cycle demand and explains the credit', async () => {
+	test('scales detected rain minutes by the zone credit and explains the adjustment', async () => {
 		await withCalculationScenario(
 			IRRIGATION_CALCULATION_SCENARIOS.rainCredit,
 			async ({ entities, expectHelperToBecome, setAutomationEnabled, setClimate, setMoisture, waitForValveLog }) => {
 				await setClimate({ rainfall: '1.9', temperature: '41.6' })
 				await setMoisture('60')
 
-				// A 30-minute reference demand doubles at the heat limit, then receives
-				// a linear 28-minute rain credit instead of a multiplicative reduction.
+				// A 30-minute reference demand doubles at the heat limit. The zone credits
+				// half of the 28 detected rain minutes because some rain misses its soil.
 				await setAutomationEnabled(true)
 				await expectHelperToBecome({
 					interval: 2,
-					runtime: 32,
+					runtime: 46,
 					valve: entities.valve,
 				})
 
-				const log = await waitForValveLog('Calculated 32 minutes of watering for the current 2-day cycle')
+				const log = await waitForValveLog('Calculated 46 minutes of watering for the current 2-day cycle')
 				const message = String(log.serviceData.message)
 				expect(message).toBe(
-					'Calculated 32 minutes of watering for the current 2-day cycle: 30 minutes base runtime + 30 minutes due to heat (41.6 °C) + 0 minutes due to soil (current: 60%, target: 50%) - 28 minutes of rain.'
+					'Calculated 46 minutes of watering for the current 2-day cycle: 30 minutes base runtime + 30 minutes due to heat (41.6 °C) + 0 minutes due to soil (current: 60%, target: 50%) - 14 minutes of rain (50% credit).'
 				)
+
+				// If the configured share produces half a minute, round the credit down
+				// so the zone is never under-watered because of rain-credit rounding.
+				await setAutomationEnabled(false)
+				await setClimate({ rainfall: '1.7', temperature: '41.6' })
+				await setAutomationEnabled(true)
+				await expectHelperToBecome({
+					interval: 2,
+					runtime: 48,
+					valve: entities.valve,
+				})
+				const roundedLog = await waitForValveLog('Calculated 48 minutes of watering')
+				expect(String(roundedLog.serviceData.message)).toContain('- 12 minutes of rain (50% credit)')
 			}
 		)
 	})
