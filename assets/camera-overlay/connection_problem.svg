@@ -2,7 +2,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <defs>
     <filter id="shadow" x="-25%" y="-25%" width="150%" height="160%" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000000" flood-opacity="0.68"/>
+      <!-- The glyph is scaled by 12.555556 below, so these values render as a roughly 14 px shadow. -->
+      <feDropShadow dx="0" dy="1.1" stdDeviation="1.1" flood-color="#000000" flood-opacity="0.68"/>
     </filter>
   </defs>
   <!-- Clarity disconnected-solid glyph supplied by the user. -->
