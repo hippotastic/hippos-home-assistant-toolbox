@@ -53,10 +53,22 @@ class ToolboxBlueprintUpdate(ToolboxEntity, UpdateEntity):
     def release_summary(self) -> str | None:
         """Summarize the blueprints included in the update."""
 
-        count = len(self.coordinator.data.update_ids)
+        data = self.coordinator.data
+        count = len(data.update_ids)
         if count == 0:
             return None
-        return f"Updates {count} blueprint{'s' if count != 1 else ''}."
+
+        update_ids = set(data.update_ids)
+        blueprint_names = [
+            state.entry.name
+            for state in data.blueprints
+            if state.entry.id in update_ids
+        ]
+        blueprint_list = "\n".join(f"- {name}" for name in blueprint_names)
+        return (
+            f"Updates {count} blueprint{'s' if count != 1 else ''}:"
+            f"\n\n{blueprint_list}"
+        )
 
     def version_is_newer(self, latest_version: str, installed_version: str) -> bool:
         """Treat different immutable catalog revisions as newer when updates exist."""
