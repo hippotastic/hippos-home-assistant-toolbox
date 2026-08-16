@@ -6,6 +6,7 @@
   "scripts": {
     "catalog:check": "node tools/blueprint-catalog/cli.ts check",
     "catalog:sync": "node tools/blueprint-catalog/cli.ts sync",
+    "camera-overlay:render": "node tools/camera-overlay/render.ts",
     "changeset": "changeset",
     "lint": "eslint . && pnpm catalog:check",
     "lint:fix": "eslint . --fix",
@@ -38,6 +39,7 @@
     "eslint-plugin-yml": "^3.4.0",
     "globals": "^17.6.0",
     "prettier": "^3.8.3",
+    "sharp": "^0.34.3",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8",
     "yaml-eslint-parser": "^2.0.0"

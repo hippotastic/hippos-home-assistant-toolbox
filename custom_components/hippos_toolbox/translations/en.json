@@ -10,6 +10,42 @@
       }
     }
   },
+  "config_subentries": {
+    "progressive_camera": {
+      "initiate_flow": {
+        "user": "Add progressive snapshot camera"
+      },
+      "step": {
+        "user": {
+          "data": {
+            "name": "Name",
+            "source_entity_id": "Snapshot camera"
+          },
+          "data_description": {
+            "source_entity_id": "Camera entity whose full-resolution JPEG snapshots should be cached."
+          },
+          "description": "Create a RAM-cached camera that shows its previous frame immediately while refreshing the source in the background.",
+          "title": "Add progressive snapshot camera"
+        },
+        "reconfigure": {
+          "data": {
+            "name": "Name",
+            "source_entity_id": "Snapshot camera"
+          },
+          "data_description": {
+            "source_entity_id": "Changing the source clears the RAM cache when the integration reloads."
+          },
+          "title": "Configure progressive snapshot camera"
+        }
+      },
+      "error": {
+        "duplicate_source": "A progressive snapshot camera already uses this source.",
+        "invalid_name": "Enter a name.",
+        "invalid_source": "Select an existing camera entity.",
+        "source_is_progressive_camera": "Select an original camera entity, not another progressive snapshot camera."
+      }
+    }
+  },
   "options": {
     "step": {
       "init": {
