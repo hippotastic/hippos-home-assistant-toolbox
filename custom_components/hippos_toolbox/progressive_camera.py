@@ -12,21 +12,23 @@ import time
 
 from PIL import Image as PillowImage
 
-from homeassistant.components.camera import async_get_image
+from homeassistant.components.camera import MIN_STREAM_INTERVAL, async_get_image
+from homeassistant.components.camera.helper import get_camera_from_entity_id
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_state_change_event
 
 _LOGGER = logging.getLogger(__name__)
 
 _AUTOMATIC_WARMUP_DELAY = 30.0
 _BACKGROUND_REFRESH_INTERVAL = 30.0
-_LIVE_REFRESH_INTERVAL = 10.0
+_INTERACTIVE_REFRESH_INTERVAL = 10.0
 _FETCH_HANDOFF_TIMEOUT = 5.0
 _FETCH_TIMEOUT = 15
 _COLD_REQUEST_TIMEOUT = 9.0
-_MAX_IN_FLIGHT = 2
+_MAX_BACKGROUND_IN_FLIGHT = 2
 _MAX_CONSECUTIVE_INTERACTIVE_REQUESTS = 3
 
 _PRIORITY_INTERACTIVE = 0
@@ -172,17 +174,19 @@ class _ProgressiveCameraManager:
 
         cache = self._caches[subentry_id]
         queue: _FrameQueue = asyncio.Queue(maxsize=1)
+        first_subscriber = not cache.subscribers
         cache.subscribers.add(queue)
         if cache.display_frame is not None:
             queue.put_nowait(cache.display_frame)
 
-        now = time.monotonic()
-        if self._needs_interactive_refresh(cache):
-            self._async_schedule(cache, now, _PRIORITY_INTERACTIVE)
-        elif cache.in_flight is None:
-            due_at = (cache.last_completed_at or now) + _LIVE_REFRESH_INTERVAL
+        if first_subscriber and cache.in_flight is None:
+            # The cached frame is only the instant placeholder. Always start the
+            # source-camera cadence in parallel when the first live viewer arrives.
             self._async_schedule(
-                cache, max(now, due_at), _PRIORITY_BACKGROUND
+                cache,
+                time.monotonic(),
+                _PRIORITY_INTERACTIVE,
+                replace=True,
             )
         return queue
 
@@ -254,33 +258,57 @@ class _ProgressiveCameraManager:
         self._wake.set()
 
     async def _async_worker(self) -> None:
-        """Dispatch staggered requests while respecting the global limit."""
+        """Dispatch independent live requests and staggered background work."""
 
         try:
             while not self._stopped:
-                active_tasks = {
-                    task for task in self._fetch_tasks if not task.done()
-                }
-                if len(active_tasks) >= _MAX_IN_FLIGHT:
-                    await asyncio.wait(
-                        active_tasks, return_when=asyncio.FIRST_COMPLETED
-                    )
+                now = time.monotonic()
+                ready_live = sorted(
+                    (
+                        cache
+                        for cache in self._caches.values()
+                        if cache.subscribers
+                        and cache.in_flight is None
+                        and cache.scheduled_at is not None
+                        and cache.scheduled_at <= now
+                    ),
+                    key=lambda cache: cache.scheduled_order,
+                )
+                if ready_live:
+                    # Visible cameras match their source cadence independently.
+                    # Only background warming is globally concurrency-limited.
+                    for cache in ready_live:
+                        cache.scheduled_at = None
+                        self._async_launch_fetch(cache)
                     continue
 
-                now = time.monotonic()
+                active_background_tasks = {
+                    cache.in_flight
+                    for cache in self._caches.values()
+                    if not cache.subscribers
+                    and cache.in_flight is not None
+                    and not cache.in_flight.done()
+                }
+                if (
+                    len(active_background_tasks)
+                    >= _MAX_BACKGROUND_IN_FLIGHT
+                ):
+                    self._wake.clear()
+                    await self._wake.wait()
+                    continue
+
                 cache = self._next_ready_cache(now)
                 if cache is not None:
                     self._async_launch_fetch(cache)
-                    active_tasks = {
-                        task for task in self._fetch_tasks if not task.done()
-                    }
                     # A quick camera hands the slot to the next source immediately;
-                    # a slow camera cannot block the queue for more than five seconds.
-                    await asyncio.wait(
-                        active_tasks,
-                        timeout=_FETCH_HANDOFF_TIMEOUT,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
+                    # a slow camera cannot block the queue for more than five
+                    # seconds, and a new live viewer interrupts the wait at once.
+                    self._wake.clear()
+                    try:
+                        async with asyncio.timeout(_FETCH_HANDOFF_TIMEOUT):
+                            await self._wake.wait()
+                    except TimeoutError:
+                        pass
                     continue
 
                 self._wake.clear()
@@ -364,6 +392,7 @@ class _ProgressiveCameraManager:
         self._wake.set()
 
     async def _async_fetch(self, cache: _CameraCache) -> None:
+        started_at = time.monotonic()
         try:
             if not self._source_is_available(cache):
                 await self._async_record_failure(
@@ -396,18 +425,34 @@ class _ProgressiveCameraManager:
             cache.last_completed_at = time.monotonic()
             cache.first_attempt_completed.set()
             if not self._stopped and self._source_is_available(cache):
-                interval = (
-                    _LIVE_REFRESH_INTERVAL
-                    if cache.subscribers
-                    else _BACKGROUND_REFRESH_INTERVAL
-                )
+                if cache.subscribers:
+                    interval = self._source_frame_interval(cache)
+                    # Match Home Assistant's still-stream cadence: request the
+                    # next frame relative to fetch start, not fetch completion.
+                    scheduled_at = max(
+                        cache.last_completed_at, started_at + interval
+                    )
+                else:
+                    scheduled_at = (
+                        cache.last_completed_at + _BACKGROUND_REFRESH_INTERVAL
+                    )
                 self._async_schedule(
                     cache,
-                    cache.last_completed_at + interval,
+                    scheduled_at,
                     _PRIORITY_BACKGROUND,
                     replace=True,
                 )
             self._wake.set()
+
+    def _source_frame_interval(self, cache: _CameraCache) -> float:
+        """Return the same still-stream interval as the source camera."""
+
+        try:
+            return get_camera_from_entity_id(
+                self._hass, cache.source_entity_id
+            ).frame_interval
+        except HomeAssistantError:
+            return MIN_STREAM_INTERVAL
 
     @callback
     def _async_record_success(self, cache: _CameraCache, frame: bytes) -> None:
@@ -560,7 +605,10 @@ class _ProgressiveCameraManager:
             return False
         if cache.failed or cache.last_success_at is None:
             return True
-        return time.monotonic() - cache.last_success_at >= _LIVE_REFRESH_INTERVAL
+        return (
+            time.monotonic() - cache.last_success_at
+            >= _INTERACTIVE_REFRESH_INTERVAL
+        )
 
 
 def _render_error_overlay(frame: bytes, overlay_png: bytes) -> bytes:

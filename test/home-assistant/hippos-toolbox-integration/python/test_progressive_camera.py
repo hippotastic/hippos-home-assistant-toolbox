@@ -57,7 +57,7 @@ async def _wait_until(predicate, timeout: float = 1.0) -> None:
 
 
 class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
-    """Verify cache transitions and the global staggered dispatcher."""
+    """Verify cache transitions and live/background request dispatching."""
 
     async def test_dashboard_access_overtakes_delayed_warmup(self) -> None:
         source = "camera.front_door"
@@ -134,6 +134,120 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(calls), set(sources))
         self.assertEqual(maximum_active, 2)
 
+    async def test_visible_cameras_follow_source_cadence_in_parallel(self) -> None:
+        sources = tuple(f"camera.live_{index}" for index in range(4))
+        hass = _Hass(sources)
+        manager = _ProgressiveCameraManager(
+            hass,
+            _Entry(),
+            {f"camera-{index}": source for index, source in enumerate(sources)},
+        )
+        active = 0
+        maximum_active = 0
+        all_started = asyncio.Event()
+        release = asyncio.Event()
+        snapshot = _jpeg()
+
+        async def get_image(_hass, _entity_id, timeout):
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            if active == len(sources):
+                all_started.set()
+            try:
+                await release.wait()
+                return SimpleNamespace(
+                    content_type="image/jpeg", content=snapshot
+                )
+            finally:
+                active -= 1
+
+        with (
+            patch.object(
+                progressive_camera,
+                "async_track_state_change_event",
+                return_value=lambda: None,
+            ),
+            patch.object(
+                progressive_camera, "_AUTOMATIC_WARMUP_DELAY", 60.0
+            ),
+            patch.object(
+                progressive_camera,
+                "get_camera_from_entity_id",
+                return_value=SimpleNamespace(frame_interval=0.5),
+            ),
+            patch.object(
+                progressive_camera, "async_get_image", side_effect=get_image
+            ),
+        ):
+            await manager.async_start()
+            queues = [
+                manager.async_subscribe(f"camera-{index}")
+                for index in range(len(sources))
+            ]
+            await asyncio.wait_for(all_started.wait(), timeout=1.0)
+            release.set()
+            await _wait_until(lambda: active == 0)
+            for index, queue in enumerate(queues):
+                manager.async_unsubscribe(f"camera-{index}", queue)
+            await manager.async_stop()
+
+        self.assertEqual(maximum_active, len(sources))
+
+    async def test_live_view_interrupts_background_handoff_wait(self) -> None:
+        sources = ("camera.background", "camera.live")
+        hass = _Hass(sources)
+        manager = _ProgressiveCameraManager(
+            hass,
+            _Entry(),
+            {"background": sources[0], "live": sources[1]},
+        )
+        background_started = asyncio.Event()
+        live_started = asyncio.Event()
+        release = asyncio.Event()
+        snapshot = _jpeg()
+
+        async def get_image(_hass, entity_id, timeout):
+            if entity_id == sources[0]:
+                background_started.set()
+            else:
+                live_started.set()
+            await release.wait()
+            return SimpleNamespace(content_type="image/jpeg", content=snapshot)
+
+        with (
+            patch.object(
+                progressive_camera,
+                "async_track_state_change_event",
+                return_value=lambda: None,
+            ),
+            patch.object(progressive_camera, "_AUTOMATIC_WARMUP_DELAY", 0.0),
+            patch.object(progressive_camera, "_FETCH_HANDOFF_TIMEOUT", 1.0),
+            patch.object(
+                progressive_camera,
+                "get_camera_from_entity_id",
+                return_value=SimpleNamespace(frame_interval=0.5),
+            ),
+            patch.object(
+                progressive_camera, "async_get_image", side_effect=get_image
+            ),
+        ):
+            await manager.async_start()
+            await asyncio.wait_for(background_started.wait(), timeout=1.0)
+
+            queue = manager.async_subscribe("live")
+            await asyncio.wait_for(live_started.wait(), timeout=0.5)
+
+            release.set()
+            await _wait_until(
+                lambda: all(
+                    cache.in_flight is None
+                    for cache in manager._caches.values()
+                )
+            )
+            manager.async_unsubscribe("live", queue)
+            await manager.async_stop()
+
     async def test_refresh_interval_follows_live_subscribers(self) -> None:
         source = "camera.garden"
         hass = _Hass((source,))
@@ -141,13 +255,20 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
         cache = manager._caches["garden"]
         snapshot = _jpeg()
 
-        with patch.object(
-            progressive_camera,
-            "async_get_image",
-            AsyncMock(
-                return_value=SimpleNamespace(
-                    content_type="image/jpeg", content=snapshot
-                )
+        with (
+            patch.object(
+                progressive_camera,
+                "async_get_image",
+                AsyncMock(
+                    return_value=SimpleNamespace(
+                        content_type="image/jpeg", content=snapshot
+                    )
+                ),
+            ),
+            patch.object(
+                progressive_camera,
+                "get_camera_from_entity_id",
+                return_value=SimpleNamespace(frame_interval=0.5),
             ),
         ):
             await manager._async_fetch(cache)
@@ -161,9 +282,36 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
             await manager._async_fetch(cache)
             self.assertAlmostEqual(
                 cache.scheduled_at - cache.last_completed_at,
-                progressive_camera._LIVE_REFRESH_INTERVAL,
+                0.5,
                 places=3,
             )
+
+    async def test_live_cards_share_one_immediate_source_schedule(self) -> None:
+        source = "camera.garage_snapshots"
+        hass = _Hass((source,))
+        manager = _ProgressiveCameraManager(hass, _Entry(), {"garage": source})
+        cache = manager._caches["garage"]
+        now = asyncio.get_running_loop().time()
+        cache.display_frame = b"cached"
+        cache.last_success_at = now
+        cache.last_completed_at = now
+        cache.scheduled_at = now + progressive_camera._BACKGROUND_REFRESH_INTERVAL
+        cache.scheduled_priority = progressive_camera._PRIORITY_BACKGROUND
+
+        subscribed_at = asyncio.get_running_loop().time()
+        first_queue = manager.async_subscribe("garage")
+        scheduled_order = cache.scheduled_order
+        second_queue = manager.async_subscribe("garage")
+
+        self.assertEqual(first_queue.get_nowait(), b"cached")
+        self.assertEqual(second_queue.get_nowait(), b"cached")
+        self.assertEqual(
+            cache.scheduled_priority, progressive_camera._PRIORITY_INTERACTIVE
+        )
+        self.assertLessEqual(cache.scheduled_at, subscribed_at + 0.01)
+        self.assertEqual(cache.scheduled_order, scheduled_order)
+        manager.async_unsubscribe("garage", first_queue)
+        manager.async_unsubscribe("garage", second_queue)
 
     async def test_failure_marks_last_frame_once_and_success_cleans_it(self) -> None:
         source = "camera.driveway"
