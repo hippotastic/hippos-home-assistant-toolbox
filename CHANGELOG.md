@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.5.4
+
+### Patch Changes
+
+- 391b849: Preserve native MJPEG source frame rates when Progressive Snapshot Cameras switch from their cached preview to live video.
+
 ## 0.5.3
 
 ### Patch Changes
