@@ -1,5 +1,7 @@
 """Camera platform for progressive snapshot helpers."""
 
+from typing import cast
+
 from aiohttp import web
 
 from homeassistant.components.camera import Camera
@@ -10,10 +12,26 @@ from homeassistant.helpers.device import async_entity_id_to_device
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import ToolboxConfigEntry
-from .const import CONF_SOURCE_ENTITY_ID, PROGRESSIVE_CAMERA_SUBENTRY_TYPE
+from .const import (
+    CONF_SOURCE_ENTITY_ID,
+    DOMAIN,
+    PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
+)
 from .progressive_camera import _FrameQueue, _ProgressiveCameraManager
 
 _BOUNDARY = "frameboundary"
+_ACCESS_TOKEN_STORE = f"{DOMAIN}.progressive_camera_access_tokens"
+
+type _AccessTokenStore = dict[str, tuple[str, ...]]
+
+
+def _access_token_store(hass: HomeAssistant) -> _AccessTokenStore:
+    """Return reload-safe camera tokens kept only for this HA process."""
+
+    return cast(
+        _AccessTokenStore,
+        hass.data.setdefault(_ACCESS_TOKEN_STORE, {}),
+    )
 
 
 async def async_setup_entry(
@@ -24,9 +42,17 @@ async def async_setup_entry(
     """Set up one proxy entity for every camera config subentry."""
 
     manager = entry.runtime_data.progressive_camera_manager
-    for subentry in entry.subentries.values():
-        if subentry.subentry_type != PROGRESSIVE_CAMERA_SUBENTRY_TYPE:
-            continue
+    subentries = tuple(
+        subentry
+        for subentry in entry.subentries.values()
+        if subentry.subentry_type == PROGRESSIVE_CAMERA_SUBENTRY_TYPE
+    )
+    token_store = _access_token_store(hass)
+    active_subentry_ids = {subentry.subentry_id for subentry in subentries}
+    for removed_subentry_id in token_store.keys() - active_subentry_ids:
+        del token_store[removed_subentry_id]
+
+    for subentry in subentries:
         async_add_entities(
             [_ProgressiveSnapshotCamera(hass, manager, subentry)],
             config_subentry_id=subentry.subentry_id,
@@ -45,8 +71,14 @@ class _ProgressiveSnapshotCamera(Camera):
         subentry: ConfigSubentry,
     ) -> None:
         super().__init__()
+        self._token_store_hass = hass
         self._manager = manager
         self._subentry_id = subentry.subentry_id
+        if previous_tokens := _access_token_store(hass).get(self._subentry_id):
+            # A config-subentry change reloads every toolbox camera. Retaining
+            # the existing deque avoids invalidating in-flight thumbnail URLs.
+            self.access_tokens.clear()
+            self.access_tokens.extend(previous_tokens)
         self._attr_unique_id = subentry.subentry_id
         self._attr_name = subentry.title
         self.content_type = "image/jpeg"
@@ -56,12 +88,12 @@ class _ProgressiveSnapshotCamera(Camera):
 
     @property
     def available(self) -> bool:
-        """Remain available while any clean or marked cache frame exists."""
+        """Remain available while the source or a cached frame is available."""
 
-        return self._manager.has_frame(self._subentry_id)
+        return self._manager.is_available(self._subentry_id)
 
     async def async_added_to_hass(self) -> None:
-        """Update Home Assistant state when the first frame becomes available."""
+        """Update Home Assistant state when source or cache status changes."""
 
         await super().async_added_to_hass()
         self.async_on_remove(
@@ -69,6 +101,14 @@ class _ProgressiveSnapshotCamera(Camera):
                 self._subentry_id, self.async_write_ha_state
             )
         )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Keep current access tokens valid across a config-entry reload."""
+
+        _access_token_store(self._token_store_hass)[self._subentry_id] = tuple(
+            self.access_tokens
+        )
+        await super().async_will_remove_from_hass()
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None

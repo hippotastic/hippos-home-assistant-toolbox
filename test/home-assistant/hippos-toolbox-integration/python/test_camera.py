@@ -10,6 +10,7 @@ from homeassistant.components.camera import CameraEntityFeature
 
 from custom_components.hippos_toolbox.camera import (
     _ProgressiveSnapshotCamera,
+    _access_token_store,
     async_setup_entry,
 )
 from custom_components.hippos_toolbox.const import (
@@ -19,12 +20,18 @@ from custom_components.hippos_toolbox.const import (
 
 
 class _Manager:
-    def __init__(self, frames: tuple[bytes, ...] = ()) -> None:
+    def __init__(
+        self,
+        frames: tuple[bytes, ...] = (),
+        *,
+        source_available: bool = True,
+    ) -> None:
         self.frames = frames
+        self.source_available = source_available
         self.unsubscribed = False
 
-    def has_frame(self, _subentry_id):
-        return bool(self.frames)
+    def is_available(self, _subentry_id):
+        return self.source_available or bool(self.frames)
 
     def async_subscribe(self, _subentry_id):
         queue = asyncio.Queue()
@@ -61,6 +68,10 @@ def _subentry() -> config_entries.ConfigSubentry:
     )
 
 
+def _hass() -> SimpleNamespace:
+    return SimpleNamespace(data={})
+
+
 class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
     """Verify entity identity and the cache-to-fresh multipart sequence."""
 
@@ -78,9 +89,7 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
                 return_value=response,
             ),
         ):
-            camera = _ProgressiveSnapshotCamera(
-                SimpleNamespace(), manager, _subentry()
-            )
+            camera = _ProgressiveSnapshotCamera(_hass(), manager, _subentry())
             returned = await camera.handle_async_mjpeg_stream(SimpleNamespace())
 
         self.assertIs(returned, response)
@@ -98,7 +107,7 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
             return_value=source_device,
         ):
             camera = _ProgressiveSnapshotCamera(
-                SimpleNamespace(), _Manager((b"cached",)), _subentry()
+                _hass(), _Manager((b"cached",)), _subentry()
             )
 
         self.assertEqual(camera.unique_id, "progressive-front-door")
@@ -107,8 +116,57 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(CameraEntityFeature.STREAM, camera.supported_features)
         self.assertTrue(camera.available)
 
+    async def test_entity_is_available_before_its_first_frame(self) -> None:
+        with patch(
+            "custom_components.hippos_toolbox.camera.async_entity_id_to_device",
+            return_value=SimpleNamespace(id="source-device"),
+        ):
+            camera = _ProgressiveSnapshotCamera(_hass(), _Manager(), _subentry())
+
+        self.assertTrue(camera.available)
+        self.assertIn("access_token", camera.state_attributes)
+
+    async def test_cached_frame_keeps_entity_available_without_source(self) -> None:
+        with patch(
+            "custom_components.hippos_toolbox.camera.async_entity_id_to_device",
+            return_value=SimpleNamespace(id="source-device"),
+        ):
+            cached = _ProgressiveSnapshotCamera(
+                _hass(),
+                _Manager((b"cached",), source_available=False),
+                _subentry(),
+            )
+            cold = _ProgressiveSnapshotCamera(
+                _hass(),
+                _Manager(source_available=False),
+                _subentry(),
+            )
+
+        self.assertTrue(cached.available)
+        self.assertFalse(cold.available)
+
+    async def test_access_tokens_survive_reload_and_rotate_normally(self) -> None:
+        hass = _hass()
+        with patch(
+            "custom_components.hippos_toolbox.camera.async_entity_id_to_device",
+            return_value=SimpleNamespace(id="source-device"),
+        ):
+            original = _ProgressiveSnapshotCamera(hass, _Manager(), _subentry())
+            original.access_tokens.clear()
+            original.access_tokens.extend(("previous", "current"))
+            await original.async_will_remove_from_hass()
+
+            restored = _ProgressiveSnapshotCamera(hass, _Manager(), _subentry())
+
+        self.assertEqual(tuple(restored.access_tokens), ("previous", "current"))
+        restored.async_update_token()
+        self.assertEqual(restored.access_tokens[0], "current")
+        self.assertEqual(len(restored.access_tokens), 2)
+
     async def test_platform_binds_each_entity_to_its_subentry(self) -> None:
         manager = _Manager((b"cached",))
+        hass = _hass()
+        _access_token_store(hass)["removed-subentry"] = ("stale",)
         subentry = _subentry()
         ignored = config_entries.ConfigSubentry(
             data=MappingProxyType({}),
@@ -135,13 +193,12 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
             "custom_components.hippos_toolbox.camera.async_entity_id_to_device",
             return_value=SimpleNamespace(id="source-device"),
         ):
-            await async_setup_entry(
-                SimpleNamespace(), entry, add_entities
-            )
+            await async_setup_entry(hass, entry, add_entities)
 
         self.assertEqual(len(added), 1)
         self.assertEqual(added[0][1], subentry.subentry_id)
         self.assertEqual(len(added[0][0]), 1)
+        self.assertNotIn("removed-subentry", _access_token_store(hass))
 
 
 if __name__ == "__main__":

@@ -227,10 +227,11 @@ class _ProgressiveCameraManager:
         return remove_listener
 
     @callback
-    def has_frame(self, subentry_id: str) -> bool:
-        """Return whether the proxy has an image it can serve."""
+    def is_available(self, subentry_id: str) -> bool:
+        """Return whether the source or a cached frame can be served."""
 
-        return self._caches[subentry_id].display_frame is not None
+        cache = self._caches[subentry_id]
+        return cache.display_frame is not None or self._source_is_available(cache)
 
     @callback
     def _async_schedule(
@@ -567,6 +568,10 @@ class _ProgressiveCameraManager:
             STATE_UNAVAILABLE,
             STATE_UNKNOWN,
         }
+        if new_available != old_available:
+            # Availability is source-or-cache based, so publish the source
+            # transition without waiting for the next snapshot attempt.
+            self._async_notify_listeners(cache)
         if new_available and not old_available:
             self._async_schedule(
                 cache, time.monotonic(), _PRIORITY_INTERACTIVE

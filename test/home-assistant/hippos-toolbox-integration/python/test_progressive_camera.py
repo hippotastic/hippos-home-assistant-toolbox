@@ -313,6 +313,30 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
         manager.async_unsubscribe("garage", first_queue)
         manager.async_unsubscribe("garage", second_queue)
 
+    async def test_source_recovery_publishes_availability_immediately(self) -> None:
+        source = "camera.front_door"
+        hass = _Hass((source,))
+        manager = _ProgressiveCameraManager(hass, _Entry(), {"front": source})
+        notifications: list[bool] = []
+        manager.async_add_listener("front", lambda: notifications.append(True))
+
+        manager._async_source_state_changed(
+            SimpleNamespace(
+                data={
+                    "entity_id": source,
+                    "old_state": SimpleNamespace(state="unavailable"),
+                    "new_state": SimpleNamespace(state="idle"),
+                }
+            )
+        )
+
+        cache = manager._caches["front"]
+        self.assertEqual(notifications, [True])
+        self.assertTrue(manager.is_available("front"))
+        self.assertEqual(
+            cache.scheduled_priority, progressive_camera._PRIORITY_INTERACTIVE
+        )
+
     async def test_failure_marks_last_frame_once_and_success_cleans_it(self) -> None:
         source = "camera.driveway"
         hass = _Hass((source,))
@@ -381,7 +405,8 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
         ):
             await manager._async_fetch(cache)
 
-        self.assertFalse(manager.has_frame("invalid"))
+        self.assertIsNone(cache.display_frame)
+        self.assertTrue(manager.is_available("invalid"))
         self.assertTrue(cache.failed)
 
     async def test_unavailable_source_is_not_requested(self) -> None:
@@ -396,7 +421,7 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
             await manager._async_fetch(cache)
 
         get_image.assert_not_awaited()
-        self.assertFalse(manager.has_frame("offline"))
+        self.assertFalse(manager.is_available("offline"))
 
     async def test_slow_stream_subscriber_only_keeps_latest_frame(self) -> None:
         source = "camera.patio"
