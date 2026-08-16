@@ -1,7 +1,6 @@
 # Hippo's Home Assistant Toolbox
 
-Reusable Home Assistant blueprints with comfortable installation and updates
-through a custom Home Assistant integration.
+Reusable Home Assistant blueprints with comfortable installation and updates through a custom Home Assistant integration.
 
 ## Installation
 
@@ -10,45 +9,13 @@ through a custom Home Assistant integration.
 1. Add this repository to HACS as an **Integration** custom repository.
 2. Download **Hippo's Home Assistant Toolbox** in HACS.
 3. Restart Home Assistant.
-4. Open **Settings > Devices & services > Add integration** and select
-   **Hippo's Home Assistant Toolbox**.
+4. Open **Settings > Devices & services > Add integration** and select **Hippo's Home Assistant Toolbox**.
 
-No integration settings are required. During setup, all active blueprints that
-do not already exist locally are installed automatically.
+No integration settings are required.
 
-Blueprints previously imported from this repository through Home Assistant are
-recognized by their source URL, backed up, and adopted by the integration.
-Existing files under `/config/blueprints/<domain>/hippo/` are also recognized.
-During adoption, the integration moves them into its managed `hippotastic/`
-directory and updates existing `use_blueprint.path` references in YAML
-configuration files. If a reference cannot be rewritten safely, the old file is
-kept as a compatibility copy so the existing consumer continues to work.
+During setup, all active blueprints contained in this repository are installed automatically. In case you already installed some of the blueprints manually, they are adopted by the integration.
 
-## Updates
-
-The integration checks the published blueprint catalog once per day. New and
-changed blueprints appear together as an update for the **Blueprints** update
-entity. Installing that update downloads the exact source files from one Git
-commit and reloads affected Home Assistant domains.
-
-Use the **Check for updates** button entity to run the catalog check immediately.
-This only checks for changes; it does not install them.
-
-### Update Channels
-
-Every installation follows the **Stable** channel by default; initial setup does
-not ask for a channel. Stable reads the blueprint catalog from the latest
-published GitHub release.
-
-To test upcoming changes on one Home Assistant instance, open **Settings >
-Devices & services > Hippo's Home Assistant Toolbox > Configure** and select
-**Development**. The integration reloads automatically and follows the latest
-catalog commit on `main`. Development revisions are prefixed with `development-`
-in the update entity so they remain visibly distinct from stable releases.
-Switching back to Stable is supported at any time.
-
-The Development channel only affects blueprint content. HACS continues to
-update the integration itself from published releases.
+## File Locations
 
 Files are installed under:
 
@@ -62,145 +29,63 @@ Before replacing an existing file, the integration keeps up to three copies in:
 /config/blueprints/.hippos_toolbox_backups/
 ```
 
-### Local Changes
+## Updates
 
-The integration never silently overwrites an unexpected local modification. It
-creates a Repair issue instead. The repair flow backs up the local file and
-restores the published version after explicit confirmation. Keeping the local
-version and ignoring the issue is also supported.
+By default, the integration checks the published blueprints once per day. New and changed blueprints appear together as an update for the **Blueprints** update entity. Installing that update downloads the exact source files and reloads affected Home Assistant domains.
 
-### Deprecated Blueprints
+Use the **Check for updates** button entity to run the catalog check immediately. This only checks for changes; it does not install them.
 
-Retired blueprints remain installed locally and continue to be available to
-existing automations, scripts, or template entities. They no longer receive
-updates, and Home Assistant shows an ignorable deprecation issue.
+### Update Channels
 
-## Blueprints
+Every installation follows the **Stable** channel by default; initial setup does not ask for a channel. Stable reads the blueprint catalog from the latest published GitHub release.
 
-The integration is the recommended installation method. Individual blueprints
-can still be imported manually.
+To allow testing unreleased changes, open **Settings > Devices & services > Hippo's Home Assistant Toolbox > Configure** and select the **Development** channel. This will increase the update check frequency to every 2 hours and follow the latest catalog commit on `main`. Switching back to Stable is supported at any time.
 
-### Hippo's Cover Automation
+The Development channel only affects blueprint content. HACS continues to update the integration itself from published releases.
 
-[![Open your Home Assistant instance and import this blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fcover_automation.yaml)
+## About the Irrigation Blueprints
 
-Source: [blueprints/automation/cover_automation.yaml](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/cover_automation.yaml)
+The two irrigation blueprints work together:
 
-### Hippo's Time-Based Exponential Moving Average (EMA)
+- For each zone, an individual **Irrigation Zone Calculation** automation calculates the zone's watering demand during the current watering interval.
+- A shared **Irrigation Scheduler** automation executes those demands in sequence for all zones it is configured to manage.
 
-[![Open your Home Assistant instance and import this blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fexponential_moving_average.yaml)
+### Required Configuration
 
-Source: [blueprints/automation/exponential_moving_average.yaml](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/exponential_moving_average.yaml)
+1. Under **Settings > Devices & services > Helpers**, create one dedicated **Text** helper per zone and set its maximum length to **255** characters.
+2. Create one **Irrigation Zone Calculation** automation per valve. Assign a different helper to every zone; do not edit or reuse these helpers manually.
+3. Select a History Statistics sensor for rain duration and a sensor reporting the maximum temperature of the last 24 hours. The rain sensor must report the percentage of the last 24 hours during which rain was detected, not precipitation in millimetres. Temperature must be in degrees Celsius.
+4. Optionally select a soil-moisture sensor reporting 0–100%. Moisture below the target increases demand by up to 100%; moisture at or above the target does not reduce it. An unavailable moisture sensor applies no adjustment.
+5. Create one **Irrigation Scheduler** automation. Select every zone helper exactly once and arrange them in the desired watering order. Zones run one at a time.
+6. Configure the primary daily start time and, if limited runs may need another opportunity, an additional daily start time. A time earlier than the primary time means the following morning.
 
-### Hippo's Irrigation Zone Calculation
+### How Scheduling Works
 
-[![Open your Home Assistant instance and import this blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Firrigation_zone_calculation.yaml)
+Each zone calculates its watering demand in minutes for the current watering interval based on the configured default duration, rain, temperature, and soil moisture.
 
-Source: [blueprints/automation/irrigation_zone_calculation.yaml](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_zone_calculation.yaml)
+The scheduler then plans runs for all zones in the order they were selected. It always attempts to satisfy each zone's watering demand in full. If an optional maximum duration per run is configured for a zone, the scheduler splits its demand into multiple runs, each with a duration not exceeding the limit.
 
-### Hippo's Irrigation Scheduler
+The scheduler supports a primary and an additional daily start time. It first schedules runs at the primary time. If a zone's watering demand cannot be fully satisfied at that primary time, it attempts to schedule the remaining demand at the additional time. If that is also insufficient, the remaining demand can also be carried over to the next days, until the next watering interval begins. Any demand that still cannot be scheduled expires at that boundary.
 
-[![Open your Home Assistant instance and import this blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Firrigation_scheduler.yaml)
+## Manual Installation
 
-Source: [blueprints/automation/irrigation_scheduler.yaml](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_scheduler.yaml)
+The integration is the recommended installation method. Individual blueprints can still be imported manually.
 
-#### Irrigation quick start
+- **Hippo's Cover Automation**\
+  [Source](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/cover_automation.yaml) · [Import manually into Home Assistant](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fcover_automation.yaml)
 
-The irrigation blueprints work together: one Zone Calculation automation
-publishes the demand for each zone, and one shared Scheduler executes those
-demands in sequence.
+- **Hippo's Time-Based Exponential Moving Average (EMA)**\
+  [Source](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/exponential_moving_average.yaml) · [Import manually into Home Assistant](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fexponential_moving_average.yaml)
 
-1. Under **Settings > Devices & services > Helpers**, create one dedicated
-   **Text** helper per zone and set its maximum length to **255** characters.
-2. Create one **Irrigation Zone Calculation** automation per valve. Assign a
-   different helper to every zone; do not edit or reuse these helpers manually.
-3. Select History Statistics sensors for rain duration and maximum temperature.
-   The rain sensor must report the percentage of the last 24 hours during which
-   rain was detected, not precipitation in millimetres. Temperature must be in
-   degrees Celsius.
-4. Optionally select a soil-moisture sensor reporting 0–100%. Moisture below the
-   target increases demand by up to 100%; moisture at or above the target does
-   not reduce it. An unavailable moisture sensor applies no adjustment.
-5. Create one **Irrigation Scheduler** automation. Select every zone helper
-   exactly once and arrange them in the desired watering order. Zones run one at
-   a time.
-6. Configure the primary daily start time and, if limited runs may need another
-   opportunity, an additional daily start time. A time earlier than the primary
-   time means the following morning.
+- **Hippo's Irrigation Zone Calculation**\
+  [Source](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_zone_calculation.yaml) · [Import manually into Home Assistant](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Firrigation_zone_calculation.yaml)
 
-The calculated runtime is the total demand for one planning cycle, not the
-duration of every run. A maximum duration per run splits that demand without
-limiting its total. For example, 110 minutes of demand with a 60-minute limit,
-a primary time of 22:00, and an additional time of 08:00 produces a 60-minute
-run at 22:00 followed by a 50-minute run the next morning.
+- **Hippo's Irrigation Scheduler**\
+  [Source](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_scheduler.yaml) · [Import manually into Home Assistant](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Firrigation_scheduler.yaml)
 
-For cycles longer than one day, unused primary and additional start times on
-following days remain available until the next cycle begins. Any demand that
-still cannot be scheduled expires at that boundary. Recalculation keeps
-completed runs, subtracts their cumulative duration from the new demand, and
-replans only future runs. A run that has already started always completes with
-its originally scheduled duration.
+- **Hippo's Sensor-based State Machine**\
+  [Source](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/sensor_state_machine.yaml) · [Import manually into Home Assistant](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsensor_state_machine.yaml)
 
-### Hippo's Sensor-based State Machine
+## Contributing
 
-[![Open your Home Assistant instance and import this blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsensor_state_machine.yaml)
-
-Source: [blueprints/automation/sensor_state_machine.yaml](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/sensor_state_machine.yaml)
-
-## Compatibility
-
-The integration requires Home Assistant `2026.7.0` or newer. Individual
-blueprints currently declare Home Assistant `2024.6.0` as their minimum version
-and can still be imported manually on compatible older installations.
-
-Blueprint updates should remain backwards compatible with existing inputs.
-Breaking input changes can require users to adjust existing consumers manually.
-
-## Development
-
-Install dependencies with:
-
-```sh
-pnpm install
-```
-
-Commit blueprint changes and the synchronized `blueprints/catalog.json` to
-`main`, then select the Development channel on a test Home Assistant instance.
-Development users receive those changes directly from `main`; Stable users do
-not receive them until they are included in a published release. New blueprints
-and deprecation tombstones follow the same process.
-
-Run the canonical local validation suite:
-
-```sh
-pnpm validate
-```
-
-`pnpm validate` is the complete local check. It first synchronizes the generated
-blueprint catalog so changed sources and their SHA-256 hashes cannot drift
-apart. It then orders checks to fail early and quickly: ESLint and catalog
-consistency run first, followed by TypeScript and unit tests. Finally, one
-Vitest run starts a network-isolated Home Assistant container and executes both
-repository validation and blueprint runtime tests. Commit an updated
-`blueprints/catalog.json` alongside its blueprint changes. Do not run additional
-checks before or after a successful validation unless the working tree changed.
-The YAML linter reports lines longer than 140 characters as warnings.
-
-GitHub Actions runs the Docker-free portion of the same validation flow. The
-full Home Assistant-backed suite remains local.
-
-### Releases
-
-User-visible changes carry a Changeset. Pushes to `main` maintain a draft
-release pull request containing the next semantic version and generated
-changelog. Merging that pull request synchronizes the integration manifest,
-creates the matching Git tag, and publishes a GitHub Release. The Stable update
-channel reads blueprint content from that immutable release.
-
-The shared validation and runtime container uses Docker networking mode `none`.
-No Python installation is required on the host; Python regression tests execute
-inside the Home Assistant container and are orchestrated by Vitest. See
-`test/README.md` for details.
-
-Catalog maintenance and deprecation rules are documented in
-`tools/blueprint-catalog`.
+Development and release instructions are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
