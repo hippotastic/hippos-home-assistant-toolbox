@@ -62,6 +62,7 @@ export const IRRIGATION_CALCULATION_SCENARIOS = {
 	formula: irrigationCalculationScenario('formula'),
 	moisture: irrigationCalculationScenario('moisture', { maximumRuntimeMinutes: 60, targetMoisturePercentage: 60, withMoistureSensor: true }),
 	noOp: irrigationCalculationScenario('no_op'),
+	rainCredit: irrigationCalculationScenario('rain_credit', { baseRuntimeMinutes: 30, intervalDays: 2, withMoistureSensor: true }),
 	reconcile: irrigationCalculationScenario('reconcile'),
 } as const
 

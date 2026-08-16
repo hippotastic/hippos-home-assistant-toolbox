@@ -42,9 +42,9 @@ blueprint:
           name: Reference runtime
           description: >-
             The unadjusted total watering demand for one planning cycle, not the
-            duration of every individual run. Weather may reduce this value to 0
-            or increase it to 200%; low soil moisture may then double the
-            weather-adjusted result.
+            duration of every individual run. Temperature may reduce this value to
+            0 or increase it to 200%; low soil moisture may then double the
+            temperature-adjusted result. Detected rain minutes are subtracted last.
           default: 10
           selector:
             number:
@@ -91,8 +91,9 @@ blueprint:
           description: >-
             Select a History Statistics sensor reporting the percentage of the last
             24 hours during which rain was detected, from 0 to 100. This is not
-            precipitation in millimetres. About 30 minutes of detected rain suppresses
-            watering completely. An unavailable sensor is treated as no rain.
+            precipitation in millimetres. Each detected rain minute is treated as one
+            minute already supplied and subtracted from the adjusted cycle demand.
+            An unavailable sensor is treated as no rain.
           selector:
             entity:
               filter:
@@ -171,8 +172,7 @@ variables:
   # Perform zone runtime calculation
   rainfall_pct: '{{ states(rainfall_percentage_of_last_24h_entity) | float(default=0) }}'
   max_temperature: '{{ states(max_temperature_of_last_24h_entity) | float(default=20) }}'
-  rain_minutes: '{{ (24 * 60 * rainfall_pct / 100) | round(0, "ceil") }}'
-  rain_factor: '{{ ([0, 1 - rain_minutes / 30] | max) | round(2) }}'
+  rain_minutes: '{{ (24 * 60 * rainfall_pct / 100) | round(0, "ceil") | int }}'
   heat_factor: '{{ (0.7 + ([1, ([0, (max_temperature - 25) / 10] | max)] | min) * 1.3) | round(2) }}'
   cold_factor: '{{ iif(max_temperature < 12, 0, 1) }}'
   soil_moisture: >-
@@ -182,8 +182,9 @@ variables:
     }}
   moisture_deficit: '{{ [0, target_soil_moisture_percentage - soil_moisture] | max }}'
   moisture_factor: '{{ 1 + ([1, moisture_deficit / 20] | min) }}'
-  combined_factor: '{{ (rain_factor * heat_factor * cold_factor * moisture_factor) | round(2) }}'
-  runtime_minutes: '{{ (base_runtime_minutes * combined_factor) | round(0, "ceil") }}'
+  demand_factor: '{{ (heat_factor * cold_factor * moisture_factor) | round(2) }}'
+  gross_runtime_minutes: '{{ (base_runtime_minutes * demand_factor) | round(0, "ceil") | int }}'
+  runtime_minutes: '{{ [0, gross_runtime_minutes - rain_minutes] | max | int }}'
   # Get current value of status helper
   status: >-
     {%- set value = states(status_helper_entity) | from_json({}) %}
@@ -205,13 +206,15 @@ actions:
       name: Hippo's Irrigation Zone Calculation
       message: >-
         Calculated {{ runtime_minutes }} minutes for each
-        {{ watering_interval_days }}-day planning cycle. Reference runtime:
-        {{ base_runtime_minutes }} minutes; rain duration: {{ rainfall_pct }}%;
+        {{ watering_interval_days }}-day planning cycle. Gross demand before rain:
+        {{ gross_runtime_minutes }} minutes from a {{ base_runtime_minutes }}-minute
+        reference runtime. Rain credit: {{ rain_minutes }} minutes
+        ({{ rainfall_pct }}% of the last 24 hours);
         maximum temperature: {{ max_temperature }} °C.
         {%- if soil_moisture_entity %}
-          Soil moisture: {{ soil_moisture }}%; target:
-          {{ target_soil_moisture_percentage }}%; resulting increase:
-          {{ ((moisture_factor - 1) * 100) | round(0) }}%.
+        Soil moisture: {{ soil_moisture }}%; target:
+        {{ target_soil_moisture_percentage }}%; resulting increase:
+        {{ ((moisture_factor - 1) * 100) | round(0) }}%.
         {%- endif %}
       entity_id: '{{ valve_entity }}'
       domain: switch

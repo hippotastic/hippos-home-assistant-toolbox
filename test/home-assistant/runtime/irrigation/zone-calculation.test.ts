@@ -24,7 +24,8 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 				// If the watering requirement changes, expect the valve log to explain
 				// the calculated runtime and its climate inputs
 				const log = await waitForValveLog('Calculated 7 minutes for each 1-day planning cycle')
-				expect(String(log.serviceData.message)).toContain('rain duration: 0.0%')
+				expect(String(log.serviceData.message)).toContain('Gross demand before rain: 7 minutes')
+				expect(String(log.serviceData.message)).toContain('Rain credit: 0 minutes (0.0% of the last 24 hours)')
 				expect(String(log.serviceData.message)).toContain('maximum temperature: 20.0 °C')
 			}
 		)
@@ -36,7 +37,8 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 			{ expectedRuntime: 0, rainfall: '0', temperature: '11' },
 			{ expectedRuntime: 14, rainfall: '0', temperature: '30' },
 			{ expectedRuntime: 20, rainfall: '0', temperature: '35' },
-			{ expectedRuntime: 4, rainfall: '1', temperature: '20' },
+			{ expectedRuntime: 4, rainfall: '0.2', temperature: '20' },
+			{ expectedRuntime: 0, rainfall: '1', temperature: '20' },
 			{ expectedRuntime: 0, rainfall: '2.1', temperature: '35' },
 		] as const
 
@@ -55,6 +57,32 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 				})
 			}
 		})
+	})
+
+	test('subtracts detected rain minutes from adjusted cycle demand and explains the credit', async () => {
+		await withCalculationScenario(
+			IRRIGATION_CALCULATION_SCENARIOS.rainCredit,
+			async ({ entities, expectHelperToBecome, setAutomationEnabled, setClimate, setMoisture, waitForValveLog }) => {
+				await setClimate({ rainfall: '1.9', temperature: '41.6' })
+				await setMoisture('60')
+
+				// A 30-minute reference demand doubles at the heat limit, then receives
+				// a linear 28-minute rain credit instead of a multiplicative reduction.
+				await setAutomationEnabled(true)
+				await expectHelperToBecome({
+					interval: 2,
+					runtime: 32,
+					valve: entities.valve,
+				})
+
+				const log = await waitForValveLog('Calculated 32 minutes for each 2-day planning cycle')
+				const message = String(log.serviceData.message)
+				expect(message).toContain('Gross demand before rain: 60 minutes from a 30-minute reference runtime')
+				expect(message).toContain('Rain credit: 28 minutes (1.9% of the last 24 hours)')
+				expect(message).toContain('maximum temperature: 41.6 °C')
+				expect(message).toContain('Soil moisture: 60.0%; target: 50%; resulting increase: 0%')
+			}
+		)
 	})
 
 	test('adds a bounded proportional soil-moisture increase and publishes the watering limit', async () => {
