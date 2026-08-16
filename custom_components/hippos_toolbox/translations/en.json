@@ -12,6 +12,7 @@
   },
   "config_subentries": {
     "progressive_camera": {
+      "entry_type": "Progressive snapshot camera",
       "initiate_flow": {
         "user": "Add progressive snapshot camera"
       },
