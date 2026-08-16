@@ -8,7 +8,7 @@ DOMAIN = "hippos_toolbox"
 NAME = "Hippo's Home Assistant Toolbox"
 MANAGED_DIRECTORY = "hippotastic"
 ADOPTABLE_BLUEPRINT_DIRECTORIES = ("hippo",)
-PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.UPDATE]
+PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.CAMERA, Platform.UPDATE]
 UPDATE_INTERVAL = timedelta(days=1)
 DEVELOPMENT_UPDATE_INTERVAL = timedelta(hours=2)
 
@@ -19,12 +19,15 @@ GITHUB_WEB_ROOT = f"https://github.com/{GITHUB_REPOSITORY}"
 CATALOG_PATH = "blueprints/catalog.json"
 
 CONF_UPDATE_CHANNEL = "update_channel"
+CONF_SOURCE_ENTITY_ID = "source_entity_id"
 UPDATE_CHANNEL_STABLE = "stable"
 UPDATE_CHANNEL_DEVELOPMENT = "development"
 DEFAULT_UPDATE_CHANNEL = UPDATE_CHANNEL_STABLE
 UPDATE_CHANNELS = frozenset((UPDATE_CHANNEL_STABLE, UPDATE_CHANNEL_DEVELOPMENT))
 
 DEVELOPMENT_BRANCH = "main"
+
+PROGRESSIVE_CAMERA_SUBENTRY_TYPE = "progressive_camera"
 
 CATALOG_SCHEMA_VERSION = 1
 SUPPORTED_BLUEPRINT_DOMAINS = frozenset(("automation", "script", "template"))

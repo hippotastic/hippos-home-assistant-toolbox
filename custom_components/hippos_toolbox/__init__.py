@@ -8,13 +8,16 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import ToolboxApi
 from .const import (
+    CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
     DEFAULT_UPDATE_CHANNEL,
     PLATFORMS,
+    PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
     normalize_update_channel,
 )
 from .coordinator import ToolboxCoordinator
 from .manager import BlueprintManager
+from .progressive_camera import _ProgressiveCameraManager
 
 
 @dataclass(slots=True)
@@ -23,6 +26,7 @@ class ToolboxRuntimeData:
 
     manager: BlueprintManager
     coordinator: ToolboxCoordinator
+    progressive_camera_manager: _ProgressiveCameraManager
 
 
 type ToolboxConfigEntry = ConfigEntry[ToolboxRuntimeData]
@@ -46,8 +50,27 @@ async def async_setup_entry(
         await manager.async_install_initial(coordinator.data)
     )
 
-    entry.runtime_data = ToolboxRuntimeData(manager=manager, coordinator=coordinator)
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    progressive_camera_manager = _ProgressiveCameraManager(
+        hass,
+        entry,
+        {
+            subentry.subentry_id: str(subentry.data[CONF_SOURCE_ENTITY_ID])
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == PROGRESSIVE_CAMERA_SUBENTRY_TYPE
+        },
+    )
+    await progressive_camera_manager.async_start()
+    entry.runtime_data = ToolboxRuntimeData(
+        manager=manager,
+        coordinator=coordinator,
+        progressive_camera_manager=progressive_camera_manager,
+    )
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        await progressive_camera_manager.async_stop()
+        raise
     return True
 
 
@@ -57,4 +80,15 @@ async def async_unload_entry(
 ) -> bool:
     """Unload the toolbox entities."""
 
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        await entry.runtime_data.progressive_camera_manager.async_stop()
+    return unloaded
+
+
+async def _async_reload_entry(
+    hass: HomeAssistant, entry: ToolboxConfigEntry
+) -> None:
+    """Reload after options or camera subentries change."""
+
+    await hass.config_entries.async_reload(entry.entry_id)
