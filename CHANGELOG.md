@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.5.2
+
+### Patch Changes
+
+- 4c40fb1: Keep Progressive Snapshot Camera thumbnail tokens valid across integration reloads and expose available sources before their first frame is cached.
+
 ## 0.5.1
 
 ### Patch Changes
