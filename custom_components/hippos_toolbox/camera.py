@@ -5,9 +5,11 @@ from typing import cast
 from aiohttp import web
 
 from homeassistant.components.camera import Camera
+from homeassistant.components.camera.helper import get_camera_from_entity_id
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.const import CONTENT_TYPE_MULTIPART
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device import async_entity_id_to_device
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -74,6 +76,7 @@ class _ProgressiveSnapshotCamera(Camera):
         self._token_store_hass = hass
         self._manager = manager
         self._subentry_id = subentry.subentry_id
+        self._source_entity_id = str(subentry.data[CONF_SOURCE_ENTITY_ID])
         if previous_tokens := _access_token_store(hass).get(self._subentry_id):
             # A config-subentry change reloads every toolbox camera. Retaining
             # the existing deque avoids invalidating in-flight thumbnail URLs.
@@ -83,7 +86,7 @@ class _ProgressiveSnapshotCamera(Camera):
         self._attr_name = subentry.title
         self.content_type = "image/jpeg"
         self.device_entry = async_entity_id_to_device(
-            hass, str(subentry.data[CONF_SOURCE_ENTITY_ID])
+            hass, self._source_entity_id
         )
 
     @property
@@ -119,8 +122,26 @@ class _ProgressiveSnapshotCamera(Camera):
 
     async def handle_async_mjpeg_stream(
         self, request: web.Request
-    ) -> web.StreamResponse:
-        """Push cached and newly fetched frames to a live dashboard card."""
+    ) -> web.StreamResponse | None:
+        """Hand native MJPEG through, or stream cached snapshot refreshes."""
+
+        try:
+            source_camera = get_camera_from_entity_id(
+                self._token_store_hass, self._source_entity_id
+            )
+        except HomeAssistantError:
+            source_camera = None
+
+        if (
+            source_camera is not None
+            and not isinstance(source_camera, _ProgressiveSnapshotCamera)
+            and type(source_camera).handle_async_mjpeg_stream
+            is not Camera.handle_async_mjpeg_stream
+        ):
+            # Native handlers proxy one persistent device connection and preserve
+            # its real frame rate. Static cards and thumbnails still use the
+            # progressive entity's separately cached camera image.
+            return await source_camera.handle_async_mjpeg_stream(request)
 
         response = web.StreamResponse()
         response.content_type = CONTENT_TYPE_MULTIPART.format(f"--{_BOUNDARY}")

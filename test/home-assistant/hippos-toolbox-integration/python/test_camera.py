@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from homeassistant import config_entries
-from homeassistant.components.camera import CameraEntityFeature
+from homeassistant.components.camera import Camera, CameraEntityFeature
 
 from custom_components.hippos_toolbox.camera import (
     _ProgressiveSnapshotCamera,
@@ -56,6 +56,17 @@ class _Response:
         self.writes.append(content)
 
 
+class _NativeMjpegCamera(Camera):
+    def __init__(self, response: object) -> None:
+        super().__init__()
+        self.response = response
+        self.requests: list[object] = []
+
+    async def handle_async_mjpeg_stream(self, request):
+        self.requests.append(request)
+        return self.response
+
+
 def _subentry() -> config_entries.ConfigSubentry:
     return config_entries.ConfigSubentry(
         data=MappingProxyType(
@@ -88,6 +99,10 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
                 "custom_components.hippos_toolbox.camera.web.StreamResponse",
                 return_value=response,
             ),
+            patch(
+                "custom_components.hippos_toolbox.camera.get_camera_from_entity_id",
+                return_value=Camera(),
+            ),
         ):
             camera = _ProgressiveSnapshotCamera(_hass(), manager, _subentry())
             returned = await camera.handle_async_mjpeg_stream(SimpleNamespace())
@@ -99,6 +114,29 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.writes[0], response.writes[1])
         self.assertTrue(response.writes[2].endswith(b"fresh\r\n"))
         self.assertIn(b"Content-Length: 5", response.writes[2])
+
+    async def test_stream_delegates_to_native_source_handler(self) -> None:
+        manager = _Manager((b"cached",))
+        source_response = object()
+        source_camera = _NativeMjpegCamera(source_response)
+        request = SimpleNamespace()
+
+        with (
+            patch(
+                "custom_components.hippos_toolbox.camera.async_entity_id_to_device",
+                return_value=SimpleNamespace(id="source-device"),
+            ),
+            patch(
+                "custom_components.hippos_toolbox.camera.get_camera_from_entity_id",
+                return_value=source_camera,
+            ),
+        ):
+            camera = _ProgressiveSnapshotCamera(_hass(), manager, _subentry())
+            returned = await camera.handle_async_mjpeg_stream(request)
+
+        self.assertIs(returned, source_response)
+        self.assertEqual(source_camera.requests, [request])
+        self.assertFalse(manager.unsubscribed)
 
     async def test_entity_is_linked_to_source_without_stream_feature(self) -> None:
         source_device = SimpleNamespace(id="source-device")
