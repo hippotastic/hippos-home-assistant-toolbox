@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.5.1
+
+### Patch Changes
+
+- e7b3f9f: Hand Progressive Snapshot Camera live views from the immediate RAM cache to the source camera's native snapshot cadence while keeping idle refreshes staggered.
+
 ## 0.5.0
 
 ### Minor Changes
