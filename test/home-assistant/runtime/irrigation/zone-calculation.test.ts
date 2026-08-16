@@ -23,10 +23,9 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 
 				// If the watering requirement changes, expect the valve log to explain
 				// the calculated runtime and its climate inputs
-				const log = await waitForValveLog('Calculated 7 minutes for each 1-day planning cycle')
-				expect(String(log.serviceData.message)).toContain('Gross demand before rain: 7 minutes')
-				expect(String(log.serviceData.message)).toContain('Rain credit: 0 minutes (0.0% of the last 24 hours)')
-				expect(String(log.serviceData.message)).toContain('maximum temperature: 20.0 °C')
+				const log = await waitForValveLog('Calculated 7 minutes of watering for the current 1-day cycle')
+				expect(String(log.serviceData.message)).toContain('10 minutes base runtime - 3 minutes due to low temperature (20.0 °C)')
+				expect(String(log.serviceData.message)).toContain('- 0 minutes of rain')
 			}
 		)
 	})
@@ -75,12 +74,11 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 					valve: entities.valve,
 				})
 
-				const log = await waitForValveLog('Calculated 32 minutes for each 2-day planning cycle')
+				const log = await waitForValveLog('Calculated 32 minutes of watering for the current 2-day cycle')
 				const message = String(log.serviceData.message)
-				expect(message).toContain('Gross demand before rain: 60 minutes from a 30-minute reference runtime')
-				expect(message).toContain('Rain credit: 28 minutes (1.9% of the last 24 hours)')
-				expect(message).toContain('maximum temperature: 41.6 °C')
-				expect(message).toContain('Soil moisture: 60.0%; target: 50%; resulting increase: 0%')
+				expect(message).toBe(
+					'Calculated 32 minutes of watering for the current 2-day cycle: 30 minutes base runtime + 30 minutes due to heat (41.6 °C) + 0 minutes due to soil (current: 60%, target: 50%) - 28 minutes of rain.'
+				)
 			}
 		)
 	})
@@ -110,9 +108,8 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 					})
 				}
 
-				const log = await waitForValveLog('Soil moisture:')
-				expect(String(log.serviceData.message)).toContain('target:')
-				expect(String(log.serviceData.message)).toContain('60%')
+				const log = await waitForValveLog('minutes due to soil')
+				expect(String(log.serviceData.message)).toContain('current: 60%, target: 60%')
 			}
 		)
 	})

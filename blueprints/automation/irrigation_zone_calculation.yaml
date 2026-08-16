@@ -182,9 +182,14 @@ variables:
     }}
   moisture_deficit: '{{ [0, target_soil_moisture_percentage - soil_moisture] | max }}'
   moisture_factor: '{{ 1 + ([1, moisture_deficit / 20] | min) }}'
+  temperature_runtime_minutes: '{{ (base_runtime_minutes * heat_factor * cold_factor) | round(0, "ceil") | int }}'
+  temperature_adjustment_minutes: '{{ temperature_runtime_minutes - base_runtime_minutes }}'
   demand_factor: '{{ (heat_factor * cold_factor * moisture_factor) | round(2) }}'
   gross_runtime_minutes: '{{ (base_runtime_minutes * demand_factor) | round(0, "ceil") | int }}'
-  runtime_minutes: '{{ [0, gross_runtime_minutes - rain_minutes] | max | int }}'
+  soil_adjustment_minutes: '{{ gross_runtime_minutes - temperature_runtime_minutes }}'
+  # Cap the displayed rain credit so every logged component adds up to the final runtime.
+  applied_rain_minutes: '{{ [rain_minutes, gross_runtime_minutes] | min | int }}'
+  runtime_minutes: '{{ gross_runtime_minutes - applied_rain_minutes }}'
   # Get current value of status helper
   status: >-
     {%- set value = states(status_helper_entity) | from_json({}) %}
@@ -205,17 +210,19 @@ actions:
     data:
       name: Hippo's Irrigation Zone Calculation
       message: >-
-        Calculated {{ runtime_minutes }} minutes for each
-        {{ watering_interval_days }}-day planning cycle. Gross demand before rain:
-        {{ gross_runtime_minutes }} minutes from a {{ base_runtime_minutes }}-minute
-        reference runtime. Rain credit: {{ rain_minutes }} minutes
-        ({{ rainfall_pct }}% of the last 24 hours);
-        maximum temperature: {{ max_temperature }} °C.
+        Calculated {{ runtime_minutes }} minutes of watering for the current
+        {{ watering_interval_days }}-day cycle: {{ base_runtime_minutes }} minutes
+        base runtime
+        {%- if temperature_adjustment_minutes >= 0 %} +
+        {{ temperature_adjustment_minutes }} minutes due to heat
+        {%- else %} - {{ 0 - temperature_adjustment_minutes }} minutes due to
+        low temperature
+        {%- endif %} ({{ max_temperature }} °C)
         {%- if soil_moisture_entity %}
-        Soil moisture: {{ soil_moisture }}%; target:
-        {{ target_soil_moisture_percentage }}%; resulting increase:
-        {{ ((moisture_factor - 1) * 100) | round(0) }}%.
-        {%- endif %}
+        + {{ soil_adjustment_minutes }} minutes due to soil (current:
+        {{ "%g" | format(soil_moisture | round(1)) }}%, target:
+        {{ "%g" | format(target_soil_moisture_percentage) }}%)
+        {%- endif %} - {{ applied_rain_minutes }} minutes of rain.
       entity_id: '{{ valve_entity }}'
       domain: switch
   # Keep the shared helper within its known schema before updating calculation fields.
