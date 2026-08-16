@@ -51,7 +51,7 @@ To add one, open **Settings > Devices & services > Hippo's Home Assistant Toolbo
 
 Configure Area, Picture Glance, or Picture Entity cards with the new camera entity and set `camera_view: live` for immediate cache-to-fresh transitions. With `camera_view: auto`, Home Assistant still shows the cache immediately, but its standard still-image polling controls when the refreshed frame appears. Area Cards automatically select a camera from the area; hide the original snapshot entity—but do not disable it—if the Area Card should select the progressive camera linked to the same source device.
 
-Frames are intentionally kept only in RAM and are rebuilt after every Home Assistant restart or integration reload. Automatic warmup begins after 30 seconds. Requests are staggered across cameras, with at most two source snapshots in flight at once; active live views refresh every 10 seconds and idle cameras every 30 seconds. A failed source keeps its last frame and adds a connection-problem marker until the next successful refresh. Version 1 accepts JPEG snapshots only.
+Frames are intentionally kept only in RAM and are rebuilt after every Home Assistant restart or integration reload. Automatic warmup begins after 30 seconds. Idle cameras refresh every 30 seconds through a staggered background queue with at most two source snapshots in flight. A live view shows the cached frame immediately, starts its source independently, and then follows the source camera's own frame interval. Multiple live cards for the same progressive camera share that source cadence. A failed source keeps its last frame and adds a connection-problem marker until the next successful refresh. Version 1 accepts JPEG snapshots only.
 
 ### Rebuilding the connection marker
 
