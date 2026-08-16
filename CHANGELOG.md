@@ -1,5 +1,15 @@
 # hippos-home-assistant-toolbox
 
+## 0.5.0
+
+### Minor Changes
+
+- 805557c: Add UI-configurable Progressive Snapshot Cameras with staggered RAM caching, adaptive refresh intervals, seamless live-card updates, and marked fallback frames when a source fails.
+
+### Patch Changes
+
+- 299f1af: Subtract a configurable percentage of detected rain minutes from adjusted irrigation demand and explain each runtime component in zone log messages.
+
 ## 0.4.0
 
 ### Minor Changes
