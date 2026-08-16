@@ -7,7 +7,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ToolboxApiError
-from .const import NAME, UPDATE_INTERVAL
+from .const import (
+    CONF_UPDATE_CHANNEL,
+    DEFAULT_UPDATE_CHANNEL,
+    DEVELOPMENT_UPDATE_INTERVAL,
+    NAME,
+    UPDATE_CHANNEL_DEVELOPMENT,
+    UPDATE_INTERVAL,
+    normalize_update_channel,
+)
 from .manager import BlueprintManager
 from .models import CoordinatorData
 
@@ -25,12 +33,21 @@ class ToolboxCoordinator(DataUpdateCoordinator[CoordinatorData]):
     ) -> None:
         """Initialize the coordinator."""
 
+        update_channel = normalize_update_channel(
+            config_entry.options.get(CONF_UPDATE_CHANNEL, DEFAULT_UPDATE_CHANNEL)
+        )
+        update_interval = (
+            DEVELOPMENT_UPDATE_INTERVAL
+            if update_channel == UPDATE_CHANNEL_DEVELOPMENT
+            else UPDATE_INTERVAL
+        )
+
         super().__init__(
             hass,
             _LOGGER,
             config_entry=config_entry,
             name=NAME,
-            update_interval=UPDATE_INTERVAL,
+            update_interval=update_interval,
             always_update=False,
         )
         self.manager = manager

@@ -17,7 +17,7 @@
           "update_channel": "Update channel"
         },
         "data_description": {
-          "update_channel": "Stable follows published releases. Development follows the latest blueprint changes on the main branch and may include changes that have not been released yet."
+          "update_channel": "Stable checks published releases once a day. Development checks the main branch every two hours and may include changes that have not been released yet."
         },
         "description": "Choose which blueprint updates this Home Assistant instance follows.",
         "title": "Configure blueprint updates"

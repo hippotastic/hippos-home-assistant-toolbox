@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util'
 import { withScenarioDiagnostics, type BlueprintRuntimeClient, type BlueprintServiceCall } from '../../harness/client.ts'
 import { callsForEntity } from '../helpers/assertions.ts'
-import { expectNoServiceCallsAfterAction, prepareNextAction } from '../helpers/actions.ts'
+import { prepareNextAction } from '../helpers/actions.ts'
 import { createEntityStateExpectation, type StateExpectation, type StateHoldOptions, type StatePredicate, type StateTransitionOptions } from '../helpers/state-expectations.ts'
 import { settle } from '../helpers/timing.ts'
 import type { IrrigationCalculationScenario, IrrigationSchedulerScenario } from './scenarios.ts'
@@ -9,9 +9,14 @@ import type { IrrigationCalculationScenario, IrrigationSchedulerScenario } from 
 export type ZoneStatus = Record<string, unknown> & {
 	interval?: number
 	last_end?: string
+	max_runtime?: number
+	next?: [string, number, number]
 	next_start?: string
 	next_end?: string
 	runtime?: number
+	cycle?: string
+	slot?: number
+	watered?: number
 	valve?: string
 }
 
@@ -41,6 +46,8 @@ type CalculationScenarioFixture<TScenario extends IrrigationCalculationScenario>
 	setAutomationEnabled: (enabled: boolean) => Promise<void>
 	/** Updates both climate sensor states used by the calculation */
 	setClimate: (climate: { rainfall: string; temperature: string }) => Promise<void>
+	/** Updates the optional soil-moisture sensor state */
+	setMoisture: (moisture: string) => Promise<void>
 	/** Writes an exact helper value without adding the scenario valve, including deliberately invalid data */
 	setRawZoneHelper: (value: string | ZoneStatus) => Promise<void>
 	/** Writes a JSON zone status and automatically supplies the scenario valve */
@@ -79,9 +86,9 @@ type SchedulerScenarioFixture<TScenario extends IrrigationSchedulerScenario> = {
 	setZoneHelper: (zoneIndex: number, status: ZoneStatus) => Promise<void>
 	/** Stabilizes setup, clears recorded events, enables the scheduler, and returns its start timestamp */
 	startSchedulers: () => Promise<number>
-	/** Waits for the scheduler's completion logbook message */
+	/** Waits for a triggered scheduling action to finish */
 	waitForSchedulingFinished: () => Promise<void>
-	/** Waits for the scheduler's start logbook message */
+	/** Waits for the scheduler automation to be triggered */
 	waitForSchedulingStarted: () => Promise<void>
 	/** Waits for a zone valve logbook message containing the supplied text */
 	waitForValveLog: (zoneIndex: number, text: string) => Promise<BlueprintServiceCall>
@@ -120,6 +127,7 @@ export async function withCalculationScenario<TScenario extends IrrigationCalcul
 					await client.setState(scenario.sensors.rainfall, rainfall)
 					await client.setState(scenario.sensors.temperature, temperature)
 				},
+				setMoisture: (moisture) => client.setState(scenario.sensors.moisture, moisture),
 				setRawZoneHelper: (value) => setHelper(client, entities.helper, value),
 				setZoneHelper: (status) => setHelper(client, entities.helper, { ...status, valve: entities.valve }),
 				waitForValveLog: (text) => waitForLogMessage(client, entities.valve, text),
@@ -156,17 +164,7 @@ export async function withSchedulerScenario<TScenario extends IrrigationSchedule
 					await zoneEntity(valveStates, zoneIndex).expectToBecome(state, options)
 				},
 				expectNoValveChanges: (zoneIndex, options) => zoneEntity(valveStates, zoneIndex).expectNoChanges(options),
-				expectNoSchedulingUpdates: (options) =>
-					expectNoServiceCallsAfterAction(
-						client,
-						[entities.automation],
-						{
-							data: { message: 'Creating or updating irrigation schedule' },
-							domain: 'logbook',
-							service: 'log',
-						},
-						options
-					),
+				expectNoSchedulingUpdates: (options) => expectNoAutomationTriggers(client, entities.automation, options),
 				fireScheduledTime: () => client.fireScheduledTime(scenario.startTime),
 				irrigationCalls: () => readIrrigationCalls(client, entities),
 				prepareNextAction: () => prepareNextAction(client, [entities.automation]),
@@ -186,8 +184,8 @@ export async function withSchedulerScenario<TScenario extends IrrigationSchedule
 					await setAutomation(client, entities.automation, true)
 					return startedAt
 				},
-				waitForSchedulingFinished: () => waitForSchedulingLog(client, 'Finished scheduling'),
-				waitForSchedulingStarted: () => waitForSchedulingLog(client, 'Creating or updating irrigation schedule'),
+				waitForSchedulingFinished: () => waitForAutomationToFinish(client, entities.automation),
+				waitForSchedulingStarted: () => waitForAutomationTrigger(client, entities.automation),
 				waitForValveLog: (zoneIndex, text) => waitForLogMessage(client, zoneEntity(entities.valves, zoneIndex), text),
 				waitForZoneHelper: (zoneIndex, predicate, options) => waitForZoneHelper(client, zoneEntity(entities.helpers, zoneIndex), predicate, options),
 			})
@@ -204,6 +202,7 @@ export async function withSchedulerScenario<TScenario extends IrrigationSchedule
 async function initializeCalculationScenario(client: BlueprintRuntimeClient, scenario: IrrigationCalculationScenario): Promise<void> {
 	await client.setState(scenario.sensors.rainfall, '0')
 	await client.setState(scenario.sensors.temperature, '20')
+	await client.setState(scenario.sensors.moisture, '50')
 	await setAutomation(client, scenario.entities.automation, false)
 	await setSwitch(client, scenario.entities.valve, false)
 	await setHelper(client, scenario.entities.helper, '{}')
@@ -286,8 +285,31 @@ async function readIrrigationCalls(client: BlueprintRuntimeClient, entities: Irr
 	})
 }
 
-async function waitForSchedulingLog(client: BlueprintRuntimeClient, message: string): Promise<void> {
-	await client.waitForServiceCall({ domain: 'logbook', service: 'log', data: { message } })
+async function waitForAutomationTrigger(client: BlueprintRuntimeClient, entityId: string): Promise<void> {
+	const deadline = Date.now() + 5000
+	while (Date.now() < deadline) {
+		const trigger = (await client.events()).find((event) => event.event_type === 'automation_triggered' && event.data.entity_id === entityId)
+		if (trigger) return
+		await settle(25)
+	}
+	throw new Error(`Timed out waiting for ${entityId} to be triggered`)
+}
+
+async function waitForAutomationToFinish(client: BlueprintRuntimeClient, entityId: string): Promise<void> {
+	await waitForAutomationTrigger(client, entityId)
+	await client.waitForActionToSettle([entityId])
+}
+
+async function expectNoAutomationTriggers(client: BlueprintRuntimeClient, entityId: string, options: StateHoldOptions = {}): Promise<void> {
+	if (options.forMs === undefined) {
+		await client.waitForActionToSettle([entityId])
+	} else {
+		await settle(options.forMs)
+	}
+	const trigger = (await client.events()).find((event) => event.event_type === 'automation_triggered' && event.data.entity_id === entityId)
+	if (trigger) {
+		throw new Error(`Unexpected automation trigger for ${entityId}`)
+	}
 }
 
 async function waitForLogMessage(client: BlueprintRuntimeClient, entityId: string, text: string): Promise<BlueprintServiceCall> {

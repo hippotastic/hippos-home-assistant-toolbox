@@ -109,9 +109,12 @@ function irrigationCalculationAutomations(): Automation[] {
 		use_blueprint: {
 			input: {
 				base_runtime_minutes: scenario.baseRuntimeMinutes,
+				maximum_runtime_minutes: scenario.maximumRuntimeMinutes,
 				max_temperature_of_last_24h_entity: scenario.sensors.temperature,
 				rainfall_percentage_of_last_24h_entity: scenario.sensors.rainfall,
+				...(scenario.withMoistureSensor ? { soil_moisture_entity: scenario.sensors.moisture } : {}),
 				status_helper_entity: scenario.entities.helper,
+				target_soil_moisture_percentage: scenario.targetMoisturePercentage,
 				valve_entity: scenario.entities.valve,
 				watering_interval_days: scenario.intervalDays,
 			},
@@ -129,6 +132,7 @@ function irrigationSchedulerAutomations(): Automation[] {
 			input: {
 				irrigation_start_time: scenario.startTime,
 				master_pump_entity: scenario.withPump ? scenario.entities.pump : [],
+				...(scenario.secondaryStartTime ? { secondary_irrigation_start_time: scenario.secondaryStartTime } : {}),
 				zone_status_helper_entities: scenario.entities.helpers,
 			},
 			path: 'hippotastic/irrigation_scheduler.yaml',
@@ -280,7 +284,7 @@ export function expectedFixtureStateEntityIds(): string[] {
 
 function initialFixtureStates(): Array<{ attributes: Record<string, unknown>; entity_id: string; state: string }> {
 	const irrigationSensors = [
-		...Object.values(IRRIGATION_CALCULATION_SCENARIOS).flatMap((scenario) => [scenario.sensors.rainfall, scenario.sensors.temperature]),
+		...Object.values(IRRIGATION_CALCULATION_SCENARIOS).flatMap((scenario) => [scenario.sensors.moisture, scenario.sensors.rainfall, scenario.sensors.temperature]),
 		IRRIGATION_END_TO_END.sensors.rainfall,
 		IRRIGATION_END_TO_END.sensors.temperature,
 	]

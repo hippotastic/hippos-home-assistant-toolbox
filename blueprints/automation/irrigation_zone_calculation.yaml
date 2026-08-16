@@ -1,8 +1,10 @@
 blueprint:
   name: Hippo's Irrigation Zone Calculation
-  description: >-
-    Automatically calculate the required runtime for an irrigation zone.
-    (V2)
+  description: |-
+    Create one automation per irrigation zone. It calculates the total watering
+    demand for each planning cycle and stores it in a dedicated Text helper for
+    the Irrigation Scheduler. Create that helper with a maximum length of 255
+    characters before configuring this automation.
   domain: automation
   source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_zone_calculation.yaml
   author: Hippo
@@ -10,53 +12,87 @@ blueprint:
     min_version: 2024.6.0
   input:
     zone_section:
-      name: " 🌳 Irrigation zone settings"
+      name: " 🌱 Zone and storage"
       collapsed: false
       input:
         valve_entity:
-          name: Irrigation zone valve switch
+          name: Zone valve
+          description: The switch that opens and closes this irrigation zone.
           selector:
             entity:
               filter:
                 - domain: switch
 
         status_helper_entity:
-          name: Irrigation zone status helper
+          name: Zone state helper
           description: |-
-            A string helper for up to 254 characters. Required to store the runtime calculated by this automation and other information.
+            Select a dedicated Text helper with a maximum length of 255 characters.
+            Do not reuse it for another zone or edit its contents manually. Select
+            this same helper later in the Irrigation Scheduler.
           selector:
             entity:
               filter:
                 - domain: input_text
 
+    strategy_section:
+      name: " 💧 Watering strategy"
+      collapsed: false
+      input:
         base_runtime_minutes:
-          name: Base runtime
+          name: Reference runtime
           description: |-
-            The default runtime of this zone. Will be modified by factors based on rainfall and temperature during the last 24 hours.
+            The unadjusted total watering demand for one planning cycle, not the
+            duration of every individual run. Weather may reduce this value to 0
+            or increase it to 200%; low soil moisture may then double the
+            weather-adjusted result.
           default: 10
           selector:
             number:
               min: 1
               max: 60
+              step: 1
               unit_of_measurement: minutes
 
         watering_interval_days:
-          name: Watering interval (every X days)
+          name: Planning cycle length
           description: |-
-            The amount of days that must have passed since the last scheduled watering before this zone is allowed to run again.
+            The number of days available to deliver the calculated total demand.
+            For example, a three-day cycle may use the configured daily start times
+            on all three days. Unscheduled demand expires when the next cycle begins.
           default: 1
           selector:
             number:
               min: 1
               max: 7
+              step: 1
               unit_of_measurement: days
 
-    environment_section:
-      name: " 🌍 Environment information"
-      collapsed: true
+        maximum_runtime_minutes:
+          name: Maximum duration per run
+          description: |-
+            Limits one uninterrupted watering run; 0 means unlimited. This does not
+            cap the total demand. The scheduler distributes a longer demand across
+            later primary and secondary start times within the planning cycle.
+          default: 0
+          selector:
+            number:
+              min: 0
+              max: 240
+              step: 1
+              mode: box
+              unit_of_measurement: minutes
+
+    weather_section:
+      name: " 🌦️ Weather sensors — required"
+      collapsed: false
       input:
         rainfall_percentage_of_last_24h_entity:
-          name: Rainfall percentage of the last 24h statistics sensor
+          name: Rain duration percentage — last 24 hours
+          description: |-
+            Select a History Statistics sensor reporting the percentage of the last
+            24 hours during which rain was detected, from 0 to 100. This is not
+            precipitation in millimetres. About 30 minutes of detected rain suppresses
+            watering completely. An unavailable sensor is treated as no rain.
           selector:
             entity:
               filter:
@@ -64,12 +100,46 @@ blueprint:
                     - sensor
 
         max_temperature_of_last_24h_entity:
-          name: Maximum temperature of the last 24h statistics sensor
+          name: Maximum temperature — last 24 hours
+          description: |-
+            Select a sensor reporting degrees Celsius. Below 12 °C watering is
+            disabled. From 25 to 35 °C the temperature adjustment increases
+            progressively, up to 200% of the reference runtime — a maximum increase
+            of 100%. An unavailable sensor is treated as 20 °C.
           selector:
             entity:
               filter:
                 - domain:
-                    - sensor
+                  - sensor
+
+    moisture_section:
+      name: " 🌡️ Soil moisture — optional"
+      collapsed: true
+      input:
+        soil_moisture_entity:
+          name: Soil moisture sensor
+          description: |-
+            An optional sensor reporting a numeric value from 0 to 100%. If it is
+            unavailable, no soil-moisture adjustment is applied.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+
+        target_soil_moisture_percentage:
+          name: Target soil moisture
+          description: |-
+            Used only when a soil-moisture sensor is selected. At or above the target,
+            soil moisture does not reduce watering. Ten percentage points below the
+            target add 50%; 20 or more add the maximum increase of 100%.
+          default: 50
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: "%"
 
 trigger_variables:
   # Configuration inputs
@@ -77,8 +147,11 @@ trigger_variables:
   status_helper_entity: !input status_helper_entity
   base_runtime_minutes: !input base_runtime_minutes
   watering_interval_days: !input watering_interval_days
+  maximum_runtime_minutes: !input maximum_runtime_minutes
   rainfall_percentage_of_last_24h_entity: !input rainfall_percentage_of_last_24h_entity
   max_temperature_of_last_24h_entity: !input max_temperature_of_last_24h_entity
+  soil_moisture_entity: !input soil_moisture_entity
+  target_soil_moisture_percentage: !input target_soil_moisture_percentage
 
 triggers:
   # The automation was enabled or any settings were changed
@@ -102,7 +175,14 @@ variables:
   rain_factor: '{{ ([0, 1 - rain_minutes / 30] | max) | round(2) }}'
   heat_factor: '{{ (0.7 + ([1, ([0, (max_temperature - 25) / 10] | max)] | min) * 1.3) | round(2) }}'
   cold_factor: '{{ iif(max_temperature < 12, 0, 1) }}'
-  combined_factor: '{{ (rain_factor * heat_factor * cold_factor) | round(2) }}'
+  soil_moisture: >-
+    {{
+      states(soil_moisture_entity) | float(default=target_soil_moisture_percentage)
+      if soil_moisture_entity else target_soil_moisture_percentage
+    }}
+  moisture_deficit: '{{ [0, target_soil_moisture_percentage - soil_moisture] | max }}'
+  moisture_factor: '{{ 1 + ([1, moisture_deficit / 20] | min) }}'
+  combined_factor: '{{ (rain_factor * heat_factor * cold_factor * moisture_factor) | round(2) }}'
   runtime_minutes: '{{ (base_runtime_minutes * combined_factor) | round(0, "ceil") }}'
   # Get current value of status helper
   status: >-
@@ -116,32 +196,40 @@ actions:
       {{
         status.get("valve") != valve_entity or
         status.get("interval") != watering_interval_days or
-        status.get("runtime") != runtime_minutes
+        status.get("runtime") != runtime_minutes or
+        status.get("max_runtime", 0) != maximum_runtime_minutes
       }}
   # Explain the changed watering requirement in the valve's logbook.
   - action: logbook.log
     data:
       name: Hippo's Irrigation Zone Calculation
       message: >-
-        Updated watering requirement to {{ runtime_minutes }} minutes every
-        {{ watering_interval_days }} day{{ iif(watering_interval_days == 1, "", "s") }}.
-        The {{ base_runtime_minutes }} minute
-        base runtime was adjusted for {{ rainfall_pct }}%
-        rainfall and a maximum temperature of
-        {{ max_temperature }} degrees Celsius.
+        Calculated {{ runtime_minutes }} minutes for each
+        {{ watering_interval_days }}-day planning cycle. Reference runtime:
+        {{ base_runtime_minutes }} minutes; rain duration: {{ rainfall_pct }}%;
+        maximum temperature: {{ max_temperature }} °C.
+        {%- if soil_moisture_entity %}
+          Soil moisture: {{ soil_moisture }}%; target:
+          {{ target_soil_moisture_percentage }}%; resulting increase:
+          {{ ((moisture_factor - 1) * 100) | round(0) }}%.
+        {%- endif %}
       entity_id: '{{ valve_entity }}'
       domain: switch
-  # Update helper
+  # Keep the shared helper within its known schema before updating calculation fields.
   - action: input_text.set_value
     target:
       entity_id: '{{ status_helper_entity }}'
     data:
       value: >-
-        {{
-          dict(
-            status,
-            valve=valve_entity,
-            interval=watering_interval_days,
-            runtime=runtime_minutes
-          ) | to_json
-        }}
+        {%- set status = dict(status | dictsort | selectattr("0", "in",
+          ["valve", "interval", "runtime", "max_runtime", "last_end",
+            "cycle", "watered", "slot", "next"]) | list) %}
+        {%- set status = dict(status, valve=valve_entity,
+          interval=watering_interval_days, runtime=runtime_minutes) %}
+        {%- if maximum_runtime_minutes > 0 %}
+          {%- set status = dict(status, max_runtime=maximum_runtime_minutes) %}
+        {%- else %}
+          {%- set status = status | dictsort | rejectattr("0", "eq", "max_runtime") | list %}
+          {%- set status = dict(status) %}
+        {%- endif %}
+        {{ status | to_json }}

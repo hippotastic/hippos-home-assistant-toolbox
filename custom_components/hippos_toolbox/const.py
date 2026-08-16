@@ -10,6 +10,7 @@ MANAGED_DIRECTORY = "hippotastic"
 ADOPTABLE_BLUEPRINT_DIRECTORIES = ("hippo",)
 PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.UPDATE]
 UPDATE_INTERVAL = timedelta(days=1)
+DEVELOPMENT_UPDATE_INTERVAL = timedelta(hours=2)
 
 GITHUB_REPOSITORY = "hippotastic/hippos-home-assistant-toolbox"
 GITHUB_API_ROOT = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"

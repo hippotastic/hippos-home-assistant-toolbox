@@ -1,9 +1,13 @@
 type IrrigationCalculationScenarioOptions = {
 	baseRuntimeMinutes?: number
 	intervalDays?: number
+	maximumRuntimeMinutes?: number
+	targetMoisturePercentage?: number
+	withMoistureSensor?: boolean
 }
 
 type IrrigationSchedulerScenarioOptions = {
+	secondaryStartTime?: string
 	startTime?: string
 	withPump?: boolean
 	zoneCount?: number
@@ -23,10 +27,14 @@ function irrigationCalculationScenario(id: string, options: IrrigationCalculatio
 		},
 		id,
 		intervalDays: options.intervalDays ?? 1,
+		maximumRuntimeMinutes: options.maximumRuntimeMinutes ?? 0,
 		sensors: {
+			moisture: `sensor.${prefix}_moisture`,
 			rainfall: `sensor.${prefix}_rainfall`,
 			temperature: `sensor.${prefix}_temperature`,
 		},
+		targetMoisturePercentage: options.targetMoisturePercentage ?? 50,
+		withMoistureSensor: options.withMoistureSensor ?? false,
 	}
 }
 
@@ -41,6 +49,7 @@ function irrigationSchedulerScenario(id: string, options: IrrigationSchedulerSce
 			valves: Array.from({ length: zoneCount }, (_, index) => `switch.${prefix}_valve_${index + 1}`),
 		},
 		id,
+		secondaryStartTime: options.secondaryStartTime,
 		startTime: options.startTime ?? '04:37:00',
 		withPump: options.withPump ?? false,
 		zoneCount,
@@ -51,6 +60,7 @@ export const IRRIGATION_CALCULATION_SCENARIOS = {
 	emptyHelper: irrigationCalculationScenario('empty_helper'),
 	fallback: irrigationCalculationScenario('fallback'),
 	formula: irrigationCalculationScenario('formula'),
+	moisture: irrigationCalculationScenario('moisture', { maximumRuntimeMinutes: 60, targetMoisturePercentage: 60, withMoistureSensor: true }),
 	noOp: irrigationCalculationScenario('no_op'),
 	reconcile: irrigationCalculationScenario('reconcile'),
 } as const
@@ -63,6 +73,7 @@ export const IRRIGATION_SCHEDULER_SCENARIOS = {
 	invalid: irrigationSchedulerScenario('invalid', { zoneCount: 4 }),
 	outsideWindow: irrigationSchedulerScenario('outside_window', { withPump: true, zoneCount: 1 }),
 	planning: irrigationSchedulerScenario('planning', { zoneCount: 3 }),
+	splitCycle: irrigationSchedulerScenario('split_cycle', { secondaryStartTime: '08:37:00', zoneCount: 2 }),
 	recentWindow: irrigationSchedulerScenario('recent_window', { withPump: true, zoneCount: 1 }),
 	startup: irrigationSchedulerScenario('startup', { zoneCount: 1 }),
 	timeTrigger: irrigationSchedulerScenario('time_trigger', { startTime: '04:38:00', zoneCount: 2 }),

@@ -92,17 +92,54 @@ Source: [blueprints/automation/cover_automation.yaml](https://github.com/hippota
 
 Source: [blueprints/automation/exponential_moving_average.yaml](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/exponential_moving_average.yaml)
 
+### Hippo's Irrigation Zone Calculation
+
+[![Open your Home Assistant instance and import this blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Firrigation_zone_calculation.yaml)
+
+Source: [blueprints/automation/irrigation_zone_calculation.yaml](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_zone_calculation.yaml)
+
 ### Hippo's Irrigation Scheduler
 
 [![Open your Home Assistant instance and import this blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Firrigation_scheduler.yaml)
 
 Source: [blueprints/automation/irrigation_scheduler.yaml](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_scheduler.yaml)
 
-### Hippo's Irrigation Zone Calculation
+#### Irrigation quick start
 
-[![Open your Home Assistant instance and import this blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Firrigation_zone_calculation.yaml)
+The irrigation blueprints work together: one Zone Calculation automation
+publishes the demand for each zone, and one shared Scheduler executes those
+demands in sequence.
 
-Source: [blueprints/automation/irrigation_zone_calculation.yaml](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_zone_calculation.yaml)
+1. Under **Settings > Devices & services > Helpers**, create one dedicated
+   **Text** helper per zone and set its maximum length to **255** characters.
+2. Create one **Irrigation Zone Calculation** automation per valve. Assign a
+   different helper to every zone; do not edit or reuse these helpers manually.
+3. Select History Statistics sensors for rain duration and maximum temperature.
+   The rain sensor must report the percentage of the last 24 hours during which
+   rain was detected, not precipitation in millimetres. Temperature must be in
+   degrees Celsius.
+4. Optionally select a soil-moisture sensor reporting 0–100%. Moisture below the
+   target increases demand by up to 100%; moisture at or above the target does
+   not reduce it. An unavailable moisture sensor applies no adjustment.
+5. Create one **Irrigation Scheduler** automation. Select every zone helper
+   exactly once and arrange them in the desired watering order. Zones run one at
+   a time.
+6. Configure the primary daily start time and, if limited runs may need another
+   opportunity, an additional daily start time. A time earlier than the primary
+   time means the following morning.
+
+The calculated runtime is the total demand for one planning cycle, not the
+duration of every run. A maximum duration per run splits that demand without
+limiting its total. For example, 110 minutes of demand with a 60-minute limit,
+a primary time of 22:00, and an additional time of 08:00 produces a 60-minute
+run at 22:00 followed by a 50-minute run the next morning.
+
+For cycles longer than one day, unused primary and additional start times on
+following days remain available until the next cycle begins. Any demand that
+still cannot be scheduled expires at that boundary. Recalculation keeps
+completed runs, subtracts their cumulative duration from the new demand, and
+replans only future runs. A run that has already started always completes with
+its originally scheduled duration.
 
 ### Hippo's Sensor-based State Machine
 
