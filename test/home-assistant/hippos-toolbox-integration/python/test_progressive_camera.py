@@ -453,7 +453,21 @@ class ProgressiveCameraOverlayAssetTests(unittest.TestCase):
         with PillowImage.open(asset) as image:
             self.assertEqual(image.mode, "RGBA")
             self.assertEqual(image.size, (512, 512))
-            self.assertEqual(image.getchannel("A").getextrema(), (0, 255))
+            alpha = image.getchannel("A")
+            self.assertEqual(alpha.getextrema(), (0, 255))
+
+            # A scaled SVG blur once reached the asset edges and was clipped into
+            # a faint rectangle that became visible over bright camera frames.
+            meaningful_alpha = alpha.point(
+                lambda value: 255 if value > 8 else 0
+            )
+            bounds = meaningful_alpha.getbbox()
+            self.assertIsNotNone(bounds)
+            left, top, right, bottom = bounds
+            self.assertGreater(left, 0)
+            self.assertGreater(top, 0)
+            self.assertLess(right, image.width)
+            self.assertLess(bottom, image.height)
 
 
 if __name__ == "__main__":
