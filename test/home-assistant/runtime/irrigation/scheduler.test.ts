@@ -68,14 +68,14 @@ describe("Hippo's Irrigation Scheduler", () => {
 				// At the first planned end, expect watering to continue with the second zone
 				await expectValveToBecome(1, 'on', { withinMs: 5000 })
 				await expectValveToBecome(0, 'off')
-				await waitForZoneHelper(0, (status) => typeof status.last_end === 'string')
+				await waitForZoneHelper(0, (status) => typeof status.last_end === 'number')
 				// Until the second planned end, expect the second zone to remain on
 				await expectValveToBecome(1, 'on', { withinMs: 0 })
 
 				// At the final planned end, expect both zones to be off
 				// and the valve calls to preserve their watering order
 				await expectValveToBecome(1, 'off', { withinMs: 5000 })
-				await waitForZoneHelper(1, (status) => typeof status.last_end === 'string')
+				await waitForZoneHelper(1, (status) => typeof status.last_end === 'number')
 				await waitForValveLog(1, 'Remaining watering demand: 1 minute')
 				expect(await irrigationCalls()).toEqual([
 					{ service: 'turn_on', target: 'valve:0' },
@@ -127,9 +127,9 @@ describe("Hippo's Irrigation Scheduler", () => {
 			expect(second.custom).toBeUndefined()
 			expect(first.next?.[1]).toBe(120)
 			expect(second.next?.[1]).toBe(60)
-			expect(Date.parse(second.next![0])).toBe(Date.parse(first.next![0]) + first.next![1] * 1000)
+			expect(timestampMilliseconds(second.next![0])).toBe(timestampMilliseconds(first.next![0]) + first.next![1] * 1000)
 			expect(zero.custom).toBeUndefined()
-			expect(typeof zero.cycle).toBe('string')
+			expect(typeof zero.cycle).toBe('number')
 			expect(zero).toMatchObject({ interval: 1, runtime: 0, slot: 0, valve: entities.valves[2], watered: 0 })
 
 			// Successful internal planning stays silent; calculation, execution, and
@@ -153,32 +153,72 @@ describe("Hippo's Irrigation Scheduler", () => {
 			await startSchedulers()
 			for (const zoneIndex of [0, 1]) {
 				const status = await waitForZoneHelper(zoneIndex, (value) => Array.isArray(value.next))
-				expect(Math.abs(Date.parse(status.next![0]) - expectedStarts[zoneIndex].getTime())).toBeLessThan(2000)
+				expect(Math.abs(timestampMilliseconds(status.next![0]) - expectedStarts[zoneIndex].getTime())).toBeLessThan(2000)
+			}
+		})
+	})
+
+	test('keeps following-day starts at the configured local time across daylight-saving changes', async () => {
+		const scenario = IRRIGATION_SCHEDULER_SCENARIOS.interval
+		const year = localParts(new Date()).year + 20
+		const [hour, minute, second] = scenario.startTime.split(':').map(Number)
+		const cycles = [zonedDate(year, 3, lastSundayOfMonth(year, 3) - 1, hour, minute, second), zonedDate(year, 10, lastSundayOfMonth(year, 10) - 1, hour, minute, second)]
+
+		await withSchedulerScenario(scenario, async ({ setZoneHelper, startSchedulers, waitForZoneHelper }) => {
+			for (const [zoneIndex, cycle] of cycles.entries()) {
+				await setZoneHelper(zoneIndex, {
+					cycle: cycle.toISOString(),
+					interval: 7,
+					runtime: 1,
+					slot: 2,
+					watered: 0,
+				})
+			}
+
+			await startSchedulers()
+			for (const [zoneIndex, cycle] of cycles.entries()) {
+				const status = await waitForZoneHelper(zoneIndex, (value) => Array.isArray(value.next))
+				const expectedStart = addLocalDays(cycle, 2)
+				expect(Math.abs(timestampMilliseconds(status.next![0]) - expectedStart.getTime())).toBeLessThan(2000)
 			}
 		})
 	})
 
 	test('distributes recalculated demand across cycle slots and explains expired demand', async () => {
-		await withSchedulerScenario(IRRIGATION_SCHEDULER_SCENARIOS.splitCycle, async ({ client, setZoneHelper, startSchedulers, waitForValveLog, waitForZoneHelper }) => {
-			await setZoneHelper(0, { interval: 3, max_runtime: 60, runtime: 250 })
+		await withSchedulerScenario(IRRIGATION_SCHEDULER_SCENARIOS.splitCycle, async ({ client, entities, setZoneHelper, startSchedulers, waitForValveLog, waitForZoneHelper }) => {
+			await setZoneHelper(0, {
+				interval: 3,
+				last_end: Date.parse('2026-01-01T05:37:00.123456+01:00') / 1000,
+				m: 100,
+				max_runtime: 60,
+				r: 13,
+				runtime: 250,
+				s: 0,
+				t: 2,
+			})
 			await startSchedulers()
 
-			const primary = await waitForZoneHelper(0, (status) => status.next?.[1] === 3600 && status.next?.[2] === 0)
+			const primary = await waitForZoneHelper(0, (status) => status.next?.[1] === 3600 && status.slot === 0)
 			expect(primary.watered).toBe(0)
+			expect(primary.next).toHaveLength(2)
+			expect(typeof primary.cycle).toBe('number')
+			expect(typeof primary.last_end).toBe('number')
+			expect(typeof primary.next?.[0]).toBe('number')
+			expect((await client.getState(entities.helpers[0]))!.state.length).toBeLessThanOrEqual(255)
 
 			await setAutomation(client, IRRIGATION_SCHEDULER_SCENARIOS.splitCycle.entities.automation, false)
 			await setZoneHelper(0, { ...primary, next: undefined, slot: 1, watered: 3600 })
 			await setAutomation(client, IRRIGATION_SCHEDULER_SCENARIOS.splitCycle.entities.automation, true)
-			const secondary = await waitForZoneHelper(0, (status) => status.next?.[1] === 3600 && status.next?.[2] === 1)
-			expect(Date.parse(secondary.next![0]) - Date.parse(secondary.cycle!)).toBe(4 * 60 * 60 * 1000)
+			const secondary = await waitForZoneHelper(0, (status) => status.next?.[1] === 3600 && status.slot === 1)
+			expect(timestampMilliseconds(secondary.next![0]) - timestampMilliseconds(secondary.cycle!)).toBe(4 * 60 * 60 * 1000)
 
 			await setAutomation(client, IRRIGATION_SCHEDULER_SCENARIOS.splitCycle.entities.automation, false)
 			await setZoneHelper(0, { ...secondary, next: undefined, runtime: 150, slot: 2, watered: 7200 })
 			await setAutomation(client, IRRIGATION_SCHEDULER_SCENARIOS.splitCycle.entities.automation, true)
-			const reduced = await waitForZoneHelper(0, (status) => status.next?.[1] === 1800 && status.next?.[2] === 2)
+			const reduced = await waitForZoneHelper(0, (status) => status.next?.[1] === 1800 && status.slot === 2)
 
 			await setZoneHelper(0, { ...reduced, runtime: 250 })
-			const increased = await waitForZoneHelper(0, (status) => status.next?.[1] === 3600 && status.next?.[2] === 2)
+			const increased = await waitForZoneHelper(0, (status) => status.next?.[1] === 3600 && status.slot === 2)
 			expect(increased.watered).toBe(7200)
 
 			await setAutomation(client, IRRIGATION_SCHEDULER_SCENARIOS.splitCycle.entities.automation, false)
@@ -197,7 +237,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 				await setZoneHelper(1, {
 					cycle: relativeTime({ minutes: -1 }),
 					interval: 3,
-					next: [runStart, 1.2, 0],
+					next: [runStart, 1.2, 99],
 					runtime: 2,
 					slot: 0,
 					watered: 0,
@@ -275,7 +315,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 				await startSchedulers()
 				await expectValveToBecome(0, 'on')
 				await expectValveToBecome(1, 'off')
-				await waitForZoneHelper(1, (status) => typeof status.last_end === 'string')
+				await waitForZoneHelper(1, (status) => typeof status.last_end === 'number')
 
 				// A follow-up reconciliation may repeat the idempotent zone start
 				expect((await irrigationCalls()).slice(0, 3)).toEqual([
@@ -349,7 +389,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 				// expect a direct handoff without waiting for the safety stop
 				await expectValveToBecome(1, 'on', { withinMs: 5000 })
 				await expectValveToBecome(0, 'off')
-				await waitForZoneHelper(0, (status) => typeof status.last_end === 'string')
+				await waitForZoneHelper(0, (status) => typeof status.last_end === 'number')
 
 				// If the handoff succeeds, expect a completion log without an automatic-stop warning
 				const logCalls = await client.serviceCalls({ domain: 'logbook', service: 'log' })
@@ -373,7 +413,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 				// expect the scheduler not to create another plan
 				await setZoneHelper(0, {
 					...status,
-					next: [new Date(Date.parse(status.next![0]) + 60000).toISOString(), status.next![1], status.next![2]],
+					next: [new Date(timestampMilliseconds(status.next![0]) + 60000).toISOString(), status.next![1]],
 				})
 				// The test copy settles helper triggers for 100 ms,
 				// so expect no scheduling update throughout that delayed trigger window
@@ -382,7 +422,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 				// The calculation blueprint records sliding-window rain observations even
 				// when rounded demand is unchanged; that internal-only field stays silent.
 				await prepareNextAction()
-				await setZoneHelper(0, { ...status, r: 12 })
+				await setZoneHelper(0, { ...status, m: 45, r: 12, s: 3, t: 0.7 })
 				await expectNoSchedulingUpdates({ forMs: 150 })
 
 				// If a material zone value changes, expect the scheduler to replan
@@ -451,6 +491,15 @@ function addLocalDays(value: Date, days: number): Date {
 	const parts = localParts(value)
 	const calendarDate = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + days, parts.hour, parts.minute, parts.second))
 	return zonedDate(calendarDate.getUTCFullYear(), calendarDate.getUTCMonth() + 1, calendarDate.getUTCDate(), parts.hour, parts.minute, parts.second)
+}
+
+function timestampMilliseconds(value: number | string): number {
+	return typeof value === 'number' ? value * 1000 : Date.parse(value)
+}
+
+function lastSundayOfMonth(year: number, month: number): number {
+	const lastDay = new Date(Date.UTC(year, month, 0))
+	return lastDay.getUTCDate() - lastDay.getUTCDay()
 }
 
 function zonedDate(year: number, month: number, day: number, hour: number, minute: number, second: number): Date {

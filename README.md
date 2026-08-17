@@ -67,31 +67,9 @@ The renderer is generic. Optional positional arguments select another SVG, outpu
 pnpm camera-overlay:render -- path/to/icon.svg path/to/icon.png 512
 ```
 
-## About the Irrigation Blueprints
+## Irrigation Blueprints
 
-The two irrigation blueprints work together:
-
-- For each zone, an individual **Irrigation Zone Calculation** automation calculates the zone's watering demand during the current watering interval.
-- A shared **Irrigation Scheduler** automation executes those demands in sequence for all zones it is configured to manage.
-
-### Required Configuration
-
-1. Under **Settings > Devices & services > Helpers**, create one dedicated **Text** helper per zone and set its maximum length to **255** characters.
-2. Create one **Irrigation Zone Calculation** automation per valve. Assign a different helper to every zone; do not edit or reuse these helpers manually.
-3. Select a History Statistics sensor for rain duration and a sensor reporting the maximum temperature of the last 24 hours. The rain sensor must report the percentage of the last 24 hours during which rain was detected, not precipitation in millimetres. Temperature must be in degrees Celsius.
-4. Optionally select a soil-moisture sensor reporting 0–100%. Moisture below the target increases demand by up to 100%; moisture at or above the target does not reduce it. An unavailable moisture sensor applies no adjustment.
-5. Create one **Irrigation Scheduler** automation. Select every zone helper exactly once and arrange them in the desired watering order. Zones run one at a time.
-6. Configure the primary daily start time and, if limited runs may need another opportunity, an additional daily start time. A time earlier than the primary time means the following morning.
-
-### How Scheduling Works
-
-Each zone calculates its watering demand in minutes at the beginning of the current watering interval, based on the configured default duration, rain, temperature, and soil moisture. Temperature and soil moisture then remain fixed for that interval. Shortly before later primary or secondary slots, only a positive change in the credited rain duration reduces the remaining demand; a falling 24-hour sliding-window value never adds demand back.
-
-The scheduler then plans runs for all zones in the order they were selected. It always attempts to satisfy each zone's watering demand in full. If an optional maximum duration per run is configured for a zone, the scheduler splits its demand into multiple runs, each with a duration not exceeding the limit.
-
-The valve log records rounded demand changes, actual starts, completions, remaining demand, and exceptional scheduling failures. Internal schedule adjustments that do not change the rounded demand remain silent.
-
-The scheduler supports a primary and an additional daily start time. It first schedules runs at the primary time. If a zone's watering demand cannot be fully satisfied at that primary time, it attempts to schedule the remaining demand at the additional time. If that is also insufficient, the remaining demand can also be carried over to the next days, until the next watering interval begins. Any demand that still cannot be scheduled expires at that boundary.
+Setup, behavior, formulas, triggers, scheduling rules, and log examples are documented in [Irrigation Blueprints](IRRIGATION.md).
 
 ## Manual Installation
 

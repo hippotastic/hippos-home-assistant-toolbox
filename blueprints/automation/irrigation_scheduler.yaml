@@ -126,9 +126,9 @@ condition:
         {%- set old_status = old_status if old_status is mapping else {} %}
         {%- set new_status = new_status if new_status is mapping else {} %}
         {%- set old_status = old_status | dictsort |
-          rejectattr("0", "eq", "next") | rejectattr("0", "eq", "r") | list %}
+          rejectattr("0", "in", ["next", "m", "r", "s", "t"]) | list %}
         {%- set new_status = new_status | dictsort |
-          rejectattr("0", "eq", "next") | rejectattr("0", "eq", "r") | list %}
+          rejectattr("0", "in", ["next", "m", "r", "s", "t"]) | list %}
         {{ dict(old_status) != dict(new_status) }}
       {%- endif %}
 
@@ -146,7 +146,10 @@ variables:
     - watered
     - slot
     - next
+    - m
     - r
+    - s
+    - t
   trigger_id: '{{ trigger.id | default("") }}'
   is_slot_preparation: >-
     {{ trigger_id in ["trigger_primary_slot_preparing", "trigger_secondary_slot_preparing"] }}
@@ -180,7 +183,7 @@ variables:
         {#- Accept legacy schedules until the first compact schedule is written. #}
         {%- if not zone.get("next") and zone.get("next_start") and zone.get("next_end") %}
           {%- set duration = (zone.next_end | as_datetime - zone.next_start | as_datetime).total_seconds() | round(0, "ceil") | int %}
-          {%- set zone = dict(zone, next=[zone.next_start, duration, 0]) %}
+          {%- set zone = dict(zone, next=[zone.next_start, duration]) %}
         {%- endif %}
         {%- set zone = dict(zone, helper_entity=zone_helper, helper_index=loop.index0) %}
         {%- set ns.zones = ns.zones + [zone] %}
@@ -281,7 +284,16 @@ actions:
                       {%- set zone = zone if zone is mapping else {} %}
                       {%- set zone = dict(zone | dictsort |
                         selectattr("0", "in", zone_status_properties) | list) %}
-                      {{ dict(zone, last_end=now().isoformat()) | to_json }}
+                      {%- if zone.get("cycle") %}
+                        {%- set zone = dict(zone,
+                          cycle=(zone.cycle | as_datetime | as_timestamp | int)) %}
+                      {%- endif %}
+                      {%- set next_run = zone.get("next") %}
+                      {%- if next_run is sequence and next_run | count >= 2 %}
+                        {%- set zone = dict(zone, next=[
+                          next_run[0] | as_datetime | as_timestamp | int, next_run[1]]) %}
+                      {%- endif %}
+                      {{ dict(zone, last_end=(now() | as_timestamp | int)) | to_json }}
 
   - if:
       - condition: template
@@ -347,12 +359,13 @@ actions:
             {%- if remaining_display > 0 %}
               {%- set ns.message = ns.message ~ " Remaining watering demand: " ~
                 remaining_display ~ " minute" ~ iif(remaining_display == 1, "", "s") ~ "." %}
-              {%- set next_slot = currently_scheduled_zone.next[2] + 1 %}
+              {%- set next_slot = (currently_scheduled_zone.get("slot", 0) | int) + 1 %}
               {%- set next_day = (next_slot / slots_per_day) | int %}
               {%- set next_is_secondary = slots_per_day == 2 and next_slot % 2 == 1 %}
-              {%- set next_start = currently_scheduled_zone.cycle | as_datetime +
+              {%- set cycle = currently_scheduled_zone.cycle | as_datetime | as_local %}
+              {%- set next_start = cycle +
                 timedelta(days=next_day, seconds=iif(next_is_secondary, secondary_offset_seconds, 0)) %}
-              {%- set cycle_end = currently_scheduled_zone.cycle | as_datetime +
+              {%- set cycle_end = cycle +
                 timedelta(days=[1, currently_scheduled_zone.interval | int] | max) %}
               {%- if next_start < cycle_end %}
                 {%- set ns.message = ns.message ~ " Next run: " ~
@@ -372,8 +385,13 @@ actions:
             {%- set completed_run = zone.get("next", currently_scheduled_zone.next) %}
             {%- set zone = dict(zone | dictsort |
               selectattr("0", "in", zone_status_properties) | list) %}
-            {%- set zone = dict(zone, last_end=now().isoformat(),
-              watered=zone.get("watered", 0) + completed_run[1], slot=completed_run[2] + 1) %}
+            {%- if zone.get("cycle") %}
+              {%- set zone = dict(zone,
+                cycle=(zone.cycle | as_datetime | as_timestamp | int)) %}
+            {%- endif %}
+            {%- set completed_slot = currently_scheduled_zone.get("slot", 0) | int %}
+            {%- set zone = dict(zone, last_end=(now() | as_timestamp | int),
+              watered=zone.get("watered", 0) + completed_run[1], slot=completed_slot + 1) %}
             {%- set zone = zone | dictsort | rejectattr("0", "eq", "next") | list %}
             {{ dict(zone) | to_json }}
       - delay:
@@ -399,28 +417,31 @@ actions:
     then:
       - variables:
           scheduled_zones: >-
-            {%- set ns = namespace(zones=[], scheduled=[], cursor=planning_time | as_datetime) %}
+            {%- set planning_time = planning_time | as_datetime | as_local %}
+            {%- set ns = namespace(zones=[], scheduled=[], cursor=planning_time) %}
             {#- Establish or advance each zone's interval anchor. The anchor, not
-                the most recent partial run, determines the next interval. #}
+                the most recent partial run, determines the next interval.
+                Stored timestamps have only their historical UTC offset, so restore
+                the local timezone before calendar-day arithmetic to preserve wall time. #}
             {%- for zone in all_zones %}
               {%- set interval = [1, zone.get("interval", 1) | int] | max %}
               {%- set cycle = zone.get("cycle") %}
               {%- set reset_cycle = false %}
               {%- if cycle %}
-                {%- set cycle = cycle | as_datetime %}
-                {%- if planning_time | as_datetime >= cycle + timedelta(days=interval) %}
-                  {%- set elapsed_cycles = (((planning_time | as_datetime) - cycle).total_seconds() / (interval * 86400)) | int %}
+                {%- set cycle = cycle | as_datetime | as_local %}
+                {%- if planning_time >= cycle + timedelta(days=interval) %}
+                  {%- set elapsed_cycles = ((planning_time - cycle).total_seconds() / (interval * 86400)) | int %}
                   {%- set cycle = cycle + timedelta(days=elapsed_cycles * interval) %}
                   {%- set reset_cycle = true %}
                 {%- endif %}
               {%- else %}
                 {%- set cycle = today_at(irrigation_start_time) %}
-                {%- if cycle < planning_time | as_datetime %}
+                {%- if cycle < planning_time %}
                   {%- set cycle = cycle + timedelta(days=1) %}
                 {%- endif %}
                 {%- set last_end = zone.get("last_end") %}
                 {%- if last_end %}
-                  {%- set last_end = last_end | as_datetime %}
+                  {%- set last_end = last_end | as_datetime | as_local %}
                   {%- set last_date = last_end.date() | as_datetime | as_local %}
                   {%- set last_cycle = last_date + irrigation_start_time | as_timedelta %}
                   {%- if last_cycle > last_end %}
@@ -437,7 +458,7 @@ actions:
               {%- set slot = iif(reset_cycle, 0, zone.get("slot", 0)) | int %}
               {%- set next_run = none if reset_cycle else zone.get("next") %}
               {%- set active_commitment = 0 %}
-              {%- if next_run is sequence and next_run | count >= 3 %}
+              {%- if next_run is sequence and next_run | count >= 2 %}
                 {%- set old_start = next_run[0] | as_datetime %}
                 {%- set old_end = old_start + timedelta(seconds=next_run[1]) %}
                 {%- if now() >= old_start and now() < old_end %}
@@ -450,7 +471,7 @@ actions:
               {%- set is_secondary = slots_per_day == 2 and slot % 2 == 1 %}
               {%- set slot_time = cycle + timedelta(days=day_index, seconds=iif(is_secondary, secondary_offset_seconds, 0)) %}
               {%- set cycle_end = cycle + timedelta(days=interval) %}
-              {%- set zone = dict(zone, cycle=cycle.isoformat(), watered=watered, slot=slot,
+              {%- set zone = dict(zone, cycle=(cycle | as_timestamp | int), watered=watered, slot=slot,
                 remaining=remaining, slot_time=slot_time.isoformat(), cycle_end=cycle_end.isoformat(),
                 active_commitment=active_commitment) %}
               {%- set ns.zones = ns.zones + [zone] %}
@@ -470,7 +491,7 @@ actions:
                 {%- set duration = zone.remaining if max_seconds <= 0 else [zone.remaining, max_seconds] | min %}
                 {%- set duration = [duration, (cycle_end - run_start).total_seconds()] | min | int %}
                 {%- if duration > 0 %}
-                  {%- set next_run = [run_start.isoformat(), duration, zone.slot] %}
+                  {%- set next_run = [run_start | as_timestamp | int, duration] %}
                   {%- set ns.cursor = run_start + timedelta(seconds=duration) %}
                   {%- set changed = zone.get("next") != next_run %}
                 {%- else %}
@@ -513,7 +534,12 @@ actions:
                   {%- set zone = zone if zone is mapping else {} %}
                   {%- set zone = dict(zone | dictsort |
                     selectattr("0", "in", zone_status_properties) | list) %}
-                  {%- set zone = zone | dictsort | rejectattr("0", "eq", "next") | list %}
+                  {%- set zone = dict(zone | dictsort |
+                    rejectattr("0", "eq", "next") | list) %}
+                  {%- if zone.get("last_end") %}
+                    {%- set zone = dict(zone,
+                      last_end=(zone.last_end | as_datetime | as_timestamp | int)) %}
+                  {%- endif %}
                   {%- set zone = dict(zone, cycle=repeat.item.cycle,
                     watered=repeat.item.watered, slot=repeat.item.slot) %}
                   {%- if repeat.item.next %}

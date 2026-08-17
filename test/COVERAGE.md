@@ -60,11 +60,14 @@ that remain stable across future implementations.
 | --------------------- | --------------------------------------------------------------------------------------------------- | ------------------------- |
 | Climate formula       | Cold suppresses watering; heat scales and caps runtime; rainfall reduces it; final minutes round up | `formula`                 |
 | Sensor fallbacks      | Invalid rainfall and temperature states use `0` and `20` respectively                               | `fallback`                |
-| Interval snapshot     | A new interval refreshes climate and soil while later slots keep those inputs frozen                 | `rainCredit`              |
+| Interval snapshot     | A new interval refreshes climate and soil, including across DST, while later slots keep the temperature factor frozen | `rainCredit`              |
 | Rain reconciliation   | Rising rain credit reduces demand; a falling sliding-window value only moves the comparison baseline | `rainCredit`              |
+| Soil reconciliation   | A new best soil reading removes only the dryness adjustment; drier or unavailable values add nothing | `soilResponse`            |
+| Soil snapshot timing  | Reloads reuse the accepted slot reading; legacy intervals are not reinterpreted during migration      | `soilResponse`            |
 | Invalid helper        | Malformed helper content becomes a valid status object                                              | `fallback`                |
 | Helper normalization  | Empty, malformed, and valid non-object JSON become a valid calculated status                        | `emptyHelper`, `fallback` |
-| Metadata preservation | Scheduler timestamps and unknown status properties survive recalculation                            | `fallback`                |
+| State serialization   | ISO and numeric timestamps are accepted; writes use integers, a two-value `next`, and remain within 255 characters | `fallback`, `splitCycle`  |
+| Metadata preservation | Known scheduler fields survive recalculation while unknown status properties are removed             | `fallback`                |
 | No-op writes          | An unchanged valve, interval, and runtime do not rewrite the helper                                 | `noOp`                    |
 | Reconciliation        | Re-enabling the automation recalculates values changed while it was disabled                        | `reconcile`               |
 | Valve logbook         | Runtime changes explain their climate inputs on the valve entity                                    | `emptyHelper`             |
@@ -75,15 +78,15 @@ that remain stable across future implementations.
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
 | Stable scheduling       | Positive runtimes are scheduled contiguously in helper order and serialize matching durations                       | `planning`                      |
 | Zero runtime            | Stale schedule fields are removed while unrelated status data remains                                               | `planning`                      |
-| Daily interval anchor   | `last_end` before or after the daily start selects the correct previous watering period                             | `interval`                      |
+| Daily interval anchor   | `last_end` selects the correct previous watering period; later starts retain their configured local time across DST | `interval`                      |
 | Invalid zones           | Malformed, non-object, and valveless helper values are ignored                                                      | `invalid`                       |
 | Cleared helper          | Manually clearing a configured helper triggers safe replanning rather than being mistaken for an internal update    | `emptyHelper`                   |
-| Scheduled execution     | The daily trigger runs two preplanned zones in order, keeping each active until its own `next_end`                  | `timeTrigger`                   |
+| Scheduled execution     | The daily trigger runs two preplanned zones in order, keeping each active for its planned duration                 | `timeTrigger`                   |
 | Pump and valve ordering | Competing valves stop before the pump starts, and the current valve starts after pump settling                      | `active`                        |
 | Exclusive control       | Stopped competing zones receive `last_end` only when their recorded completion is missing or stale                  | `active`                        |
 | Control window          | Recent watering is cleaned up; devices outside the 30-minute ownership window are left untouched                    | `recentWindow`, `outsideWindow` |
 | Natural handoff         | Completion records `last_end`, retriggers scheduling, stops the old valve, and starts the next due zone             | `handoff`                       |
-| Trigger filtering       | Schedule-only and rain-snapshot helper writes are ignored; material changes retrigger planning; invalid targets are excluded | `triggerFilter`                 |
+| Trigger filtering       | Schedule-only and observation-snapshot writes are ignored; material changes retrigger planning; invalid targets are excluded | `triggerFilter`                 |
 | Startup settling        | An unavailable valve delays processing by the configured startup settle time                                        | `startup`                       |
 | Component contract      | Calculated valve, interval, and runtime flow into a future scheduler plan without manually triggering the scheduler | `endToEnd`                      |
 | Valve logbook           | Rounded demand changes, watering transitions, remaining demand, and exceptional scheduling failures are recorded   | `planning`, `active`, `handoff` |

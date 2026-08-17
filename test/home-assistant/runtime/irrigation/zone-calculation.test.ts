@@ -72,8 +72,11 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 				await setAutomationEnabled(true)
 				await expectHelperToBecome({
 					interval: 2,
+					m: 60,
 					r: 14,
 					runtime: 46,
+					s: 0,
+					t: 2,
 					valve: entities.valve,
 				})
 
@@ -90,8 +93,11 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 				await setAutomationEnabled(true)
 				await expectHelperToBecome({
 					interval: 2,
+					m: 60,
 					r: 12,
 					runtime: 48,
+					s: 0,
+					t: 2,
 					valve: entities.valve,
 				})
 				const roundedLog = await waitForValveLog('Calculated 48 minutes of watering')
@@ -103,25 +109,29 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 	test('adds a bounded proportional soil-moisture increase and publishes the watering limit', async () => {
 		await withCalculationScenario(
 			IRRIGATION_CALCULATION_SCENARIOS.moisture,
-			async ({ entities, expectHelperToBecome, prepareNextAction, setAutomationEnabled, setMoisture, waitForValveLog }) => {
+			async ({ entities, expectHelperToBecome, prepareNextAction, setAutomationEnabled, setMoisture, setRawZoneHelper, waitForValveLog }) => {
 				const cases = [
-					{ expectedRuntime: 7, moisture: '60' },
-					{ expectedRuntime: 11, moisture: '50' },
-					{ expectedRuntime: 14, moisture: '40' },
-					{ expectedRuntime: 14, moisture: '0' },
-					{ expectedRuntime: 7, moisture: 'unavailable' },
+					{ expectedRuntime: 7, expectedSoilAdjustment: 0, expectedStoredMoisture: 60, moisture: '60' },
+					{ expectedRuntime: 11, expectedSoilAdjustment: 4, expectedStoredMoisture: 50, moisture: '50' },
+					{ expectedRuntime: 14, expectedSoilAdjustment: 7, expectedStoredMoisture: 40, moisture: '40' },
+					{ expectedRuntime: 14, expectedSoilAdjustment: 7, expectedStoredMoisture: 0, moisture: '0' },
+					{ expectedRuntime: 7, expectedSoilAdjustment: 0, expectedStoredMoisture: 60, moisture: 'unavailable' },
 				] as const
 
-				for (const { expectedRuntime, moisture } of cases) {
+				for (const { expectedRuntime, expectedSoilAdjustment, expectedStoredMoisture, moisture } of cases) {
 					await setAutomationEnabled(false)
 					await setMoisture(moisture)
+					await setRawZoneHelper({})
 					await prepareNextAction()
 					await setAutomationEnabled(true)
 					await expectHelperToBecome({
 						interval: 1,
 						max_runtime: 60,
+						m: expectedStoredMoisture,
 						r: 0,
 						runtime: expectedRuntime,
+						s: expectedSoilAdjustment,
+						t: 0.7,
 						valve: entities.valve,
 					})
 				}
@@ -132,51 +142,52 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 		)
 	})
 
-	test('repairs invalid input, uses sensor fallbacks, and filters the shared helper schema', async () => {
-		await withCalculationScenario(
-			IRRIGATION_CALCULATION_SCENARIOS.fallback,
-			async ({ entities, expectHelperToBecome, setAutomationEnabled, setClimate, setRawZoneHelper, setZoneHelper }) => {
-				await setRawZoneHelper('not valid JSON')
-				await setClimate({ rainfall: 'unavailable', temperature: 'unknown' })
+	test('repairs invalid input and uses sensor fallbacks', async () => {
+		await withCalculationScenario(IRRIGATION_CALCULATION_SCENARIOS.fallback, async ({ entities, expectHelperToBecome, setAutomationEnabled, setClimate, setRawZoneHelper }) => {
+			await setRawZoneHelper('not valid JSON')
+			await setClimate({ rainfall: 'unavailable', temperature: 'unknown' })
 
-				// If the helper contains invalid JSON and both climate sensors are unavailable,
-				// expect a fresh status calculated from the configured fallback values
-				await setAutomationEnabled(true)
-				await expectHelperToBecome({
-					interval: 1,
-					r: 0,
-					runtime: 7,
-					valve: entities.valve,
-				})
+			// If the helper contains invalid JSON and both climate sensors are unavailable,
+			// expect a fresh status calculated from the configured fallback values
+			await setAutomationEnabled(true)
+			await expectHelperToBecome({
+				interval: 1,
+				r: 0,
+				runtime: 7,
+				valve: entities.valve,
+			})
+		})
+	})
 
-				await setAutomationEnabled(false)
-				await setZoneHelper({
-					custom: 'drop me',
-					cycle: '2026-01-01T04:37:00+01:00',
-					interval: 1,
-					next: ['2026-01-01T08:37:00+01:00', 60, 1],
-					next_start: 'legacy',
-					runtime: 7,
-					slot: 1,
-					watered: 60,
-				})
-				await setClimate({ rainfall: '0', temperature: '30' })
+	test('normalizes legacy schedule timestamps while preserving shared state', async () => {
+		await withCalculationScenario(IRRIGATION_CALCULATION_SCENARIOS.fallback, async ({ entities, expectHelperToBecome, setAutomationEnabled, setClimate, setZoneHelper }) => {
+			await setZoneHelper({
+				custom: 'drop me',
+				cycle: '2026-01-01T04:37:00+01:00',
+				interval: 1,
+				last_end: '2026-01-01T05:37:00.123456+01:00',
+				next: ['2026-01-01T08:37:00+01:00', 60, 1],
+				runtime: 7,
+				slot: 1,
+				watered: 60,
+			})
+			await setClimate({ rainfall: '0', temperature: '30' })
 
-				// If a valid helper contains known scheduler state and unknown metadata,
-				// expect recalculation to retain only the shared schema while updating runtime
-				await setAutomationEnabled(true)
-				await expectHelperToBecome({
-					cycle: '2026-01-01T04:37:00+01:00',
-					interval: 1,
-					next: ['2026-01-01T08:37:00+01:00', 60, 1],
-					r: 0,
-					runtime: 14,
-					slot: 1,
-					valve: entities.valve,
-					watered: 60,
-				})
-			}
-		)
+			// Known scheduler state survives recalculation, while the next regular write
+			// converts ISO strings to integer timestamps and discards the legacy next slot.
+			await setAutomationEnabled(true)
+			await expectHelperToBecome({
+				cycle: Date.parse('2026-01-01T04:37:00+01:00') / 1000,
+				interval: 1,
+				last_end: Math.floor(Date.parse('2026-01-01T05:37:00.123456+01:00') / 1000),
+				next: [Date.parse('2026-01-01T08:37:00+01:00') / 1000, 60],
+				r: 0,
+				runtime: 14,
+				slot: 1,
+				valve: entities.valve,
+				watered: 60,
+			})
+		})
 	})
 
 	test('keeps an already-current status unchanged', async () => {
@@ -193,18 +204,18 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 	test('only applies positive rain-credit changes between slots', async () => {
 		await withCalculationScenario(
 			IRRIGATION_CALCULATION_SCENARIOS.rainCredit,
-			async ({ client, expectHelperToBecome, prepareNextAction, requestRainReconciliation, setAutomationEnabled, setClimate, setMoisture, waitForValveLog }) => {
+			async ({ client, expectHelperToBecome, prepareNextAction, requestSlotReconciliation, setAutomationEnabled, setClimate, setMoisture, waitForValveLog }) => {
 				await setClimate({ rainfall: '1.9', temperature: '41.6' })
 				await setMoisture('60')
 				await setAutomationEnabled(true)
-				await expectHelperToBecome((status) => status.runtime === 46 && status.r === 14)
+				await expectHelperToBecome((status) => status.runtime === 46 && status.m === 60 && status.r === 14 && status.s === 0 && status.t === 2)
 
-				// A later slot observes seven additional credited rain minutes. Changes
-				// to heat and soil are ignored because their interval snapshot is frozen.
+				// A later slot observes seven additional credited rain minutes. Colder
+				// weather and worsening soil cannot increase the frozen interval demand.
 				await setClimate({ rainfall: '2.9', temperature: '11' })
 				await setMoisture('0')
 				await prepareNextAction()
-				await requestRainReconciliation()
+				await requestSlotReconciliation()
 				await expectHelperToBecome((status) => status.runtime === 39 && status.r === 21)
 				const reducedLog = await waitForValveLog('Additional rain reduced watering demand from 46 to 39 minutes')
 				expect(String(reducedLog.serviceData.message)).toContain('Total rain credit: 21 minutes; previously observed: 14 minutes')
@@ -212,7 +223,7 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 				// A falling sliding-window value is stored silently and never increases demand.
 				await setClimate({ rainfall: '0.1', temperature: '35' })
 				await prepareNextAction()
-				await requestRainReconciliation()
+				await requestSlotReconciliation()
 				await expectHelperToBecome((status) => status.runtime === 39 && status.r === 1)
 				expect(await client.serviceCalls({ domain: 'logbook', service: 'log' })).toEqual([])
 
@@ -220,22 +231,105 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 				// rain even though it stays below the interval's original 14-minute credit.
 				await setClimate({ rainfall: '1.1', temperature: '20' })
 				await prepareNextAction()
-				await requestRainReconciliation()
+				await requestSlotReconciliation()
 				await expectHelperToBecome((status) => status.runtime === 32 && status.r === 8)
 			}
 		)
 	})
 
-	test('takes a fresh climate snapshot when a primary slot opens the next interval', async () => {
+	test('removes only the best observed soil-moisture adjustment before later slots', async () => {
+		await withCalculationScenario(
+			IRRIGATION_CALCULATION_SCENARIOS.soilResponse,
+			async ({
+				client,
+				expectHelperToBecome,
+				expectNoHelperChanges,
+				prepareNextAction,
+				requestSlotReconciliation,
+				setAutomationEnabled,
+				setClimate,
+				setMoisture,
+				setZoneHelper,
+				waitForValveLog,
+			}) => {
+				await setClimate({ rainfall: '1.9', temperature: '41.6' })
+				await setMoisture('35')
+				await setAutomationEnabled(true)
+				const initial = await expectHelperToBecome((status) => status.runtime === 91 && status.m === 35 && status.r === 14 && status.s === 45 && status.t === 2)
+				await setZoneHelper({
+					...initial,
+					next: [new Date(Date.now() + 120_000).toISOString(), 31 * 60, 1],
+					watered: 60 * 60,
+				})
+
+				// Reloading the automation while the live probe is saturated reuses the
+				// 35% slot snapshot and must not apply the mid-window sensor change.
+				await setAutomationEnabled(false)
+				await setMoisture('100')
+				await prepareNextAction()
+				await setAutomationEnabled(true)
+				await expectNoHelperChanges()
+
+				// An unavailable probe never looks like an improvement and cannot cancel demand.
+				await prepareNextAction()
+				await setMoisture('unavailable')
+				await requestSlotReconciliation()
+				await expectNoHelperChanges()
+
+				// A saturated pot removes the complete 45-minute dryness adjustment. The
+				// 60 completed minutes already exceed the resulting 46-minute total demand.
+				await prepareNextAction()
+				await setMoisture('100')
+				await requestSlotReconciliation()
+				await expectHelperToBecome((status) => status.runtime === 46 && status.m === 100 && status.s === 0 && status.t === 2)
+				const reducedLog = await waitForValveLog('Improved soil moisture reduced watering demand from 91 to 46 minutes')
+				expect(String(reducedLog.serviceData.message)).toContain('Soil adjustment decreased from 45 to 0 minutes (current: 100%, target: 50%).')
+				expect(String(reducedLog.serviceData.message)).toContain('is no longer needed')
+
+				// Later drying cannot restore demand, and returning to an already observed
+				// moisture level cannot credit the same response a second time.
+				await prepareNextAction()
+				await setMoisture('35')
+				await requestSlotReconciliation()
+				await expectNoHelperChanges()
+				expect(await client.serviceCalls({ domain: 'logbook', service: 'log' })).toEqual([])
+			}
+		)
+	})
+
+	test('does not reinterpret a legacy active interval during a blueprint reload', async () => {
+		await withCalculationScenario(
+			IRRIGATION_CALCULATION_SCENARIOS.soilResponse,
+			async ({ expectHelperToBecome, expectNoHelperChanges, prepareNextAction, requestSlotReconciliation, setAutomationEnabled, setClimate, setMoisture, setZoneHelper }) => {
+				await setClimate({ rainfall: '1.9', temperature: '41.6' })
+				await setMoisture('100')
+				await setZoneHelper({ interval: 2, r: 14, runtime: 91 })
+				await prepareNextAction()
+
+				// Without the original soil snapshot, a reload preserves the existing
+				// demand rather than treating the current 100% as an interval-start value.
+				await setAutomationEnabled(true)
+				await expectNoHelperChanges()
+
+				// The next real slot boundary initializes future comparisons without
+				// retroactively reducing this legacy interval's demand.
+				await requestSlotReconciliation()
+				await expectHelperToBecome((status) => status.runtime === 91 && status.m === 100 && status.r === 14 && status.s === 0 && status.t === 2)
+			}
+		)
+	})
+
+	test('takes a fresh climate snapshot when a new cycle starts across daylight-saving time', async () => {
 		await withCalculationScenario(
 			IRRIGATION_CALCULATION_SCENARIOS.rainCredit,
 			async ({ client, entities, expectHelperToBecome, setAutomationEnabled, setClimate, setMoisture, setZoneHelper }) => {
 				await setClimate({ rainfall: '1.9', temperature: '41.6' })
 				await setMoisture('60')
 				await setAutomationEnabled(true)
-				const initial = await expectHelperToBecome((status) => status.runtime === 46 && status.r === 14)
-				const nextCycle = new Date(Date.now() + 120_000).toISOString()
-				await setZoneHelper({ ...initial, cycle: nextCycle })
+				const initial = await expectHelperToBecome((status) => status.runtime === 46 && status.m === 60 && status.r === 14 && status.s === 0 && status.t === 2)
+				const previousCycle = '2026-03-28T04:37:00+01:00'
+				const nextCycle = '2026-03-30T04:37:00+02:00'
+				await setZoneHelper({ ...initial, cycle: previousCycle })
 
 				await setClimate({ rainfall: '2.9', temperature: '11' })
 				await setMoisture('0')
@@ -245,9 +339,9 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 					zone_status_helper_entities: [entities.helper],
 				})
 
-				// Cold weather disables demand completely, proving that interval-start
-				// preparation refreshes all inputs rather than applying only rain.
-				await expectHelperToBecome((status) => status.runtime === 0 && status.r === 21)
+				// Cold weather disables demand completely, proving that the same local
+				// start time opens a new cycle even when its UTC offset has changed.
+				await expectHelperToBecome((status) => status.runtime === 0 && status.m === 0 && status.r === 21 && status.s === 0 && status.t === 0)
 			}
 		)
 	})

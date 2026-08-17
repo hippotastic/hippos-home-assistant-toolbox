@@ -66,6 +66,7 @@ export const IRRIGATION_CALCULATION_SCENARIOS = {
 	noOp: irrigationCalculationScenario('no_op'),
 	rainCredit: irrigationCalculationScenario('rain_credit', { baseRuntimeMinutes: 30, intervalDays: 2, rainCreditPercentage: 50, withMoistureSensor: true }),
 	reconcile: irrigationCalculationScenario('reconcile'),
+	soilResponse: irrigationCalculationScenario('soil_response', { baseRuntimeMinutes: 30, intervalDays: 2, rainCreditPercentage: 50, withMoistureSensor: true }),
 } as const
 
 export const IRRIGATION_SCHEDULER_SCENARIOS = {

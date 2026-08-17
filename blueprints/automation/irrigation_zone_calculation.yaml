@@ -4,9 +4,10 @@ blueprint:
     Create one automation per irrigation zone. It calculates the total watering
     demand for each planning cycle and stores it in a dedicated Text helper for
     the Irrigation Scheduler. Temperature and soil moisture are sampled when a
-    cycle begins; before later slots, only additional rain can reduce the stored
-    demand. Create that helper with a maximum length of 255 characters before
-    configuring this automation.
+    cycle begins. Before later slots, additional rain and an improved soil
+    reading can reduce the stored demand without increasing it again. Create
+    that helper with a maximum length of 255 characters before configuring this
+    automation.
   domain: automation
   source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_zone_calculation.yaml
   author: Hippo
@@ -143,9 +144,11 @@ blueprint:
           name: Soil moisture sensor
           description: >-
             An optional sensor reporting a numeric value from 0 to 100%. If it is
-            unavailable, no soil-moisture adjustment is applied. The value is
-            sampled at the beginning of each planning cycle and after configuration
-            changes.
+            unavailable, no soil-moisture adjustment is applied. After the helper's
+            initial setup, a live reading is accepted only when a planning cycle
+            begins or shortly before a later slot; configuration changes reuse that
+            stored reading. An improvement may remove the original dryness
+            adjustment. A worse or unavailable reading never adds demand.
           default: []
           selector:
             entity:
@@ -205,26 +208,40 @@ variables:
   requested_slot_kind: >-
     {{ trigger.event.data.get("slot", "") if is_slot_request else "" }}
   requested_slot_start: >-
-    {{ trigger.event.data.get("start") | as_datetime if is_slot_request else none }}
+    {{ trigger.event.data.get("start") | as_datetime | as_local if is_slot_request else none }}
   # Get current value of status helper
   status: >-
     {%- set value = states(status_helper_entity) | from_json({}) %}
     {{ value if value is mapping else {} }}
   # A primary slot opens a new interval when it matches the stored anchor or
-  # reaches the next interval boundary. Later slots only reconcile rain.
+  # reaches the next interval boundary. Later slots only reconcile inputs that
+  # are allowed to reduce demand. Restore stored anchors to Home Assistant's
+  # local timezone before adding calendar days so daily times survive DST.
   is_interval_start: >-
     {{
       is_slot_request and requested_slot_kind == "primary" and (
         not status.get("cycle") or
-        (requested_slot_start | as_datetime) == (status.get("cycle") | as_datetime) or
-        (requested_slot_start | as_datetime) >= (status.get("cycle") | as_datetime) +
+        (requested_slot_start | as_datetime | as_local) == (status.get("cycle") | as_datetime | as_local) or
+        (requested_slot_start | as_datetime | as_local) >= (status.get("cycle") | as_datetime | as_local) +
           timedelta(days=[1, watering_interval_days | int] | max)
       )
     }}
-  is_rain_only_update: >-
+  is_slot_reconciliation: >-
     {{
       is_slot_request and not is_interval_start and
       status.get("runtime") is number and status.get("r") is number
+    }}
+  has_stored_soil_snapshot: >-
+    {{
+      status.get("m") is number and status.get("s") is number and
+      status.get("t") is number
+    }}
+  # Existing intervals created before soil snapshots were introduced cannot
+  # safely reconstruct their original soil adjustment during an automation reload.
+  is_soil_snapshot_migration: >-
+    {{
+      not is_slot_request and soil_moisture_entity and
+      status.get("runtime") is number and not has_stored_soil_snapshot
     }}
   # Perform zone runtime calculation
   rainfall_pct: '{{ states(rainfall_percentage_of_last_24h_entity) | float(default=0) }}'
@@ -233,10 +250,21 @@ variables:
   credited_rain_minutes: '{{ (rain_minutes * rain_credit_percentage / 100) | round(0, "floor") | int }}'
   heat_factor: '{{ (0.7 + ([1, ([0, (max_temperature - 25) / 10] | max)] | min) * 1.3) | round(2) }}'
   cold_factor: '{{ iif(max_temperature < 12, 0, 1) }}'
-  soil_moisture: >-
+  temperature_factor: '{{ (heat_factor * cold_factor) | round(2) }}'
+  has_valid_soil_moisture: >-
+    {{ soil_moisture_entity and is_number(states(soil_moisture_entity)) }}
+  current_soil_moisture: >-
     {{
       states(soil_moisture_entity) | float(default=target_soil_moisture_percentage)
       if soil_moisture_entity else target_soil_moisture_percentage
+    }}
+  # Automation reloads and configuration changes reuse the most recent soil
+  # value accepted at a slot boundary instead of sampling the sensor mid-cycle.
+  soil_moisture: >-
+    {{
+      status.get("m") | float
+      if not is_slot_request and has_stored_soil_snapshot else
+      current_soil_moisture
     }}
   moisture_deficit: '{{ [0, target_soil_moisture_percentage - soil_moisture] | max }}'
   moisture_factor: '{{ 1 + ([1, moisture_deficit / 20] | min) }}'
@@ -249,13 +277,59 @@ variables:
   applied_rain_minutes: '{{ [credited_rain_minutes, gross_runtime_minutes] | min | int }}'
   previous_rain_minutes: '{{ status.get("r", credited_rain_minutes) | int }}'
   additional_rain_minutes: '{{ [0, credited_rain_minutes - previous_rain_minutes] | max | int }}'
+  # The interval's temperature factor stays frozen. A later soil reading may
+  # remove only a previously granted dryness adjustment, never base demand.
+  reconciliation_temperature_factor: >-
+    {{ status.get("t", temperature_factor) | float if is_slot_reconciliation else temperature_factor }}
+  reconciliation_temperature_runtime_minutes: >-
+    {{ (base_runtime_minutes * reconciliation_temperature_factor) | round(0, "ceil") | int }}
+  reconciliation_demand_factor: >-
+    {{ (reconciliation_temperature_factor * moisture_factor) | round(2) }}
+  observed_soil_adjustment_minutes: >-
+    {{
+      (base_runtime_minutes * reconciliation_demand_factor) | round(0, "ceil") | int -
+      reconciliation_temperature_runtime_minutes
+    }}
+  previous_best_soil_adjustment_minutes: >-
+    {{ status.get("s", observed_soil_adjustment_minutes) | int }}
+  additional_soil_reduction_minutes: >-
+    {{
+      [0, previous_best_soil_adjustment_minutes - observed_soil_adjustment_minutes] | max | int
+      if is_slot_reconciliation and has_valid_soil_moisture and
+        has_stored_soil_snapshot else 0
+    }}
+  best_soil_adjustment_minutes: >-
+    {%- if is_slot_reconciliation %}
+      {{
+        [previous_best_soil_adjustment_minutes, observed_soil_adjustment_minutes] | min | int
+        if has_valid_soil_moisture else previous_best_soil_adjustment_minutes
+      }}
+    {%- else %}
+      {{ soil_adjustment_minutes }}
+    {%- endif %}
+  stored_temperature_factor: >-
+    {{ reconciliation_temperature_factor if is_slot_reconciliation else temperature_factor }}
+  stored_soil_moisture: >-
+    {%- if is_slot_reconciliation %}
+      {%- if not has_stored_soil_snapshot or (
+        has_valid_soil_moisture and
+        observed_soil_adjustment_minutes < previous_best_soil_adjustment_minutes
+      ) %}
+        {{ current_soil_moisture }}
+      {%- else %}
+        {{ status.get("m") }}
+      {%- endif %}
+    {%- else %}
+      {{ soil_moisture }}
+    {%- endif %}
   fully_calculated_runtime_minutes: '{{ gross_runtime_minutes - applied_rain_minutes }}'
-  # Between interval starts, only positive changes from the sliding rain
-  # window reduce demand. Falling values never increase demand again.
+  # Between interval starts, only positive rain changes and a new lowest soil
+  # adjustment reduce demand. Falling rain or drier soil never add it back.
   runtime_minutes: >-
     {{
-      [0, status.get("runtime", 0) | int - additional_rain_minutes] | max | int
-      if is_rain_only_update else
+      [0, status.get("runtime", 0) | int - additional_rain_minutes -
+        additional_soil_reduction_minutes] | max | int
+      if is_slot_reconciliation else
       fully_calculated_runtime_minutes
     }}
   runtime_changed: '{{ status.get("runtime") != runtime_minutes }}'
@@ -265,7 +339,9 @@ variables:
 actions:
   - condition: template
     value_template: '{{ is_targeted_slot_request }}'
-  # Internal rain observations are persisted even when the rounded watering
+  - condition: template
+    value_template: '{{ not is_soil_snapshot_migration }}'
+  # Internal rain and soil observations are persisted even when the rounded
   # demand stays unchanged, but those silent writes do not trigger replanning.
   - condition: template
     value_template: >-
@@ -274,7 +350,15 @@ actions:
         status.get("interval") != watering_interval_days or
         status.get("runtime") != runtime_minutes or
         status.get("max_runtime", 0) != maximum_runtime_minutes or
-        status.get("r") != credited_rain_minutes
+        status.get("r") != credited_rain_minutes or
+        (soil_moisture_entity and (
+          status.get("m") != stored_soil_moisture or
+          status.get("s") != best_soil_adjustment_minutes or
+          status.get("t") != stored_temperature_factor
+        )) or
+        (not soil_moisture_entity and (
+          "m" in status or "s" in status or "t" in status
+        ))
       }}
   # Keep the shared helper within its known schema before updating calculation fields.
   - action: input_text.set_value
@@ -284,15 +368,38 @@ actions:
       value: >-
         {%- set status = dict(status | dictsort | selectattr("0", "in",
           ["valve", "interval", "runtime", "max_runtime", "last_end",
-            "cycle", "watered", "slot", "next", "r"]) | list) %}
+            "cycle", "watered", "slot", "next", "m", "r", "s", "t"]) | list) %}
         {%- set status = dict(status, valve=valve_entity,
           interval=watering_interval_days, runtime=runtime_minutes,
           r=credited_rain_minutes) %}
+        {%- if soil_moisture_entity %}
+          {%- set status = dict(status, m=stored_soil_moisture,
+            s=best_soil_adjustment_minutes, t=stored_temperature_factor) %}
+        {%- else %}
+          {%- set status = status | dictsort |
+            rejectattr("0", "in", ["m", "s", "t"]) | list %}
+          {%- set status = dict(status) %}
+        {%- endif %}
         {%- if maximum_runtime_minutes > 0 %}
           {%- set status = dict(status, max_runtime=maximum_runtime_minutes) %}
         {%- else %}
           {%- set status = status | dictsort | rejectattr("0", "eq", "max_runtime") | list %}
           {%- set status = dict(status) %}
+        {%- endif %}
+        {#- Read both legacy ISO strings and numeric timestamps, but keep all new
+            helper writes compact and independent of datetime string formatting. #}
+        {%- if status.get("cycle") %}
+          {%- set status = dict(status,
+            cycle=(status.cycle | as_datetime | as_timestamp | int)) %}
+        {%- endif %}
+        {%- if status.get("last_end") %}
+          {%- set status = dict(status,
+            last_end=(status.last_end | as_datetime | as_timestamp | int)) %}
+        {%- endif %}
+        {%- set next_run = status.get("next") %}
+        {%- if next_run is sequence and next_run | count >= 2 %}
+          {%- set status = dict(status, next=[
+            next_run[0] | as_datetime | as_timestamp | int, next_run[1]]) %}
         {%- endif %}
         {{ status | to_json }}
   - if:
@@ -315,11 +422,27 @@ actions:
           name: Hippo's Irrigation Zone Calculation
           message: >-
             {%- set ns = namespace(message="") %}
-            {%- if is_rain_only_update %}
-              {%- set ns.message = "Additional rain reduced watering demand from " ~
-                (status.get("runtime", 0) | int) ~ " to " ~ runtime_minutes ~ " minutes. " ~
-                "Total rain credit: " ~ credited_rain_minutes ~
-                " minutes; previously observed: " ~ previous_rain_minutes ~ " minutes." %}
+            {%- if is_slot_reconciliation %}
+              {%- if additional_rain_minutes > 0 and additional_soil_reduction_minutes > 0 %}
+                {%- set ns.message = "Additional rain and improved soil moisture reduced" %}
+              {%- elif additional_soil_reduction_minutes > 0 %}
+                {%- set ns.message = "Improved soil moisture reduced" %}
+              {%- else %}
+                {%- set ns.message = "Additional rain reduced" %}
+              {%- endif %}
+              {%- set ns.message = ns.message ~ " watering demand from " ~
+                (status.get("runtime", 0) | int) ~ " to " ~ runtime_minutes ~ " minutes." %}
+              {%- if additional_rain_minutes > 0 %}
+                {%- set ns.message = ns.message ~ " Total rain credit: " ~ credited_rain_minutes ~
+                  " minutes; previously observed: " ~ previous_rain_minutes ~ " minutes." %}
+              {%- endif %}
+              {%- if additional_soil_reduction_minutes > 0 %}
+                {%- set ns.message = ns.message ~ " Soil adjustment decreased from " ~
+                  previous_best_soil_adjustment_minutes ~ " to " ~
+                  best_soil_adjustment_minutes ~ " minutes (current: " ~
+                  ("%g" | format(soil_moisture | round(1))) ~ "%, target: " ~
+                  ("%g" | format(target_soil_moisture_percentage)) ~ "%)." %}
+              {%- endif %}
             {%- else %}
               {%- set ns.message = "Calculated " ~ runtime_minutes ~
                 " minutes of watering demand for the current " ~ watering_interval_days ~
@@ -349,13 +472,13 @@ actions:
               {%- set ns.message = ns.message ~ " Remaining watering demand: " ~
                 remaining_minutes ~ " minutes." %}
             {%- endif %}
-            {%- if updated_next is sequence and updated_next | count >= 2 %}
-              {%- set ns.message = ns.message ~ " Next run: " ~
-                (updated_next[0] | as_datetime | as_local).strftime("%Y-%m-%d %H:%M") ~ "." %}
-            {%- elif status.get("next") and remaining_minutes == 0 %}
+            {%- if status.get("next") and remaining_minutes == 0 %}
               {%- set ns.message = ns.message ~ " The run scheduled for " ~
                 (status.next[0] | as_datetime | as_local).strftime("%Y-%m-%d %H:%M") ~
                 " is no longer needed." %}
+            {%- elif updated_next is sequence and updated_next | count >= 2 %}
+              {%- set ns.message = ns.message ~ " Next run: " ~
+                (updated_next[0] | as_datetime | as_local).strftime("%Y-%m-%d %H:%M") ~ "." %}
             {%- endif %}
             {{ ns.message }}
           entity_id: '{{ valve_entity }}'
