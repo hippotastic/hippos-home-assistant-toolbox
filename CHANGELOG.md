@@ -1,5 +1,16 @@
 # hippos-home-assistant-toolbox
 
+## 0.6.0
+
+### Minor Changes
+
+- 5fd412c: Calculate irrigation climate and soil demand once per planning interval, conservatively reduce later-slot demand when the sliding rain credit rises, tighten future runs without changing an active run, and replace repetitive planning logs with rounded start and completion summaries.
+- b19ddd8: Reduce future irrigation runs when soil-moisture readings accepted at slot boundaries prove that the original dryness adjustment is no longer needed, without sampling mid-window changes, increasing demand, or changing an active run. Keep recurring daily start times stable across daylight-saving changes, and keep complete zone state within the Text helper limit by writing timestamps as Unix seconds.
+
+### Patch Changes
+
+- 7770522: Keep the manual update-check button available after a catalog request fails, and record the failure in the Toolbox device Activity view with details remaining in the system log.
+
 ## 0.5.4
 
 ### Patch Changes
