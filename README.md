@@ -71,6 +71,10 @@ pnpm camera-overlay:render -- path/to/icon.svg path/to/icon.png 512
 
 Setup, behavior, formulas, triggers, scheduling rules, and log examples are documented in [Irrigation Blueprints](IRRIGATION.md).
 
+## Push-Button Music Controller
+
+Setup, gestures, session behavior, failover, player compatibility, and LED feedback are documented in [Push-Button Music Controller](PUSH_BUTTON_MUSIC_CONTROLLER.md).
+
 ## Manual Installation
 
 The integration is the recommended installation method. Individual blueprints can still be imported manually.
@@ -86,6 +90,9 @@ The integration is the recommended installation method. Individual blueprints ca
 
 - **Hippo's Irrigation Scheduler**\
   [Source](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_scheduler.yaml) · [Import manually into Home Assistant](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Firrigation_scheduler.yaml)
+
+- **Hippo's Push-Button Music Controller**\
+  [Source](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/push_button_music_controller.yaml) · [Import manually into Home Assistant](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fpush_button_music_controller.yaml)
 
 - **Hippo's Sensor-based State Machine**\
   [Source](https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/sensor_state_machine.yaml) · [Import manually into Home Assistant](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fhippotastic%2Fhippos-home-assistant-toolbox%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fsensor_state_machine.yaml)

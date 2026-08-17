@@ -91,6 +91,24 @@ that remain stable across future implementations.
 | Component contract      | Calculated valve, interval, and runtime flow into a future scheduler plan without manually triggering the scheduler | `endToEnd`                      |
 | Valve logbook           | Rounded demand changes, watering transitions, remaining demand, and exceptional scheduling failures are recorded   | `planning`, `active`, `handoff` |
 
+## Push-Button Music Controller
+
+| Area                  | Required behavior                                                                                               | Runtime scenario                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| Single tap            | Inactive starts Favorite 1 at start volume; playing pauses; an active pause resumes                             | `main`                             |
+| Double-tap            | Reset starts Favorite 2, known sessions advance cyclically, and the final item wraps to Favorite 1              | `main`                             |
+| Gesture arbitration   | A second press held past the threshold becomes only a long press; input during seeking is ignored               | `main`, `slow`                     |
+| Long press            | Volume moves in one-point steps, alternates direction, reverses at bounds, and never changes playback           | `main`                             |
+| Pause expiry          | A pause older than 30 minutes resets logically and the next tap begins with Favorite 1                           | `main`                             |
+| Favorite failover     | Failed items are tried once cyclically; success stores its index; total failure resets the session              | `failover`, `allFail`              |
+| Resume failover       | Failed resume retries the current known favorite before later items                                             | `resumeFail`                       |
+| Safe replacement      | Existing playback must reach a non-playing baseline before favorite switching                                  | `main`                             |
+| Player reconciliation | External playing is adopted; buffering, pause, idle, and unavailable update helper and feedback safely          | `main`                             |
+| Feedback outputs      | Seeking and Playing follow starting, buffering, playing, paused, inactive, and unavailable states               | `main`, `slow`                     |
+| Helper safety         | Malformed JSON normalizes; resets retain the alternating long-press direction                                   | `malformed`, `main`, `allFail`     |
+| Volume safety         | Reversed bounds are ordered and start volume clamped; an unconfirmed change aborts playback                     | `inverted`, `volumeFail`           |
+| Optional outputs      | Omitting both feedback entities leaves playback behavior intact                                                 | `optional`                         |
+
 ## Assertion Rules
 
 The tests intentionally ignore:

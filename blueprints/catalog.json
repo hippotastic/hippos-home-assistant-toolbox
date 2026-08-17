@@ -34,6 +34,14 @@
     },
     {
       "domain": "automation",
+      "id": "push_button_music_controller",
+      "name": "Hippo's Push-Button Music Controller",
+      "path": "blueprints/automation/push_button_music_controller.yaml",
+      "sha256": "d295fe9f4bb62be692d11af8b006f03b0ecc27748364b422a41584c95fd10b5b",
+      "status": "active"
+    },
+    {
+      "domain": "automation",
       "id": "sensor_state_machine",
       "name": "Hippo's Sensor-based State Machine",
       "path": "blueprints/automation/sensor_state_machine.yaml",

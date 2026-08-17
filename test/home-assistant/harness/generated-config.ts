@@ -3,6 +3,7 @@ import { stringify } from 'yaml'
 import { COVER_SCENARIOS } from '../runtime/cover-automation/scenarios.ts'
 import { EMA_SCENARIO } from '../runtime/exponential-moving-average/scenarios.ts'
 import { IRRIGATION_CALCULATION_SCENARIOS, IRRIGATION_END_TO_END, IRRIGATION_SCHEDULER_SCENARIOS } from '../runtime/irrigation/scenarios.ts'
+import { MUSIC_SCENARIOS } from '../runtime/push-button-music-controller/scenarios.ts'
 import { SENSOR_SCENARIOS } from '../runtime/sensor-state-machine/scenarios.ts'
 
 type Automation = {
@@ -179,6 +180,17 @@ function irrigationAutomations(): Automation[] {
 	return [...irrigationCalculationAutomations(), ...irrigationSchedulerAutomations(), ...irrigationEndToEndAutomations()]
 }
 
+function musicAutomations(): Automation[] {
+	return Object.values(MUSIC_SCENARIOS).map((scenario) => ({
+		alias: `Fixture music ${scenario.id}`,
+		id: objectId(scenario.entities.automation),
+		use_blueprint: {
+			input: scenario.commonInputs,
+			path: 'hippotastic/push_button_music_controller.yaml',
+		},
+	}))
+}
+
 function objectId(entityId: string): string {
 	return entityId.split('.', 2)[1] ?? entityId
 }
@@ -191,9 +203,11 @@ export function generatedFixtureFiles(): Record<string, string> {
 	const coverScenarios = Object.values(COVER_SCENARIOS)
 	const irrigationCalculationScenarios = Object.values(IRRIGATION_CALCULATION_SCENARIOS)
 	const irrigationSchedulerScenarios = Object.values(IRRIGATION_SCHEDULER_SCENARIOS)
+	const musicScenarios = Object.values(MUSIC_SCENARIOS)
 	const sensorScenarios = Object.values(SENSOR_SCENARIOS)
 	const inputBooleans = unique([
 		...coverScenarios.flatMap((scenario) => [scenario.controls.automatic, scenario.controls.lockout, scenario.controls.night, scenario.controls.privacy, scenario.controls.sun]),
+		...musicScenarios.map((scenario) => scenario.entities.button),
 		...sensorScenarios.flatMap((scenario) => [
 			...scenario.inputs,
 			...(scenario.conditionOn ? [scenario.conditionOn] : []),
@@ -220,6 +234,7 @@ export function generatedFixtureFiles(): Record<string, string> {
 		...irrigationSchedulerScenarios.flatMap((scenario) => scenario.entities.helpers),
 		IRRIGATION_END_TO_END.entities.helper,
 	].map((entityId) => [objectId(entityId), { initial: '{}', max: 255 }] as const)
+	const musicInputTexts = musicScenarios.map((scenario) => [objectId(scenario.entities.helper), { initial: scenario.initial.helper, max: 255 }] as const)
 	const covers = coverScenarios.map((scenario) => ({
 		id: objectId(scenario.entities.cover),
 		position: scenario.initialPosition,
@@ -228,10 +243,12 @@ export function generatedFixtureFiles(): Record<string, string> {
 		tilt: scenario.initialTilt,
 	}))
 	const lights = sensorScenarios.flatMap((scenario) => (scenario.outputDomain === 'light' ? [objectId(scenario.entities.output)] : []))
+	const musicLights = musicScenarios.flatMap((scenario) => (scenario.entities.playing ? [objectId(scenario.entities.playing)] : []))
 	const switches = sensorScenarios.flatMap((scenario) => [
 		...(scenario.outputDomain === 'switch' ? [objectId(scenario.entities.output)] : []),
 		...(scenario.withCustomActions ? [objectId(scenario.entities.marker)] : []),
 	])
+	const musicSwitches = musicScenarios.flatMap((scenario) => (scenario.entities.seeking ? [objectId(scenario.entities.seeking)] : []))
 	const irrigationSwitches = [
 		...irrigationCalculationScenarios.map((scenario) => scenario.entities.valve),
 		...irrigationSchedulerScenarios.flatMap((scenario) => [scenario.entities.pump, ...scenario.entities.valves]),
@@ -244,13 +261,21 @@ export function generatedFixtureFiles(): Record<string, string> {
 
 	return {
 		'automations.yaml': stringify(
-			[...coverAutomations(), ...exponentialMovingAverageAutomations(), ...legacyAdoptionAutomations(), ...sensorAutomations(), ...irrigationAutomations()],
+			[...coverAutomations(), ...exponentialMovingAverageAutomations(), ...legacyAdoptionAutomations(), ...sensorAutomations(), ...irrigationAutomations(), ...musicAutomations()],
 			yamlOptions
 		),
 		'fixture_covers.yaml': stringify(covers, yamlOptions),
-		'fixture_lights.yaml': stringify(unique(lights), yamlOptions),
+		'fixture_lights.yaml': stringify(unique([...lights, ...musicLights]), yamlOptions),
+		'fixture_media_players.yaml': stringify(
+			musicScenarios.map((scenario) => ({
+				id: objectId(scenario.entities.player),
+				state: scenario.initial.playerState,
+				volume_level: scenario.initial.volume,
+			})),
+			yamlOptions
+		),
 		'fixture_states.yaml': stringify(initialFixtureStates(), yamlOptions),
-		'fixture_switches.yaml': stringify(unique([...switches, ...irrigationSwitches]), yamlOptions),
+		'fixture_switches.yaml': stringify(unique([...switches, ...irrigationSwitches, ...musicSwitches]), yamlOptions),
 		'input_booleans.yaml': stringify(Object.fromEntries(inputBooleans.map((entityId) => [objectId(entityId), { initial: false }])), yamlOptions),
 		'input_numbers.yaml': stringify(
 			Object.fromEntries([
@@ -263,7 +288,7 @@ export function generatedFixtureFiles(): Record<string, string> {
 			]),
 			yamlOptions
 		),
-		'input_texts.yaml': stringify(Object.fromEntries([...inputTexts, ...irrigationInputTexts]), yamlOptions),
+		'input_texts.yaml': stringify(Object.fromEntries([...inputTexts, ...irrigationInputTexts, ...musicInputTexts]), yamlOptions),
 	}
 }
 
@@ -276,6 +301,7 @@ export function expectedAutomationStates(): Array<{ entityId: string; state: 'of
 		})),
 		...legacyAdoptionAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'off' as const })),
 		...irrigationAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'off' as const })),
+		...musicAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'on' as const })),
 	]
 }
 

@@ -46,3 +46,19 @@
       input_sensors:
         - input_boolean.fixture_motion
       state_entity: input_boolean.fixture_state
+
+- id: validate_push_button_music_controller
+  alias: Validate Hippo's Push-Button Music Controller
+  use_blueprint:
+    path: hippotastic/push_button_music_controller.yaml
+    input:
+      button_entity: input_boolean.fixture_music_button
+      media_player_entity: media_player.fixture_music_player
+      status_helper_entity: input_text.fixture_music_status
+      favorites:
+        - media:
+            entity_id: media_player.fixture_music_player
+            media_content_id: test://favorite/one
+            media_content_type: playlist
+            metadata:
+              title: Favorite One

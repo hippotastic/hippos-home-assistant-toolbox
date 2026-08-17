@@ -1,0 +1,859 @@
+blueprint:
+  name: Hippo's Push-Button Music Controller
+  description: >-
+    Control one media player with a single press/release button. Tap to start,
+    pause, or resume; double-tap to move to the next favorite; and hold to fade
+    the volume up and down. Failed favorites are skipped automatically. Requires
+    one dedicated Text helper with a maximum length of 255 characters. (V1.0)
+  domain: automation
+  source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/push_button_music_controller.yaml
+  author: Hippo
+  homeassistant:
+    min_version: 2025.7.0
+  input:
+    controller_section:
+      name: ' 🎛️ Controller'
+      collapsed: false
+      input:
+        button_entity:
+          name: Push button
+          description: >-
+            An entity that changes to on while the physical button is pressed and
+            back to off when it is released.
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - binary_sensor
+                    - input_boolean
+                    - switch
+
+        media_player_entity:
+          name: Media player
+          description: >-
+            The single player controlled by this automation. It must support media
+            browsing and playback, play, pause, and absolute volume changes.
+          selector:
+            entity:
+              filter:
+                - domain: media_player
+                  supported_features:
+                    # eslint-disable-next-line yml/block-sequence-hyphen-indicator-newline -- One inner list requires the combined feature mask.
+                    - - media_player.MediaPlayerEntityFeature.BROWSE_MEDIA
+                      - media_player.MediaPlayerEntityFeature.PLAY_MEDIA
+                      - media_player.MediaPlayerEntityFeature.PLAY
+                      - media_player.MediaPlayerEntityFeature.PAUSE
+                      - media_player.MediaPlayerEntityFeature.VOLUME_SET
+
+        status_helper_entity:
+          name: Controller state helper
+          description: >-
+            Select a dedicated Text helper with a maximum length of 255 characters.
+            Do not reuse it for another automation or edit its contents manually.
+          selector:
+            entity:
+              filter:
+                - domain: input_text
+
+    favorites_section:
+      name: ' 🎵 Favorites'
+      collapsed: false
+      input:
+        favorites:
+          name: Favorite playlists
+          description: >-
+            Add at least one item and use its media picker to select a favorite or
+            playlist exposed by the chosen player. Drag items to change their order.
+          selector:
+            object:
+              multiple: true
+              fields:
+                media:
+                  label: Media
+                  required: true
+                  selector:
+                    media:
+
+    volume_section:
+      name: ' 🔊 Volume'
+      collapsed: false
+      input:
+        start_volume:
+          name: New-session volume
+          description: Applied only when a new listening session starts.
+          default: 20
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: '%'
+
+        minimum_volume:
+          name: Minimum volume
+          default: 5
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: '%'
+
+        maximum_volume:
+          name: Maximum volume
+          default: 50
+          selector:
+            number:
+              min: 0
+              max: 100
+              step: 1
+              unit_of_measurement: '%'
+
+    feedback_section:
+      name: ' 💡 Status feedback'
+      collapsed: true
+      input:
+        seeking_feedback_entity:
+          name: Seeking output (optional)
+          description: >-
+            Turned on while a favorite or stream is starting and while the player
+            reports buffering. Suitable for a blinking button LED.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - input_boolean
+                    - light
+                    - switch
+
+        playing_feedback_entity:
+          name: Playing output (optional)
+          description: >-
+            Turned on while starting, buffering, or playing; turned off while paused
+            or inactive.
+          default: []
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - input_boolean
+                    - light
+                    - switch
+
+    gesture_section:
+      name: ' ⏱️ Gesture timing'
+      collapsed: true
+      input:
+        double_tap_gap_milliseconds:
+          name: Double-tap gap
+          description: Maximum time from the first release to the second press.
+          default: 400
+          selector:
+            number:
+              min: 100
+              max: 1000
+              step: 50
+              mode: box
+              unit_of_measurement: ms
+
+        long_press_milliseconds:
+          name: Long-press threshold
+          default: 700
+          selector:
+            number:
+              min: 200
+              max: 2000
+              step: 50
+              mode: box
+              unit_of_measurement: ms
+
+        full_volume_fade_seconds:
+          name: Full volume fade duration
+          description: >-
+            Approximate time for a held button to fade across the configured
+            minimum-to-maximum range in one-percentage-point steps.
+          default: 15
+          selector:
+            number:
+              min: 1
+              max: 60
+              step: 1
+              unit_of_measurement: seconds
+
+trigger_variables:
+  button_entity: !input button_entity
+  media_player_entity: !input media_player_entity
+  status_helper_entity: !input status_helper_entity
+  pause_reset_seconds: 1800
+
+triggers:
+  - trigger: state
+    entity_id: !input button_entity
+    to: 'on'
+    id: button_pressed
+
+  - trigger: state
+    entity_id: !input media_player_entity
+    id: player_changed
+
+  - trigger: state
+    entity_id: !input status_helper_entity
+    id: helper_changed
+
+  # Reconcile after startup, reload, re-enabling, and blueprint input changes.
+  - trigger: template
+    value_template: '{{ this is defined and this is not none and is_state(this.entity_id, "on") }}'
+    id: automation_enabled
+
+  - trigger: template
+    value_template: >-
+      {%- set value = states(status_helper_entity) | from_json({}) %}
+      {%- set value = value if value is mapping else {} %}
+      {%- set paused = value.get("paused") %}
+      {{
+        value.get("v") == 1 and value.get("active") == true and
+        paused is number and paused is not boolean and
+        now() | as_timestamp - paused >= pause_reset_seconds
+      }}
+    id: pause_expired
+
+# One run owns the complete press gesture and playback attempt. Presses arriving
+# while a long fade or favorite failover is running are deliberately ignored.
+mode: single
+max_exceeded: silent
+
+variables:
+  favorites: !input favorites
+  start_volume_input: !input start_volume
+  minimum_volume_input: !input minimum_volume
+  maximum_volume_input: !input maximum_volume
+  seeking_feedback_entity: !input seeking_feedback_entity
+  playing_feedback_entity: !input playing_feedback_entity
+  double_tap_gap_milliseconds: !input double_tap_gap_milliseconds
+  long_press_milliseconds: !input long_press_milliseconds
+  full_volume_fade_seconds: !input full_volume_fade_seconds
+  favorite_start_timeout_seconds: 10 # @blueprint-test-value 0.25
+  pause_confirmation_seconds: 2 # @blueprint-test-value 0.15
+  volume_confirmation_seconds: 2 # @blueprint-test-value 0.15
+  minimum_volume: '{{ [minimum_volume_input | int(0), maximum_volume_input | int(0)] | min }}'
+  maximum_volume: '{{ [minimum_volume_input | int(0), maximum_volume_input | int(0)] | max }}'
+  start_volume: '{{ [[start_volume_input | int(0), minimum_volume] | max, maximum_volume] | min }}'
+  favorite_count: '{{ favorites | count }}'
+
+actions:
+  - if:
+      - condition: template
+        value_template: >-
+          {{
+            trigger.id | default("") == "automation_enabled" and
+            minimum_volume_input | int(0) > maximum_volume_input | int(0)
+          }}
+    then:
+      - action: logbook.log
+        data:
+          name: Hippo's Push-Button Music Controller
+          message: >-
+            Minimum volume was above maximum volume; using {{ minimum_volume }}%
+            through {{ maximum_volume }}% instead.
+          entity_id: '{{ media_player_entity }}'
+          domain: media_player
+
+  - if:
+      - condition: template
+        value_template: '{{ favorite_count < 1 }}'
+    then:
+      - if:
+          - condition: template
+            value_template: "{{ trigger.id | default('') in ['automation_enabled', 'button_pressed'] }}"
+        then:
+          - action: logbook.log
+            data:
+              name: Hippo's Push-Button Music Controller
+              message: Cannot run because no favorites are configured.
+              entity_id: '{{ media_player_entity }}'
+              domain: media_player
+      - if:
+          - condition: template
+            value_template: "{{ seeking_feedback_entity != [] and states(seeking_feedback_entity) == 'on' }}"
+        then:
+          - action: homeassistant.turn_off
+            continue_on_error: true
+            target:
+              entity_id: '{{ seeking_feedback_entity }}'
+      - if:
+          - condition: template
+            value_template: "{{ playing_feedback_entity != [] and states(playing_feedback_entity) == 'on' }}"
+        then:
+          - action: homeassistant.turn_off
+            continue_on_error: true
+            target:
+              entity_id: '{{ playing_feedback_entity }}'
+      - stop: At least one favorite is required
+
+  - if:
+      - condition: template
+        value_template: "{{ trigger.id | default('') == 'button_pressed' }}"
+    then:
+      # Recognize the complete gesture before changing playback. A second press
+      # held past the threshold becomes only a long press, never a double-tap.
+      - variables:
+          gesture: ''
+      - wait_for_trigger:
+          - trigger: state
+            entity_id: !input button_entity
+            to: 'off'
+        timeout:
+          milliseconds: '{{ long_press_milliseconds }}'
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: '{{ not wait.completed }}'
+        then:
+          - variables:
+              gesture: long
+        else:
+          - wait_for_trigger:
+              - trigger: state
+                entity_id: !input button_entity
+                to: 'on'
+            timeout:
+              milliseconds: '{{ double_tap_gap_milliseconds }}'
+            continue_on_timeout: true
+          - if:
+              - condition: template
+                value_template: '{{ not wait.completed }}'
+            then:
+              - variables:
+                  gesture: single
+            else:
+              - wait_for_trigger:
+                  - trigger: state
+                    entity_id: !input button_entity
+                    to: 'off'
+                timeout:
+                  milliseconds: '{{ long_press_milliseconds }}'
+                continue_on_timeout: true
+              - variables:
+                  gesture: "{{ 'double' if wait.completed else 'long' }}"
+
+      - if:
+          - condition: template
+            value_template: "{{ gesture == 'long' }}"
+        then:
+          - variables:
+              long_status: >-
+                {%- set value = states(status_helper_entity) | from_json({}) %}
+                {%- set value = value if value is mapping and value.get("v") == 1 else {} %}
+                {{
+                  dict(
+                    v=1,
+                    active=(value.get("active") == true),
+                    favorite=value.get("favorite"),
+                    paused=value.get("paused"),
+                    direction=iif(value.get("direction") in ["up", "down"], value.get("direction"), "up")
+                  )
+                }}
+              current_volume: "{{ (state_attr(media_player_entity, 'volume_level') | float(-1) * 100) | round(0) | int }}"
+              clamped_volume: '{{ [[current_volume, minimum_volume] | max, maximum_volume] | min }}'
+              fade_direction: >-
+                {% if current_volume >= maximum_volume %}
+                  down
+                {% elif current_volume <= minimum_volume %}
+                  up
+                {% else %}
+                  {{ long_status.direction }}
+                {% endif %}
+              next_fade_direction: "{{ 'down' if fade_direction == 'up' else 'up' }}"
+              volume_step_delay: >-
+                {{ full_volume_fade_seconds | float(15) / [1, maximum_volume - minimum_volume] | max }}
+          - if:
+              - condition: template
+                value_template: '{{ current_volume < 0 }}'
+            then:
+              - action: logbook.log
+                data:
+                  name: Hippo's Push-Button Music Controller
+                  message: Cannot fade volume because the player reports no volume level.
+                  entity_id: '{{ media_player_entity }}'
+                  domain: media_player
+            else:
+              - if:
+                  - condition: template
+                    value_template: '{{ current_volume != clamped_volume }}'
+                then:
+                  - action: media_player.volume_set
+                    continue_on_error: true
+                    target:
+                      entity_id: '{{ media_player_entity }}'
+                    data:
+                      volume_level: '{{ clamped_volume / 100 }}'
+              - repeat:
+                  while:
+                    - condition: template
+                      value_template: "{{ is_state(button_entity, 'on') }}"
+                    - condition: template
+                      value_template: '{{ repeat.index <= maximum_volume - minimum_volume + 1 }}'
+                    - condition: template
+                      value_template: >-
+                        {%- set level = (state_attr(media_player_entity, 'volume_level') | float(-1) * 100) | round(0) | int %}
+                        {{
+                          level >= 0 and
+                          ((fade_direction == "up" and level < maximum_volume) or
+                          (fade_direction == "down" and level > minimum_volume))
+                        }}
+                  sequence:
+                    - variables:
+                        fade_level: "{{ (state_attr(media_player_entity, 'volume_level') | float(-1) * 100) | round(0) | int }}"
+                        next_volume: >-
+                          {{
+                            [fade_level + 1, maximum_volume] | min
+                            if fade_direction == "up"
+                            else [fade_level - 1, minimum_volume] | max
+                          }}
+                    - action: media_player.volume_set
+                      continue_on_error: true
+                      target:
+                        entity_id: '{{ media_player_entity }}'
+                      data:
+                        volume_level: '{{ next_volume / 100 }}'
+                    - delay:
+                        seconds: '{{ volume_step_delay }}'
+              # Alternation belongs to the controller, not to the listening session.
+              - action: input_text.set_value
+                target:
+                  entity_id: '{{ status_helper_entity }}'
+                data:
+                  value: >-
+                    {%- set value = states(status_helper_entity) | from_json({}) %}
+                    {%- set value = value if value is mapping and value.get("v") == 1 else {} %}
+                    {%- set favorite = value.get("favorite") %}
+                    {%- set favorite = favorite if favorite is integer and favorite >= 0 and favorite < favorite_count else none %}
+                    {%- set paused = value.get("paused") %}
+                    {%- set paused = paused if paused is number and paused is not boolean else none %}
+                    {{
+                      dict(
+                        v=1,
+                        active=(value.get("active") == true),
+                        favorite=favorite,
+                        paused=paused,
+                        direction=next_fade_direction
+                      ) | to_json
+                    }}
+
+      - if:
+          - condition: template
+            value_template: "{{ gesture in ['single', 'double'] }}"
+        then:
+          - variables:
+              controller_status: >-
+                {%- set value = states(status_helper_entity) | from_json({}) %}
+                {%- set value = value if value is mapping and value.get("v") == 1 else {} %}
+                {%- set favorite = value.get("favorite") %}
+                {%- set favorite = favorite if favorite is integer and favorite >= 0 and favorite < favorite_count else none %}
+                {%- set paused = value.get("paused") %}
+                {%- set paused = paused if paused is number and paused is not boolean else none %}
+                {%- set active = value.get("active") == true %}
+                {%- if active and paused is not none and now() | as_timestamp - paused >= pause_reset_seconds %}
+                  {%- set active = false %}
+                  {%- set favorite = none %}
+                  {%- set paused = none %}
+                {%- endif %}
+                {{
+                  dict(
+                    v=1,
+                    active=active,
+                    favorite=favorite,
+                    paused=paused,
+                    direction=iif(value.get("direction") in ["up", "down"], value.get("direction"), "up")
+                  )
+                }}
+              playback_command: >-
+                {% if gesture == "single" and states(media_player_entity) in ["playing", "buffering"] %}
+                  pause
+                {% elif gesture == "single" and states(media_player_entity) == "paused" and controller_status.active %}
+                  resume
+                {% else %}
+                  favorite
+                {% endif %}
+              new_session: >-
+                {{
+                  gesture == "single" and playback_command == "favorite" and
+                  not controller_status.active and states(media_player_entity) not in ["playing", "buffering"]
+                }}
+              candidate_start: >-
+                {% if gesture == "single" %}
+                  0
+                {% elif controller_status.active and controller_status.favorite is integer %}
+                  {{ (controller_status.favorite + 1) % favorite_count }}
+                {% elif states(media_player_entity) in ["playing", "buffering"] %}
+                  0
+                {% else %}
+                  {{ 1 if favorite_count > 1 else 0 }}
+                {% endif %}
+
+          - if:
+              - condition: template
+                value_template: "{{ playback_command == 'pause' }}"
+            then:
+              - action: media_player.media_pause
+                continue_on_error: true
+                target:
+                  entity_id: '{{ media_player_entity }}'
+              - wait_template: "{{ states(media_player_entity) not in ['playing', 'buffering'] }}"
+                timeout:
+                  seconds: '{{ pause_confirmation_seconds }}'
+                continue_on_timeout: true
+              - if:
+                  - condition: template
+                    value_template: "{{ states(media_player_entity) in ['playing', 'buffering'] }}"
+                then:
+                  - action: logbook.log
+                    data:
+                      name: Hippo's Push-Button Music Controller
+                      message: The player did not pause after a single tap.
+                      entity_id: '{{ media_player_entity }}'
+                      domain: media_player
+
+          - if:
+              - condition: template
+                value_template: "{{ playback_command in ['resume', 'favorite'] }}"
+            then:
+              - if:
+                  - condition: template
+                    value_template: "{{ seeking_feedback_entity != [] and states(seeking_feedback_entity) != 'on' }}"
+                then:
+                  - action: homeassistant.turn_on
+                    continue_on_error: true
+                    target:
+                      entity_id: '{{ seeking_feedback_entity }}'
+              - if:
+                  - condition: template
+                    value_template: "{{ playing_feedback_entity != [] and states(playing_feedback_entity) != 'on' }}"
+                then:
+                  - action: homeassistant.turn_on
+                    continue_on_error: true
+                    target:
+                      entity_id: '{{ playing_feedback_entity }}'
+
+              - variables:
+                  reported_volume: "{{ (state_attr(media_player_entity, 'volume_level') | float(-1) * 100) | round(0) | int }}"
+                  requested_volume: >-
+                    {{
+                      start_volume
+                      if new_session
+                      else [[reported_volume, minimum_volume] | max, maximum_volume] | min
+                    }}
+              - if:
+                  - condition: template
+                    value_template: '{{ reported_volume < 0 and not new_session }}'
+                then:
+                  - action: logbook.log
+                    data:
+                      name: Hippo's Push-Button Music Controller
+                      message: Cannot continue playback because the player reports no volume level.
+                      entity_id: '{{ media_player_entity }}'
+                      domain: media_player
+                else:
+                  - if:
+                      - condition: template
+                        value_template: '{{ reported_volume != requested_volume }}'
+                    then:
+                      - action: media_player.volume_set
+                        continue_on_error: true
+                        target:
+                          entity_id: '{{ media_player_entity }}'
+                        data:
+                          volume_level: '{{ requested_volume / 100 }}'
+                  - wait_template: >-
+                      {{
+                        state_attr(media_player_entity, "volume_level") is number and
+                        (state_attr(media_player_entity, "volume_level") * 100 - requested_volume) | abs <= 1
+                      }}
+                    timeout:
+                      seconds: '{{ volume_confirmation_seconds }}'
+                    continue_on_timeout: true
+                  - if:
+                      - condition: template
+                        value_template: >-
+                          {{
+                            state_attr(media_player_entity, "volume_level") is not number or
+                            (state_attr(media_player_entity, "volume_level") * 100 - requested_volume) | abs > 1
+                          }}
+                    then:
+                      - action: logbook.log
+                        data:
+                          name: Hippo's Push-Button Music Controller
+                          message: >-
+                            Could not confirm the requested {{ requested_volume }}% volume;
+                            playback was not changed.
+                          entity_id: '{{ media_player_entity }}'
+                          domain: media_player
+                      - if:
+                          - condition: template
+                            value_template: '{{ new_session }}'
+                        then:
+                          - action: input_text.set_value
+                            target:
+                              entity_id: '{{ status_helper_entity }}'
+                            data:
+                              value: >-
+                                {{ dict(v=1, active=false, favorite=none, paused=none, direction=controller_status.direction) | to_json }}
+                    else:
+                      - if:
+                          - condition: template
+                            value_template: "{{ playback_command == 'resume' }}"
+                        then:
+                          - action: media_player.media_play
+                            continue_on_error: true
+                            target:
+                              entity_id: '{{ media_player_entity }}'
+                          - wait_template: "{{ is_state(media_player_entity, 'playing') }}"
+                            timeout:
+                              seconds: '{{ favorite_start_timeout_seconds }}'
+                            continue_on_timeout: true
+                          - if:
+                              - condition: template
+                                value_template: "{{ not is_state(media_player_entity, 'playing') }}"
+                            then:
+                              - action: logbook.log
+                                data:
+                                  name: Hippo's Push-Button Music Controller
+                                  message: Resume failed; trying the configured favorites.
+                                  entity_id: '{{ media_player_entity }}'
+                                  domain: media_player
+                              - variables:
+                                  candidate_start: >-
+                                    {{ controller_status.favorite if controller_status.favorite is integer else 0 }}
+
+                      - if:
+                          - condition: template
+                            value_template: >-
+                              {{ playback_command == "favorite" or not is_state(media_player_entity, "playing") }}
+                        then:
+                          - variables:
+                              candidate_indices: >-
+                                {%- set ns = namespace(items=[]) %}
+                                {%- for offset in range(favorite_count) %}
+                                  {%- set ns.items = ns.items + [((candidate_start | int(0)) + offset) % favorite_count] %}
+                                {%- endfor %}
+                                {{ ns.items }}
+                          # Switching away from an already-playing stream first
+                          # establishes the same baseline used between failed items.
+                          - if:
+                              - condition: template
+                                value_template: "{{ states(media_player_entity) in ['playing', 'buffering'] }}"
+                            then:
+                              - action: media_player.media_pause
+                                continue_on_error: true
+                                target:
+                                  entity_id: '{{ media_player_entity }}'
+                              - wait_template: "{{ states(media_player_entity) not in ['playing', 'buffering'] }}"
+                                timeout:
+                                  seconds: '{{ pause_confirmation_seconds }}'
+                                continue_on_timeout: true
+                          - if:
+                              - condition: template
+                                value_template: "{{ states(media_player_entity) in ['playing', 'buffering'] }}"
+                            then:
+                              - action: logbook.log
+                                data:
+                                  name: Hippo's Push-Button Music Controller
+                                  message: Could not establish a non-playing baseline; aborting failover.
+                                  entity_id: '{{ media_player_entity }}'
+                                  domain: media_player
+                              - if:
+                                  - condition: template
+                                    value_template: >-
+                                      {{ seeking_feedback_entity != [] and states(seeking_feedback_entity) == "on" }}
+                                then:
+                                  - action: homeassistant.turn_off
+                                    continue_on_error: true
+                                    target:
+                                      entity_id: '{{ seeking_feedback_entity }}'
+                              - stop: The existing playback could not be paused safely
+                          - repeat:
+                              for_each: '{{ candidate_indices }}'
+                              sequence:
+                                - if:
+                                    - condition: template
+                                      value_template: "{{ not is_state(media_player_entity, 'playing') }}"
+                                  then:
+                                    # A known non-playing baseline prevents the previous
+                                    # stream from being mistaken for a successful favorite.
+                                    - if:
+                                        - condition: template
+                                          value_template: "{{ states(media_player_entity) in ['playing', 'buffering'] }}"
+                                      then:
+                                        - action: media_player.media_pause
+                                          continue_on_error: true
+                                          target:
+                                            entity_id: '{{ media_player_entity }}'
+                                        - wait_template: "{{ states(media_player_entity) not in ['playing', 'buffering'] }}"
+                                          timeout:
+                                            seconds: '{{ pause_confirmation_seconds }}'
+                                          continue_on_timeout: true
+                                    - if:
+                                        - condition: template
+                                          value_template: "{{ states(media_player_entity) in ['playing', 'buffering'] }}"
+                                      then:
+                                        - action: logbook.log
+                                          data:
+                                            name: Hippo's Push-Button Music Controller
+                                            message: >-
+                                              Could not establish a non-playing baseline before
+                                              Favorite {{ repeat.item + 1 }}; aborting failover.
+                                            entity_id: '{{ media_player_entity }}'
+                                            domain: media_player
+                                        - if:
+                                            - condition: template
+                                              value_template: >-
+                                                {{
+                                                  seeking_feedback_entity != [] and
+                                                  states(seeking_feedback_entity) == "on"
+                                                }}
+                                          then:
+                                            - action: homeassistant.turn_off
+                                              continue_on_error: true
+                                              target:
+                                                entity_id: '{{ seeking_feedback_entity }}'
+                                        - stop: The existing playback could not be paused safely
+                                    - variables:
+                                        selected_media: '{{ favorites[repeat.item].media }}'
+                                    - action: media_player.play_media
+                                      continue_on_error: true
+                                      target:
+                                        entity_id: '{{ media_player_entity }}'
+                                      data:
+                                        media:
+                                          media_content_id: '{{ selected_media.media_content_id }}'
+                                          media_content_type: '{{ selected_media.media_content_type }}'
+                                          metadata: "{{ selected_media.get('metadata', {}) }}"
+                                    - wait_template: "{{ is_state(media_player_entity, 'playing') }}"
+                                      timeout:
+                                        seconds: '{{ favorite_start_timeout_seconds }}'
+                                      continue_on_timeout: true
+                                    - if:
+                                        - condition: template
+                                          value_template: "{{ is_state(media_player_entity, 'playing') }}"
+                                      then:
+                                        - action: input_text.set_value
+                                          target:
+                                            entity_id: '{{ status_helper_entity }}'
+                                          data:
+                                            value: >-
+                                              {{
+                                                dict(
+                                                  v=1,
+                                                  active=true,
+                                                  favorite=repeat.item,
+                                                  paused=none,
+                                                  direction=controller_status.direction
+                                                ) | to_json
+                                              }}
+                                        - action: logbook.log
+                                          data:
+                                            name: Hippo's Push-Button Music Controller
+                                            message: Favorite {{ repeat.item + 1 }} started.
+                                            entity_id: '{{ media_player_entity }}'
+                                            domain: media_player
+                                      else:
+                                        - action: logbook.log
+                                          data:
+                                            name: Hippo's Push-Button Music Controller
+                                            message: Favorite {{ repeat.item + 1 }} failed to start.
+                                            entity_id: '{{ media_player_entity }}'
+                                            domain: media_player
+                          - if:
+                              - condition: template
+                                value_template: "{{ not is_state(media_player_entity, 'playing') }}"
+                            then:
+                              - action: input_text.set_value
+                                target:
+                                  entity_id: '{{ status_helper_entity }}'
+                                data:
+                                  value: >-
+                                    {{
+                                      dict(
+                                        v=1,
+                                        active=false,
+                                        favorite=none,
+                                        paused=none,
+                                        direction=controller_status.direction
+                                      ) | to_json
+                                    }}
+                              - action: logbook.log
+                                data:
+                                  name: Hippo's Push-Button Music Controller
+                                  message: All configured favorites failed; the controller was reset.
+                                  entity_id: '{{ media_player_entity }}'
+                                  domain: media_player
+
+  # Reconcile the persistent session with the player after every completed run.
+  # unknown/unavailable deliberately preserve the session for transient outages.
+  - variables:
+      reconciled_helper_value: >-
+        {%- set value = states(status_helper_entity) | from_json({}) %}
+        {%- set value = value if value is mapping and value.get("v") == 1 else {} %}
+        {%- set direction = iif(value.get("direction") in ["up", "down"], value.get("direction"), "up") %}
+        {%- set favorite = value.get("favorite") %}
+        {%- set favorite = favorite if favorite is integer and favorite >= 0 and favorite < favorite_count else none %}
+        {%- set paused = value.get("paused") %}
+        {%- set paused = paused if paused is number and paused is not boolean else none %}
+        {%- set player_state = states(media_player_entity) %}
+        {%- if player_state in ["playing", "buffering"] %}
+          {{ dict(v=1, active=true, favorite=favorite, paused=none, direction=direction) | to_json }}
+        {%- elif
+          player_state == "paused" and value.get("active") == true and
+          paused is not none and now() | as_timestamp - paused >= pause_reset_seconds
+        %}
+          {{ dict(v=1, active=false, favorite=none, paused=none, direction=direction) | to_json }}
+        {%- elif player_state == "paused" and value.get("active") == true %}
+          {{
+            dict(
+              v=1,
+              active=true,
+              favorite=favorite,
+              paused=(paused if paused is number else now() | as_timestamp | int),
+              direction=direction
+            ) | to_json
+          }}
+        {%- elif player_state == "paused" %}
+          {{ dict(v=1, active=false, favorite=none, paused=none, direction=direction) | to_json }}
+        {%- elif player_state in ["unknown", "unavailable"] %}
+          {{ "" }}
+        {%- else %}
+          {{ dict(v=1, active=false, favorite=none, paused=none, direction=direction) | to_json }}
+        {%- endif %}
+  - if:
+      - condition: template
+        value_template: >-
+          {{ reconciled_helper_value != "" and states(status_helper_entity) != reconciled_helper_value }}
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: '{{ status_helper_entity }}'
+        data:
+          value: '{{ reconciled_helper_value }}'
+
+  - variables:
+      seeking_feedback_on: "{{ is_state(media_player_entity, 'buffering') }}"
+      playing_feedback_on: "{{ states(media_player_entity) in ['playing', 'buffering'] }}"
+  - if:
+      - condition: template
+        value_template: >-
+          {{ seeking_feedback_entity != [] and (states(seeking_feedback_entity) == "on") != seeking_feedback_on }}
+    then:
+      - action: "{{ 'homeassistant.turn_on' if seeking_feedback_on else 'homeassistant.turn_off' }}"
+        continue_on_error: true
+        target:
+          entity_id: '{{ seeking_feedback_entity }}'
+  - if:
+      - condition: template
+        value_template: >-
+          {{ playing_feedback_entity != [] and (states(playing_feedback_entity) == "on") != playing_feedback_on }}
+    then:
+      - action: "{{ 'homeassistant.turn_on' if playing_feedback_on else 'homeassistant.turn_off' }}"
+        continue_on_error: true
+        target:
+          entity_id: '{{ playing_feedback_entity }}'

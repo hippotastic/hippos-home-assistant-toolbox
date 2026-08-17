@@ -30,6 +30,10 @@ light:
   - platform: blueprint_test
     entities: !include fixture_lights.yaml
 
+media_player:
+  - platform: blueprint_test
+    entities: !include fixture_media_players.yaml
+
 switch:
   - platform: blueprint_test
     entities: !include fixture_switches.yaml
