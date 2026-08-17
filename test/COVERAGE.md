@@ -60,6 +60,8 @@ that remain stable across future implementations.
 | --------------------- | --------------------------------------------------------------------------------------------------- | ------------------------- |
 | Climate formula       | Cold suppresses watering; heat scales and caps runtime; rainfall reduces it; final minutes round up | `formula`                 |
 | Sensor fallbacks      | Invalid rainfall and temperature states use `0` and `20` respectively                               | `fallback`                |
+| Interval snapshot     | A new interval refreshes climate and soil while later slots keep those inputs frozen                 | `rainCredit`              |
+| Rain reconciliation   | Rising rain credit reduces demand; a falling sliding-window value only moves the comparison baseline | `rainCredit`              |
 | Invalid helper        | Malformed helper content becomes a valid status object                                              | `fallback`                |
 | Helper normalization  | Empty, malformed, and valid non-object JSON become a valid calculated status                        | `emptyHelper`, `fallback` |
 | Metadata preservation | Scheduler timestamps and unknown status properties survive recalculation                            | `fallback`                |
@@ -81,10 +83,10 @@ that remain stable across future implementations.
 | Exclusive control       | Stopped competing zones receive `last_end` only when their recorded completion is missing or stale                  | `active`                        |
 | Control window          | Recent watering is cleaned up; devices outside the 30-minute ownership window are left untouched                    | `recentWindow`, `outsideWindow` |
 | Natural handoff         | Completion records `last_end`, retriggers scheduling, stops the old valve, and starts the next due zone             | `handoff`                       |
-| Trigger filtering       | Schedule-only helper writes are ignored; material changes retrigger planning; invalid target states are excluded    | `triggerFilter`                 |
+| Trigger filtering       | Schedule-only and rain-snapshot helper writes are ignored; material changes retrigger planning; invalid targets are excluded | `triggerFilter`                 |
 | Startup settling        | An unavailable valve delays processing by the configured startup settle time                                        | `startup`                       |
 | Component contract      | Calculated valve, interval, and runtime flow into a future scheduler plan without manually triggering the scheduler | `endToEnd`                      |
-| Valve logbook           | Plan changes and actual watering transitions are attached to the affected valve entity                              | `planning`, `active`, `handoff` |
+| Valve logbook           | Rounded demand changes, watering transitions, remaining demand, and exceptional scheduling failures are recorded   | `planning`, `active`, `handoff` |
 
 ## Assertion Rules
 

@@ -73,6 +73,12 @@ class BlueprintTestView(HomeAssistantView):
         if command == "event_cursor":
             return web.json_response({"event_cursor": _latest_event_id(hass)})
 
+        if command == "fire_event":
+            hass.bus.async_fire(data["event_type"], data.get("data") or {})
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            return web.json_response({"ok": True})
+
         if command == "set_state":
             timestamp = None
             if "last_changed_age_seconds" in data:

@@ -4,7 +4,8 @@ blueprint:
     Create one scheduler after configuring the Irrigation Zone Calculation for
     every zone. Select each zone's dedicated Text helper exactly once and in the
     desired watering order. The scheduler runs one zone at a time and distributes
-    each cycle's demand across the available daily start times.
+    each cycle's demand across the available daily start times. Shortly before
+    every start time, it asks the zone calculations to prepare the upcoming slot.
   domain: automation
   source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_scheduler.yaml
   author: Hippo
@@ -35,7 +36,7 @@ blueprint:
           description: >-
             The first daily opportunity to water and the anchor of each planning
             cycle. Remaining demand may use this time again on following days before
-            the cycle ends.
+            the cycle ends. The upcoming slot is prepared two minutes earlier.
           default: '23:00:00'
           selector:
             time:
@@ -44,7 +45,8 @@ blueprint:
           description: >-
             Optional. Used only when demand remains because a zone reached its
             maximum duration per run. If this time is earlier than the primary time,
-            it means the following morning. Leave empty to disable it.
+            it means the following morning. The upcoming slot is prepared two
+            minutes earlier. Leave empty to disable it.
           default: null
           selector:
             time:
@@ -72,6 +74,7 @@ trigger_variables:
   zone_status_settle_seconds: 5 # @blueprint-test-value 0.1
   master_pump_settle_seconds: 10 # @blueprint-test-value 0.1
   startup_settle_seconds: 30 # @blueprint-test-value 0.1
+  slot_preparation_lead_seconds: 120
 
 triggers:
   - trigger: template
@@ -92,9 +95,24 @@ triggers:
     id: trigger_primary_start_time
   - trigger: template
     value_template: >-
+      {{
+        now().strftime("%H:%M") ==
+        (today_at(irrigation_start_time) - timedelta(seconds=slot_preparation_lead_seconds)).strftime("%H:%M")
+      }}
+    id: trigger_primary_slot_preparing
+  - trigger: template
+    value_template: >-
       {{ secondary_irrigation_start_time and secondary_irrigation_start_time != irrigation_start_time and
-        now().strftime("%H:%M:%S") == secondary_irrigation_start_time }}
+        now().strftime("%H:%M") == today_at(secondary_irrigation_start_time).strftime("%H:%M") }}
     id: trigger_secondary_start_time
+  - trigger: template
+    value_template: >-
+      {{
+        secondary_irrigation_start_time and secondary_irrigation_start_time != irrigation_start_time and
+        now().strftime("%H:%M") ==
+        (today_at(secondary_irrigation_start_time) - timedelta(seconds=slot_preparation_lead_seconds)).strftime("%H:%M")
+      }}
+    id: trigger_secondary_slot_preparing
 
 condition:
   # Changes to the generated next run do not recursively restart the scheduler.
@@ -107,8 +125,10 @@ condition:
         {%- set new_status = trigger.to_state.state | from_json({}) %}
         {%- set old_status = old_status if old_status is mapping else {} %}
         {%- set new_status = new_status if new_status is mapping else {} %}
-        {%- set old_status = old_status | dictsort | rejectattr("0", "eq", "next") | list %}
-        {%- set new_status = new_status | dictsort | rejectattr("0", "eq", "next") | list %}
+        {%- set old_status = old_status | dictsort |
+          rejectattr("0", "eq", "next") | rejectattr("0", "eq", "r") | list %}
+        {%- set new_status = new_status | dictsort |
+          rejectattr("0", "eq", "next") | rejectattr("0", "eq", "r") | list %}
         {{ dict(old_status) != dict(new_status) }}
       {%- endif %}
 
@@ -126,6 +146,24 @@ variables:
     - watered
     - slot
     - next
+    - r
+  trigger_id: '{{ trigger.id | default("") }}'
+  is_slot_preparation: >-
+    {{ trigger_id in ["trigger_primary_slot_preparing", "trigger_secondary_slot_preparing"] }}
+  prepared_slot_kind: >-
+    {{ "primary" if trigger_id == "trigger_primary_slot_preparing" else "secondary" }}
+  prepared_slot_start: >-
+    {%- if is_slot_preparation %}
+      {%- set slot_time = irrigation_start_time
+        if prepared_slot_kind == "primary" else secondary_irrigation_start_time %}
+      {%- set start = today_at(slot_time) %}
+      {{ start + timedelta(days=1) if start <= now() else start }}
+    {%- else %}
+      {{ none }}
+    {%- endif %}
+  # Primary preparation plans against the imminent slot so a new interval is
+  # committed before the exact start-time trigger needs to open its first valve.
+  planning_time: '{{ prepared_slot_start if is_slot_preparation else now() }}'
   secondary_offset_seconds: >-
     {%- if secondary_irrigation_start_time and secondary_irrigation_start_time != irrigation_start_time %}
       {%- set offset = (today_at(secondary_irrigation_start_time) - today_at(irrigation_start_time)).total_seconds() | int %}
@@ -197,6 +235,16 @@ variables:
     {{ ns.result }}
 
 actions:
+  - if:
+      - condition: template
+        value_template: '{{ is_slot_preparation }}'
+    then:
+      - event: hippos_irrigation_slot_preparing
+        event_data:
+          zone_status_helper_entities: '{{ zone_status_helper_entities }}'
+          slot: '{{ prepared_slot_kind }}'
+          start: '{{ prepared_slot_start }}'
+
   - delay:
       seconds: '{{ startup_delay }}'
 
@@ -269,10 +317,16 @@ actions:
             data:
               name: Hippo's Irrigation Scheduler
               message: >-
-                {%- set minutes = (remaining_runtime_seconds / 60) | round(1) %}
-                {%- set display = minutes | int if minutes == minutes | int else minutes %}
-                Started watering for {{ display }} minute{{ iif(display == 1, "", "s") }}.
-                Scheduled end: {{ (currently_scheduled_zone.run_end | as_datetime | as_local).strftime("%Y-%m-%d %H:%M") }}.
+                {%- set display = (currently_scheduled_zone.next[1] / 60) | round(0, "ceil") | int %}
+                {%- set ns = namespace(message="Starting to water for " ~ display ~
+                  " minute" ~ iif(display == 1, "", "s")) %}
+                {%- if currently_scheduled_zone.next[1] < currently_scheduled_zone.runtime * 60 %}
+                  {%- set demand = currently_scheduled_zone.runtime | int %}
+                  {%- set ns.message = ns.message ~ " (out of " ~ demand ~
+                    " minute" ~ iif(demand == 1, "", "s") ~ " watering demand)" %}
+                {%- endif %}
+                {{ ns.message ~ ". Scheduled end: " ~
+                  (currently_scheduled_zone.run_end | as_datetime | as_local).strftime("%Y-%m-%d %H:%M") ~ "." }}
               entity_id: '{{ currently_scheduled_zone.valve }}'
               domain: switch
           - action: switch.turn_on
@@ -284,17 +338,28 @@ actions:
         data:
           name: Hippo's Irrigation Scheduler
           message: >-
-            {%- set completed = (currently_scheduled_zone.next[1] / 60) | round(1) %}
-            {%- set completed_display = completed | int if completed == completed | int else completed %}
-            {%- set remaining = (([0, currently_scheduled_zone.runtime * 60 -
-              currently_scheduled_zone.get("watered", 0) - currently_scheduled_zone.next[1]] | max) / 60) | round(1) %}
-            {%- set remaining_display = remaining | int if remaining == remaining | int else remaining %}
-            Completed {{ completed_display }} minute{{ iif(completed_display == 1, "", "s") }}.
-            {%- if remaining > 0 %}
-              {{ remaining_display }} minute{{ iif(remaining_display == 1, " remains", "s remain") }} for next run.
-            {%- else %}
-              No watering remains in the current cycle.
+            {%- set completed_display = (currently_scheduled_zone.next[1] / 60) | round(0, "ceil") | int %}
+            {%- set remaining_seconds = [0, currently_scheduled_zone.runtime * 60 -
+              currently_scheduled_zone.get("watered", 0) - currently_scheduled_zone.next[1]] | max %}
+            {%- set remaining_display = (remaining_seconds / 60) | round(0, "ceil") | int %}
+            {%- set ns = namespace(message="Completed " ~ completed_display ~
+              " minute" ~ iif(completed_display == 1, "", "s") ~ ".") %}
+            {%- if remaining_display > 0 %}
+              {%- set ns.message = ns.message ~ " Remaining watering demand: " ~
+                remaining_display ~ " minute" ~ iif(remaining_display == 1, "", "s") ~ "." %}
+              {%- set next_slot = currently_scheduled_zone.next[2] + 1 %}
+              {%- set next_day = (next_slot / slots_per_day) | int %}
+              {%- set next_is_secondary = slots_per_day == 2 and next_slot % 2 == 1 %}
+              {%- set next_start = currently_scheduled_zone.cycle | as_datetime +
+                timedelta(days=next_day, seconds=iif(next_is_secondary, secondary_offset_seconds, 0)) %}
+              {%- set cycle_end = currently_scheduled_zone.cycle | as_datetime +
+                timedelta(days=[1, currently_scheduled_zone.interval | int] | max) %}
+              {%- if next_start < cycle_end %}
+                {%- set ns.message = ns.message ~ " Next run: " ~
+                  (next_start | as_local).strftime("%Y-%m-%d %H:%M") ~ "." %}
+              {%- endif %}
             {%- endif %}
+            {{ ns.message }}
           entity_id: '{{ currently_scheduled_zone.valve }}'
           domain: switch
       - action: input_text.set_value
@@ -334,7 +399,7 @@ actions:
     then:
       - variables:
           scheduled_zones: >-
-            {%- set ns = namespace(zones=[], scheduled=[], cursor=now()) %}
+            {%- set ns = namespace(zones=[], scheduled=[], cursor=planning_time | as_datetime) %}
             {#- Establish or advance each zone's interval anchor. The anchor, not
                 the most recent partial run, determines the next interval. #}
             {%- for zone in all_zones %}
@@ -343,14 +408,14 @@ actions:
               {%- set reset_cycle = false %}
               {%- if cycle %}
                 {%- set cycle = cycle | as_datetime %}
-                {%- if now() >= cycle + timedelta(days=interval) %}
-                  {%- set elapsed_cycles = ((now() - cycle).total_seconds() / (interval * 86400)) | int %}
+                {%- if planning_time | as_datetime >= cycle + timedelta(days=interval) %}
+                  {%- set elapsed_cycles = (((planning_time | as_datetime) - cycle).total_seconds() / (interval * 86400)) | int %}
                   {%- set cycle = cycle + timedelta(days=elapsed_cycles * interval) %}
                   {%- set reset_cycle = true %}
                 {%- endif %}
               {%- else %}
                 {%- set cycle = today_at(irrigation_start_time) %}
-                {%- if cycle <= now() %}
+                {%- if cycle < planning_time | as_datetime %}
                   {%- set cycle = cycle + timedelta(days=1) %}
                 {%- endif %}
                 {%- set last_end = zone.get("last_end") %}
@@ -427,33 +492,16 @@ actions:
             - if:
                 - condition: template
                   value_template: >-
-                    {{ repeat.item.schedule_changed == 1 or (not repeat.item.next and repeat.item.remaining > 0) }}
+                    {{ not is_slot_preparation and not repeat.item.next and repeat.item.remaining > 0 }}
               then:
                 - action: logbook.log
                   data:
                     name: Hippo's Irrigation Scheduler
                     message: >-
-                      {%- if repeat.item.next %}
-                        {%- set minutes = (repeat.item.next[1] / 60) | round(1) %}
-                        {%- set display = minutes | int if minutes == minutes | int else minutes %}
-                        {%- set start = repeat.item.next[0] | as_datetime | as_local %}
-                        Next run: {{ display }} minute{{ iif(display == 1, "", "s") }} at {{ start.strftime("%Y-%m-%d %H:%M") }}.
-                        {%- if repeat.item.watered > 0 %}
-                          {%- set watered = (repeat.item.watered / 60) | round(1) %}
-                          {%- set watered_display = watered | int if watered == watered | int else watered %}
-                          {{ watered_display }} minute{{ iif(watered_display == 1, "", "s") }}
-                          already completed in the current cycle.
-                        {%- endif %}
-                      {%- elif repeat.item.remaining > 0 %}
-                        {%- set minutes = (repeat.item.remaining / 60) | round(1) %}
-                        {%- set display = minutes | int if minutes == minutes | int else minutes %}
-                        {{ display }} minute{{ iif(display == 1, "", "s") }} could not be scheduled
-                        before the current cycle ends. Increase the maximum duration
-                        per run, add an additional daily start time, or lengthen the
-                        planning cycle.
-                      {%- else %}
-                        No watering remains in the current cycle.
-                      {%- endif %}
+                      {%- set display = (repeat.item.remaining / 60) | round(0, "ceil") | int %}
+                      Remaining watering demand: {{ display }}
+                      minute{{ iif(display == 1, "", "s") }}.
+                      No further run can be scheduled before the current cycle ends.
                     entity_id: '{{ repeat.item.valve }}'
                     domain: switch
             - action: input_text.set_value

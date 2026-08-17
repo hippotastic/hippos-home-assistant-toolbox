@@ -13,6 +13,7 @@ export type ZoneStatus = Record<string, unknown> & {
 	next?: [string, number, number]
 	next_start?: string
 	next_end?: string
+	r?: number
 	runtime?: number
 	cycle?: string
 	slot?: number
@@ -42,6 +43,8 @@ type CalculationScenarioFixture<TScenario extends IrrigationCalculationScenario>
 	expectNoHelperChanges: (options?: { forMs?: number }) => Promise<void>
 	/** Finishes the previous automation run and starts a fresh event window for the next action */
 	prepareNextAction: () => Promise<void>
+	/** Requests the scheduler-driven rain reconciliation for a later irrigation slot */
+	requestRainReconciliation: () => Promise<void>
 	/** Immediately enables or disables the calculation automation without clearing recorded events */
 	setAutomationEnabled: (enabled: boolean) => Promise<void>
 	/** Updates both climate sensor states used by the calculation */
@@ -122,6 +125,12 @@ export async function withCalculationScenario<TScenario extends IrrigationCalcul
 				},
 				expectNoHelperChanges: (options) => helperState.expectNoChanges(options),
 				prepareNextAction: () => prepareNextAction(client, [entities.automation]),
+				requestRainReconciliation: () =>
+					client.fireEvent('hippos_irrigation_slot_preparing', {
+						slot: 'secondary',
+						start: new Date(Date.now() + 120_000).toISOString(),
+						zone_status_helper_entities: [entities.helper],
+					}),
 				setAutomationEnabled: (enabled) => setAutomation(client, entities.automation, enabled),
 				setClimate: async ({ rainfall, temperature }) => {
 					await client.setState(scenario.sensors.rainfall, rainfall)

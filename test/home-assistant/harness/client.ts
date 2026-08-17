@@ -6,6 +6,7 @@ export type BlueprintRuntimeClient = {
 	callService(domain: string, service: string, data?: Record<string, unknown>): Promise<void>
 	diagnostics(): Promise<BlueprintRuntimeDiagnostics>
 	events(): Promise<BlueprintRuntimeEvent[]>
+	fireEvent(eventType: string, data?: Record<string, unknown>): Promise<void>
 	fireScheduledTime(time: string): Promise<number>
 	getState(entityId: string): Promise<BlueprintRuntimeState | null>
 	serviceCalls(match?: ServiceCallMatch): Promise<BlueprintServiceCall[]>
@@ -210,6 +211,10 @@ class DockerExecBlueprintRuntimeClient implements BlueprintRuntimeClient {
 
 	async events(): Promise<BlueprintRuntimeEvent[]> {
 		return (await this.request<{ events: BlueprintRuntimeEvent[] }>('events', { after_event_id: this.eventCursor })).events
+	}
+
+	async fireEvent(eventType: string, data: Record<string, unknown> = {}): Promise<void> {
+		await this.request('fire_event', { data, event_type: eventType })
 	}
 
 	async fireScheduledTime(time: string): Promise<number> {

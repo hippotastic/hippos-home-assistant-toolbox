@@ -76,7 +76,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 				// and the valve calls to preserve their watering order
 				await expectValveToBecome(1, 'off', { withinMs: 5000 })
 				await waitForZoneHelper(1, (status) => typeof status.last_end === 'string')
-				await waitForValveLog(1, 'minute remains for next run')
+				await waitForValveLog(1, 'Remaining watering demand: 1 minute')
 				expect(await irrigationCalls()).toEqual([
 					{ service: 'turn_on', target: 'valve:0' },
 					{ service: 'turn_off', target: 'valve:0' },
@@ -105,7 +105,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 	})
 
 	test('plans positive runtimes contiguously in stable helper order', async () => {
-		await withSchedulerScenario(IRRIGATION_SCHEDULER_SCENARIOS.planning, async ({ entities, setZoneHelper, startSchedulers, waitForValveLog, waitForZoneHelper }) => {
+		await withSchedulerScenario(IRRIGATION_SCHEDULER_SCENARIOS.planning, async ({ entities, setZoneHelper, startSchedulers, waitForZoneHelper }) => {
 			await setZoneHelper(0, { custom: 'zone-1', interval: 1, runtime: 2 })
 			await setZoneHelper(1, { custom: 'zone-2', interval: 1, runtime: 1 })
 			await setZoneHelper(2, {
@@ -132,10 +132,8 @@ describe("Hippo's Irrigation Scheduler", () => {
 			expect(typeof zero.cycle).toBe('string')
 			expect(zero).toMatchObject({ interval: 1, runtime: 0, slot: 0, valve: entities.valves[2], watered: 0 })
 
-			// If scheduling succeeds, expect each valve log to explain its plan or omission
-			const scheduledLog = await waitForValveLog(0, 'Next run: 2 minutes')
-			expect(String(scheduledLog.serviceData.message)).toContain(' at ')
-			await waitForValveLog(2, 'No watering remains in the current cycle')
+			// Successful internal planning stays silent; calculation, execution, and
+			// exceptional scheduling outcomes provide the user-facing log entries.
 		})
 	})
 
@@ -186,8 +184,8 @@ describe("Hippo's Irrigation Scheduler", () => {
 			await setAutomation(client, IRRIGATION_SCHEDULER_SCENARIOS.splitCycle.entities.automation, false)
 			await setZoneHelper(0, { ...increased, next: undefined, runtime: 400, slot: 6, watered: 21600 })
 			await setAutomation(client, IRRIGATION_SCHEDULER_SCENARIOS.splitCycle.entities.automation, true)
-			const expiredLog = await waitForValveLog(0, '40 minutes could not be scheduled')
-			expect(String(expiredLog.serviceData.message)).toContain('add an additional daily start time')
+			const expiredLog = await waitForValveLog(0, 'Remaining watering demand: 40 minutes')
+			expect(String(expiredLog.serviceData.message)).toContain('No further run can be scheduled')
 		})
 	})
 
@@ -206,13 +204,18 @@ describe("Hippo's Irrigation Scheduler", () => {
 				})
 				await startSchedulers()
 				await expectValveToBecome(1, 'on')
+				const startLog = await waitForValveLog(1, 'Starting to water for 1 minute')
+				expect(String(startLog.serviceData.message)).toMatch(
+					/^Starting to water for 1 minute \(out of 2 minutes watering demand\)\. Scheduled end: \d{4}-\d{2}-\d{2} \d{2}:\d{2}\.$/
+				)
 				const active = await waitForZoneHelper(1, (status) => Array.isArray(status.next))
 				await setZoneHelper(1, { ...active, runtime: 0 })
 				await expectNoValveChanges(1, { forMs: 500 })
 				await expectValveToBecome(1, 'off', { withinMs: 3000 })
 				const completed = await waitForZoneHelper(1, (status) => status.next === undefined && Number(status.watered) >= 1)
 				expect(completed.slot).toBe(1)
-				await waitForValveLog(1, 'No watering remains in the current cycle')
+				const completionLog = await waitForValveLog(1, 'Completed 1 minute')
+				expect(String(completionLog.serviceData.message)).toBe('Completed 1 minute.')
 			}
 		)
 	})
@@ -283,7 +286,7 @@ describe("Hippo's Irrigation Scheduler", () => {
 
 				// If the scheduler changes active zones, expect both valves to log the reason
 				await waitForValveLog(1, 'scheduled run ended or another zone is starting')
-				await waitForValveLog(0, 'Started watering for')
+				await waitForValveLog(0, 'Starting to water for')
 			}
 		)
 	})
@@ -374,6 +377,12 @@ describe("Hippo's Irrigation Scheduler", () => {
 				})
 				// The test copy settles helper triggers for 100 ms,
 				// so expect no scheduling update throughout that delayed trigger window
+				await expectNoSchedulingUpdates({ forMs: 150 })
+
+				// The calculation blueprint records sliding-window rain observations even
+				// when rounded demand is unchanged; that internal-only field stays silent.
+				await prepareNextAction()
+				await setZoneHelper(0, { ...status, r: 12 })
 				await expectNoSchedulingUpdates({ forMs: 150 })
 
 				// If a material zone value changes, expect the scheduler to replan

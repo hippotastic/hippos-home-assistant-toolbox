@@ -85,9 +85,11 @@ The two irrigation blueprints work together:
 
 ### How Scheduling Works
 
-Each zone calculates its watering demand in minutes for the current watering interval based on the configured default duration, rain, temperature, and soil moisture.
+Each zone calculates its watering demand in minutes at the beginning of the current watering interval, based on the configured default duration, rain, temperature, and soil moisture. Temperature and soil moisture then remain fixed for that interval. Shortly before later primary or secondary slots, only a positive change in the credited rain duration reduces the remaining demand; a falling 24-hour sliding-window value never adds demand back.
 
 The scheduler then plans runs for all zones in the order they were selected. It always attempts to satisfy each zone's watering demand in full. If an optional maximum duration per run is configured for a zone, the scheduler splits its demand into multiple runs, each with a duration not exceeding the limit.
+
+The valve log records rounded demand changes, actual starts, completions, remaining demand, and exceptional scheduling failures. Internal schedule adjustments that do not change the rounded demand remain silent.
 
 The scheduler supports a primary and an additional daily start time. It first schedules runs at the primary time. If a zone's watering demand cannot be fully satisfied at that primary time, it attempts to schedule the remaining demand at the additional time. If that is also insufficient, the remaining demand can also be carried over to the next days, until the next watering interval begins. Any demand that still cannot be scheduled expires at that boundary.
 

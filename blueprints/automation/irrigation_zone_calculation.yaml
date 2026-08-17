@@ -3,8 +3,10 @@ blueprint:
   description: >-
     Create one automation per irrigation zone. It calculates the total watering
     demand for each planning cycle and stores it in a dedicated Text helper for
-    the Irrigation Scheduler. Create that helper with a maximum length of 255
-    characters before configuring this automation.
+    the Irrigation Scheduler. Temperature and soil moisture are sampled when a
+    cycle begins; before later slots, only additional rain can reduce the stored
+    demand. Create that helper with a maximum length of 255 characters before
+    configuring this automation.
   domain: automation
   source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_zone_calculation.yaml
   author: Hippo
@@ -94,7 +96,9 @@ blueprint:
             24 hours during which rain was detected, from 0 to 100. This is not
             precipitation in millimetres. The configured share of detected rain
             minutes is treated as already supplied and subtracted from the adjusted
-            cycle demand. An unavailable sensor is treated as no rain.
+            cycle demand. Before later slots, increases since the previous reading
+            reduce the remaining demand; decreases caused by the sliding window do
+            not increase it. An unavailable sensor is treated as no rain.
           selector:
             entity:
               filter:
@@ -122,7 +126,9 @@ blueprint:
             Select a sensor reporting degrees Celsius. Below 12 °C watering is
             disabled. From 25 to 35 °C the temperature adjustment increases
             progressively, up to 200% of the reference runtime — a maximum increase
-            of 100%. An unavailable sensor is treated as 20 °C.
+            of 100%. The value is sampled at the beginning of each planning cycle
+            and after configuration changes. An unavailable sensor is treated as
+            20 °C.
           selector:
             entity:
               filter:
@@ -137,7 +143,9 @@ blueprint:
           name: Soil moisture sensor
           description: >-
             An optional sensor reporting a numeric value from 0 to 100%. If it is
-            unavailable, no soil-moisture adjustment is applied.
+            unavailable, no soil-moisture adjustment is applied. The value is
+            sampled at the beginning of each planning cycle and after configuration
+            changes.
           default: []
           selector:
             entity:
@@ -170,22 +178,54 @@ trigger_variables:
   max_temperature_of_last_24h_entity: !input max_temperature_of_last_24h_entity
   soil_moisture_entity: !input soil_moisture_entity
   target_soil_moisture_percentage: !input target_soil_moisture_percentage
+  calculation_log_delay_seconds: 6 # @blueprint-test-value 0.2
 
 triggers:
   # The automation was enabled or any settings were changed
   - trigger: template
     value_template: '{{ this is defined and this is not none and is_state(this.entity_id, "on") }}'
     id: trigger_automation_enabled
-  # Every hour at 58 minutes past whole
-  - trigger: time_pattern
-    minutes: 58
-    id: trigger_time_based_update
+  # The scheduler requests one calculation shortly before a configured slot.
+  - trigger: event
+    event_type: hippos_irrigation_slot_preparing
+    id: trigger_slot_preparing
 
 # If the automation is triggered again while still being executed, restart it
 mode: restart
 max_exceeded: silent
 
 variables:
+  trigger_id: '{{ trigger.id | default("") }}'
+  is_slot_request: '{{ trigger_id == "trigger_slot_preparing" }}'
+  is_targeted_slot_request: >-
+    {{
+      not is_slot_request or
+      status_helper_entity in trigger.event.data.get("zone_status_helper_entities", [])
+    }}
+  requested_slot_kind: >-
+    {{ trigger.event.data.get("slot", "") if is_slot_request else "" }}
+  requested_slot_start: >-
+    {{ trigger.event.data.get("start") | as_datetime if is_slot_request else none }}
+  # Get current value of status helper
+  status: >-
+    {%- set value = states(status_helper_entity) | from_json({}) %}
+    {{ value if value is mapping else {} }}
+  # A primary slot opens a new interval when it matches the stored anchor or
+  # reaches the next interval boundary. Later slots only reconcile rain.
+  is_interval_start: >-
+    {{
+      is_slot_request and requested_slot_kind == "primary" and (
+        not status.get("cycle") or
+        (requested_slot_start | as_datetime) == (status.get("cycle") | as_datetime) or
+        (requested_slot_start | as_datetime) >= (status.get("cycle") | as_datetime) +
+          timedelta(days=[1, watering_interval_days | int] | max)
+      )
+    }}
+  is_rain_only_update: >-
+    {{
+      is_slot_request and not is_interval_start and
+      status.get("runtime") is number and status.get("r") is number
+    }}
   # Perform zone runtime calculation
   rainfall_pct: '{{ states(rainfall_percentage_of_last_24h_entity) | float(default=0) }}'
   max_temperature: '{{ states(max_temperature_of_last_24h_entity) | float(default=20) }}'
@@ -207,44 +247,35 @@ variables:
   soil_adjustment_minutes: '{{ gross_runtime_minutes - temperature_runtime_minutes }}'
   # Cap the displayed rain credit so every logged component adds up to the final runtime.
   applied_rain_minutes: '{{ [credited_rain_minutes, gross_runtime_minutes] | min | int }}'
-  runtime_minutes: '{{ gross_runtime_minutes - applied_rain_minutes }}'
-  # Get current value of status helper
-  status: >-
-    {%- set value = states(status_helper_entity) | from_json({}) %}
-    {{ value if value is mapping else {} }}
+  previous_rain_minutes: '{{ status.get("r", credited_rain_minutes) | int }}'
+  additional_rain_minutes: '{{ [0, credited_rain_minutes - previous_rain_minutes] | max | int }}'
+  fully_calculated_runtime_minutes: '{{ gross_runtime_minutes - applied_rain_minutes }}'
+  # Between interval starts, only positive changes from the sliding rain
+  # window reduce demand. Falling values never increase demand again.
+  runtime_minutes: >-
+    {{
+      [0, status.get("runtime", 0) | int - additional_rain_minutes] | max | int
+      if is_rain_only_update else
+      fully_calculated_runtime_minutes
+    }}
+  runtime_changed: '{{ status.get("runtime") != runtime_minutes }}'
+  watered_before_calculation: >-
+    {{ 0 if is_interval_start else status.get("watered", 0) | int }}
 
 actions:
-  # Only continue if we need to update any of our output properties in the status helper
+  - condition: template
+    value_template: '{{ is_targeted_slot_request }}'
+  # Internal rain observations are persisted even when the rounded watering
+  # demand stays unchanged, but those silent writes do not trigger replanning.
   - condition: template
     value_template: >-
       {{
         status.get("valve") != valve_entity or
         status.get("interval") != watering_interval_days or
         status.get("runtime") != runtime_minutes or
-        status.get("max_runtime", 0) != maximum_runtime_minutes
+        status.get("max_runtime", 0) != maximum_runtime_minutes or
+        status.get("r") != credited_rain_minutes
       }}
-  # Explain the changed watering requirement in the valve's logbook.
-  - action: logbook.log
-    data:
-      name: Hippo's Irrigation Zone Calculation
-      message: >-
-        Calculated {{ runtime_minutes }} minutes of watering for the current
-        {{ watering_interval_days }}-day cycle: {{ base_runtime_minutes }} minutes
-        base runtime
-        {%- if temperature_adjustment_minutes >= 0 %} +
-        {{ temperature_adjustment_minutes }} minutes due to heat
-        {%- else %} - {{ 0 - temperature_adjustment_minutes }} minutes due to
-        low temperature
-        {%- endif %} ({{ max_temperature }} °C)
-        {%- if soil_moisture_entity %}
-        + {{ soil_adjustment_minutes }} minutes due to soil (current:
-        {{ "%g" | format(soil_moisture | round(1)) }}%, target:
-        {{ "%g" | format(target_soil_moisture_percentage) }}%)
-        {%- endif %} - {{ applied_rain_minutes }} minutes of rain
-        {%- if rain_credit_percentage != 100 %} ({{ rain_credit_percentage }}% credit)
-        {%- endif %}.
-      entity_id: '{{ valve_entity }}'
-      domain: switch
   # Keep the shared helper within its known schema before updating calculation fields.
   - action: input_text.set_value
     target:
@@ -253,9 +284,10 @@ actions:
       value: >-
         {%- set status = dict(status | dictsort | selectattr("0", "in",
           ["valve", "interval", "runtime", "max_runtime", "last_end",
-            "cycle", "watered", "slot", "next"]) | list) %}
+            "cycle", "watered", "slot", "next", "r"]) | list) %}
         {%- set status = dict(status, valve=valve_entity,
-          interval=watering_interval_days, runtime=runtime_minutes) %}
+          interval=watering_interval_days, runtime=runtime_minutes,
+          r=credited_rain_minutes) %}
         {%- if maximum_runtime_minutes > 0 %}
           {%- set status = dict(status, max_runtime=maximum_runtime_minutes) %}
         {%- else %}
@@ -263,3 +295,68 @@ actions:
           {%- set status = dict(status) %}
         {%- endif %}
         {{ status | to_json }}
+  - if:
+      - condition: template
+        value_template: '{{ runtime_changed }}'
+    then:
+      # Give the scheduler time to publish the resulting next run so one
+      # calculation entry can include the useful plan without a second log.
+      - delay:
+          seconds: '{{ calculation_log_delay_seconds }}'
+      - variables:
+          updated_status: >-
+            {%- set value = states(status_helper_entity) | from_json({}) %}
+            {{ value if value is mapping else {} }}
+          updated_next: '{{ updated_status.get("next") }}'
+          remaining_minutes: >-
+            {{ (([0, runtime_minutes * 60 - watered_before_calculation] | max) / 60) | round(0, "ceil") | int }}
+      - action: logbook.log
+        data:
+          name: Hippo's Irrigation Zone Calculation
+          message: >-
+            {%- set ns = namespace(message="") %}
+            {%- if is_rain_only_update %}
+              {%- set ns.message = "Additional rain reduced watering demand from " ~
+                (status.get("runtime", 0) | int) ~ " to " ~ runtime_minutes ~ " minutes. " ~
+                "Total rain credit: " ~ credited_rain_minutes ~
+                " minutes; previously observed: " ~ previous_rain_minutes ~ " minutes." %}
+            {%- else %}
+              {%- set ns.message = "Calculated " ~ runtime_minutes ~
+                " minutes of watering demand for the current " ~ watering_interval_days ~
+                "-day cycle: " ~ base_runtime_minutes ~ " minutes base runtime" %}
+              {%- if temperature_adjustment_minutes >= 0 %}
+                {%- set ns.message = ns.message ~ " + " ~ temperature_adjustment_minutes ~
+                  " minutes due to heat" %}
+              {%- else %}
+                {%- set ns.message = ns.message ~ " - " ~ (0 - temperature_adjustment_minutes) ~
+                  " minutes due to low temperature" %}
+              {%- endif %}
+              {%- set ns.message = ns.message ~ " (" ~ max_temperature ~ " °C)" %}
+              {%- if soil_moisture_entity %}
+                {%- set ns.message = ns.message ~ " + " ~ soil_adjustment_minutes ~
+                  " minutes due to soil (current: " ~
+                  ("%g" | format(soil_moisture | round(1))) ~ "%, target: " ~
+                  ("%g" | format(target_soil_moisture_percentage)) ~ "%)" %}
+              {%- endif %}
+              {%- set ns.message = ns.message ~ " - " ~ applied_rain_minutes ~
+                " minutes of rain" %}
+              {%- if rain_credit_percentage != 100 %}
+                {%- set ns.message = ns.message ~ " (" ~ rain_credit_percentage ~ "% credit)" %}
+              {%- endif %}
+              {%- set ns.message = ns.message ~ "." %}
+            {%- endif %}
+            {%- if watered_before_calculation > 0 and remaining_minutes > 0 %}
+              {%- set ns.message = ns.message ~ " Remaining watering demand: " ~
+                remaining_minutes ~ " minutes." %}
+            {%- endif %}
+            {%- if updated_next is sequence and updated_next | count >= 2 %}
+              {%- set ns.message = ns.message ~ " Next run: " ~
+                (updated_next[0] | as_datetime | as_local).strftime("%Y-%m-%d %H:%M") ~ "." %}
+            {%- elif status.get("next") and remaining_minutes == 0 %}
+              {%- set ns.message = ns.message ~ " The run scheduled for " ~
+                (status.next[0] | as_datetime | as_local).strftime("%Y-%m-%d %H:%M") ~
+                " is no longer needed." %}
+            {%- endif %}
+            {{ ns.message }}
+          entity_id: '{{ valve_entity }}'
+          domain: switch
