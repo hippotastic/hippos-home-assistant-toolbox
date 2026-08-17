@@ -2,10 +2,11 @@
 
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from custom_components.hippos_toolbox.api import ToolboxApiError
 from custom_components.hippos_toolbox.const import (
     CONF_UPDATE_CHANNEL,
     DEVELOPMENT_UPDATE_INTERVAL,
@@ -34,6 +35,42 @@ class ToolboxCoordinatorTests(unittest.TestCase):
         self.assert_update_interval(
             {CONF_UPDATE_CHANNEL: UPDATE_CHANNEL_DEVELOPMENT},
             DEVELOPMENT_UPDATE_INTERVAL,
+        )
+
+
+class ToolboxCoordinatorRefreshTests(unittest.IsolatedAsyncioTestCase):
+    """Verify failed published-catalog checks are visible to the user."""
+
+    async def test_logs_failed_check_to_retry_button_activity(self) -> None:
+        hass = SimpleNamespace()
+        manager = SimpleNamespace(
+            async_fetch_and_evaluate=AsyncMock(
+                side_effect=ToolboxApiError("504 Gateway Timeout")
+            )
+        )
+        coordinator = object.__new__(ToolboxCoordinator)
+        coordinator.hass = hass
+        coordinator.manager = manager
+        registry = Mock()
+        registry.async_get_entity_id.return_value = "button.check_for_updates"
+
+        with (
+            patch(
+                "custom_components.hippos_toolbox.coordinator.er.async_get",
+                return_value=registry,
+            ),
+            patch(
+                "custom_components.hippos_toolbox.coordinator.async_log_entry"
+            ) as async_log_entry,
+        ):
+            with self.assertRaises(UpdateFailed):
+                await coordinator._async_update_data()
+
+        async_log_entry.assert_called_once_with(
+            hass,
+            name="Check for updates",
+            message="failed. See the system log for details.",
+            entity_id="button.check_for_updates",
         )
 
 

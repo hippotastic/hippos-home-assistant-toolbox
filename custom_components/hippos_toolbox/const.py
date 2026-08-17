@@ -29,6 +29,9 @@ DEVELOPMENT_BRANCH = "main"
 
 PROGRESSIVE_CAMERA_SUBENTRY_TYPE = "progressive_camera"
 
+BLUEPRINT_UPDATE_UNIQUE_ID = "hippos_toolbox_blueprints"
+CHECK_UPDATES_UNIQUE_ID = "hippos_toolbox_check_for_updates"
+
 CATALOG_SCHEMA_VERSION = 1
 SUPPORTED_BLUEPRINT_DOMAINS = frozenset(("automation", "script", "template"))
 STORAGE_KEY = DOMAIN

@@ -7,6 +7,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .const import BLUEPRINT_UPDATE_UNIQUE_ID
 from .coordinator import ToolboxCoordinator
 from .entity import ToolboxEntity
 
@@ -26,7 +27,7 @@ class ToolboxBlueprintUpdate(ToolboxEntity, UpdateEntity):
 
     _attr_supported_features = UpdateEntityFeature.INSTALL
     _attr_translation_key = "blueprints"
-    _attr_unique_id = "hippos_toolbox_blueprints"
+    _attr_unique_id = BLUEPRINT_UPDATE_UNIQUE_ID
 
     @property
     def installed_version(self) -> str:

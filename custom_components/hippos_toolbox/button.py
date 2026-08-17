@@ -6,6 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from .const import CHECK_UPDATES_UNIQUE_ID
 from .entity import ToolboxEntity
 
 
@@ -25,7 +26,13 @@ class ToolboxCheckUpdatesButton(ToolboxEntity, ButtonEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:refresh"
     _attr_translation_key = "check_for_updates"
-    _attr_unique_id = "hippos_toolbox_check_for_updates"
+    _attr_unique_id = CHECK_UPDATES_UNIQUE_ID
+
+    @property
+    def available(self) -> bool:
+        """Remain available so a failed catalog request can be retried."""
+
+        return True
 
     async def async_press(self) -> None:
         """Refresh the shared coordinator."""

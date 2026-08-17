@@ -2,15 +2,20 @@
 
 import logging
 
+from homeassistant.components.button import DOMAIN as BUTTON_DOMAIN
+from homeassistant.components.logbook import async_log_entry
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ToolboxApiError
 from .const import (
     CONF_UPDATE_CHANNEL,
+    CHECK_UPDATES_UNIQUE_ID,
     DEFAULT_UPDATE_CHANNEL,
     DEVELOPMENT_UPDATE_INTERVAL,
+    DOMAIN,
     NAME,
     UPDATE_CHANNEL_DEVELOPMENT,
     UPDATE_INTERVAL,
@@ -63,4 +68,17 @@ class ToolboxCoordinator(DataUpdateCoordinator[CoordinatorData]):
         try:
             return await self.manager.async_fetch_and_evaluate()
         except ToolboxApiError as err:
+            # Associate the entry with the retry button so it is included in
+            # both the device Activity panel and entity-filtered Logbook views.
+            entity_id = er.async_get(self.hass).async_get_entity_id(
+                BUTTON_DOMAIN,
+                DOMAIN,
+                CHECK_UPDATES_UNIQUE_ID,
+            )
+            async_log_entry(
+                self.hass,
+                name="Check for updates",
+                message="failed. See the system log for details.",
+                entity_id=entity_id,
+            )
             raise UpdateFailed(str(err)) from err
