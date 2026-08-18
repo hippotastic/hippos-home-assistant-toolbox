@@ -1,5 +1,20 @@
 # hippos-home-assistant-toolbox
 
+## 0.7.0
+
+### Minor Changes
+
+- a5773f4: Add Hippo's Push-Button Music Controller blueprint with tap, double-tap,
+  one- or two-button long-press volume fading, favorite failover, persistent
+  sessions, and optional LED feedback.
+
+### Patch Changes
+
+- e4b7bd4: Show the Progressive Snapshot Camera's cached frame immediately before relaying
+  a native MJPEG source, while sharing one upstream stream across all live cards
+  and preserving the source JPEG payloads without recompression.
+- 753a6fc: Explain when a reduced irrigation demand is already covered by watering completed earlier in the cycle, so the zone log states why no further run is needed.
+
 ## 0.6.0
 
 ### Minor Changes
