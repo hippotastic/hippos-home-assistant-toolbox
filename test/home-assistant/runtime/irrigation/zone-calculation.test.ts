@@ -204,11 +204,16 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 	test('only applies positive rain-credit changes between slots', async () => {
 		await withCalculationScenario(
 			IRRIGATION_CALCULATION_SCENARIOS.rainCredit,
-			async ({ client, expectHelperToBecome, prepareNextAction, requestSlotReconciliation, setAutomationEnabled, setClimate, setMoisture, waitForValveLog }) => {
+			async ({ client, expectHelperToBecome, prepareNextAction, requestSlotReconciliation, setAutomationEnabled, setClimate, setMoisture, setZoneHelper, waitForValveLog }) => {
 				await setClimate({ rainfall: '1.9', temperature: '41.6' })
 				await setMoisture('60')
 				await setAutomationEnabled(true)
-				await expectHelperToBecome((status) => status.runtime === 46 && status.m === 60 && status.r === 14 && status.s === 0 && status.t === 2)
+				const initial = await expectHelperToBecome((status) => status.runtime === 46 && status.m === 60 && status.r === 14 && status.s === 0 && status.t === 2)
+				await setZoneHelper({
+					...initial,
+					cycle: Date.parse('2026-08-17T09:00:00+02:00') / 1000,
+					watered: 60 * 60,
+				})
 
 				// A later slot observes seven additional credited rain minutes. Colder
 				// weather and worsening soil cannot increase the frozen interval demand.
@@ -219,6 +224,8 @@ describe("Hippo's Irrigation Zone Calculation", () => {
 				await expectHelperToBecome((status) => status.runtime === 39 && status.r === 21)
 				const reducedLog = await waitForValveLog('Additional rain reduced watering demand from 46 to 39 minutes')
 				expect(String(reducedLog.serviceData.message)).toContain('Total rain credit: 21 minutes; previously observed: 14 minutes')
+				expect(String(reducedLog.serviceData.message)).toContain('60 minutes have already been watered during the current cycle, so no further run is needed')
+				expect(String(reducedLog.serviceData.message)).toContain('Next cycle: 2026-08-19 09:00')
 
 				// A falling sliding-window value is stored silently and never increases demand.
 				await setClimate({ rainfall: '0.1', temperature: '35' })

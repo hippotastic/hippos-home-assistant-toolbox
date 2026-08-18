@@ -472,7 +472,25 @@ actions:
               {%- set ns.message = ns.message ~ " Remaining watering demand: " ~
                 remaining_minutes ~ " minutes." %}
             {%- endif %}
-            {%- if status.get("next") and remaining_minutes == 0 %}
+            {%- if watered_before_calculation > 0 and remaining_minutes == 0 %}
+              {%- set watered_minutes = (watered_before_calculation / 60) | round(0, "ceil") | int %}
+              {%- set ns.message = ns.message ~ " " ~ watered_minutes ~
+                " minute" ~ iif(watered_minutes == 1, " has", "s have") ~
+                " already been watered during the current cycle, so " %}
+              {%- if status.get("next") %}
+                {%- set ns.message = ns.message ~ "the run scheduled for " ~
+                  (status.next[0] | as_datetime | as_local).strftime("%Y-%m-%d %H:%M") ~
+                  " is no longer needed." %}
+              {%- else %}
+                {%- set ns.message = ns.message ~ "no further run is needed." %}
+              {%- endif %}
+              {%- if status.get("cycle") %}
+                {%- set next_cycle = status.cycle | as_datetime | as_local +
+                  timedelta(days=watering_interval_days) %}
+                {%- set ns.message = ns.message ~ " Next cycle: " ~
+                  (next_cycle | as_local).strftime("%Y-%m-%d %H:%M") ~ "." %}
+              {%- endif %}
+            {%- elif status.get("next") and remaining_minutes == 0 %}
               {%- set ns.message = ns.message ~ " The run scheduled for " ~
                 (status.next[0] | as_datetime | as_local).strftime("%Y-%m-%d %H:%M") ~
                 " is no longer needed." %}
