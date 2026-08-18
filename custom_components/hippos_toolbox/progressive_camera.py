@@ -5,20 +5,29 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from io import BytesIO
 import logging
 from pathlib import Path
 import time
 
+import aiohttp
 from PIL import Image as PillowImage
+from yarl import URL
 
-from homeassistant.components.camera import MIN_STREAM_INTERVAL, async_get_image
+from homeassistant.components.camera import (
+    Camera,
+    MIN_STREAM_INTERVAL,
+    async_get_image,
+)
 from homeassistant.components.camera.helper import get_camera_from_entity_id
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +37,11 @@ _INTERACTIVE_REFRESH_INTERVAL = 10.0
 _FETCH_HANDOFF_TIMEOUT = 5.0
 _FETCH_TIMEOUT = 15
 _COLD_REQUEST_TIMEOUT = 9.0
+_NATIVE_STREAM_CONNECT_TIMEOUT = 15.0
+_NATIVE_STREAM_READ_TIMEOUT = 30.0
+_NATIVE_STREAM_RETRY_INTERVAL = 2.0
+_NATIVE_STREAM_CHUNK_SIZE = 64 * 1024
+_MAX_NATIVE_FRAME_SIZE = 16 * 1024 * 1024
 _MAX_BACKGROUND_IN_FLIGHT = 2
 _MAX_CONSECUTIVE_INTERACTIVE_REQUESTS = 3
 
@@ -55,6 +69,7 @@ class _CameraCache:
     scheduled_priority: int = _PRIORITY_BACKGROUND
     scheduled_order: int = 0
     in_flight: asyncio.Task[None] | None = None
+    native_stream: asyncio.Task[None] | None = None
     first_attempt_completed: asyncio.Event = field(default_factory=asyncio.Event)
     subscribers: set[_FrameQueue] = field(default_factory=set)
     listeners: set[Callable[[], None]] = field(default_factory=set)
@@ -79,6 +94,7 @@ class _ProgressiveCameraManager:
         self._wake = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
         self._fetch_tasks: set[asyncio.Task[None]] = set()
+        self._native_stream_tasks: set[asyncio.Task[None]] = set()
         self._state_tasks: set[asyncio.Task[None]] = set()
         self._remove_state_listener: Callable[[], None] | None = None
         self._schedule_order = 0
@@ -123,6 +139,8 @@ class _ProgressiveCameraManager:
             self._worker.cancel()
         for task in tuple(self._fetch_tasks):
             task.cancel()
+        for task in tuple(self._native_stream_tasks):
+            task.cancel()
         for task in tuple(self._state_tasks):
             task.cancel()
 
@@ -132,6 +150,7 @@ class _ProgressiveCameraManager:
                 for task in (
                     self._worker,
                     *self._fetch_tasks,
+                    *self._native_stream_tasks,
                     *self._state_tasks,
                 )
                 if task is not None
@@ -140,6 +159,7 @@ class _ProgressiveCameraManager:
         )
         self._worker = None
         self._fetch_tasks.clear()
+        self._native_stream_tasks.clear()
         self._state_tasks.clear()
 
         for cache in self._caches.values():
@@ -179,15 +199,10 @@ class _ProgressiveCameraManager:
         if cache.display_frame is not None:
             queue.put_nowait(cache.display_frame)
 
-        if first_subscriber and cache.in_flight is None:
-            # The cached frame is only the instant placeholder. Always start the
-            # source-camera cadence in parallel when the first live viewer arrives.
-            self._async_schedule(
-                cache,
-                time.monotonic(),
-                _PRIORITY_INTERACTIVE,
-                replace=True,
-            )
+        if first_subscriber:
+            # The cached frame is only the instant placeholder. A native source
+            # is relayed once per camera; still-only sources keep snapshot cadence.
+            self._async_start_live_source(cache)
         return queue
 
     @callback
@@ -196,12 +211,12 @@ class _ProgressiveCameraManager:
 
         cache = self._caches[subentry_id]
         cache.subscribers.discard(queue)
-        if (
-            not cache.subscribers
-            and cache.in_flight is None
-            and cache.scheduled_at is not None
-            and cache.scheduled_priority == _PRIORITY_BACKGROUND
-        ):
+        if not cache.subscribers:
+            if cache.native_stream is not None:
+                cache.native_stream.cancel()
+                return
+            if cache.in_flight is not None:
+                return
             now = time.monotonic()
             due_at = (cache.last_completed_at or now) + _BACKGROUND_REFRESH_INTERVAL
             self._async_schedule(
@@ -234,6 +249,202 @@ class _ProgressiveCameraManager:
         return cache.display_frame is not None or self._source_is_available(cache)
 
     @callback
+    def _async_start_live_source(self, cache: _CameraCache) -> None:
+        """Start one native relay, or fall back to the snapshot cadence."""
+
+        if (
+            self._stopped
+            or not cache.subscribers
+            or not self._source_is_available(cache)
+            or cache.native_stream is not None
+        ):
+            return
+
+        if self._source_native_stream_url(cache) is not None:
+            # A background snapshot may already be running. Let it finish, but
+            # discard its next schedule because the relay now owns live cadence.
+            cache.scheduled_at = None
+            task = self._entry.async_create_background_task(
+                self._hass,
+                self._async_relay_native_stream(cache),
+                f"relay native MJPEG camera {cache.source_entity_id}",
+                eager_start=False,
+            )
+            cache.native_stream = task
+            self._native_stream_tasks.add(task)
+            task.add_done_callback(partial(self._async_native_stream_done, cache))
+            return
+
+        if cache.in_flight is None:
+            self._async_schedule(
+                cache,
+                time.monotonic(),
+                _PRIORITY_INTERACTIVE,
+                replace=True,
+            )
+
+    @callback
+    def _source_native_stream_url(self, cache: _CameraCache) -> URL | None:
+        """Return the authenticated HA proxy URL for a native MJPEG source."""
+
+        try:
+            source_camera = get_camera_from_entity_id(
+                self._hass, cache.source_entity_id
+            )
+        except HomeAssistantError:
+            return None
+
+        if (
+            getattr(
+                type(source_camera),
+                "handle_async_mjpeg_stream",
+                Camera.handle_async_mjpeg_stream,
+            )
+            is Camera.handle_async_mjpeg_stream
+        ):
+            return None
+
+        try:
+            base_url = get_url(
+                self._hass,
+                allow_cloud=False,
+                prefer_external=False,
+            )
+        except NoURLAvailableError:
+            _LOGGER.warning(
+                "Could not relay native MJPEG source %s because Home Assistant "
+                "has no reachable internal or external URL",
+                cache.source_entity_id,
+            )
+            return None
+
+        if not source_camera.access_tokens:
+            return None
+        return (
+            URL(base_url)
+            .with_path(f"/api/camera_proxy_stream/{cache.source_entity_id}")
+            .with_query({"token": source_camera.access_tokens[-1]})
+        )
+
+    @callback
+    def _async_native_stream_done(
+        self, cache: _CameraCache, task: asyncio.Task[None]
+    ) -> None:
+        """Release a relay task and recover if a viewer arrived during teardown."""
+
+        self._native_stream_tasks.discard(task)
+        if cache.native_stream is task:
+            cache.native_stream = None
+        if (
+            not self._stopped
+            and cache.subscribers
+            and self._source_is_available(cache)
+        ):
+            self._async_start_live_source(cache)
+        elif (
+            not self._stopped
+            and not cache.subscribers
+            and cache.in_flight is None
+            and self._source_is_available(cache)
+        ):
+            now = time.monotonic()
+            due_at = (cache.last_completed_at or now) + _BACKGROUND_REFRESH_INTERVAL
+            self._async_schedule(
+                cache,
+                max(now, due_at),
+                _PRIORITY_BACKGROUND,
+                replace=True,
+            )
+
+    async def _async_relay_native_stream(self, cache: _CameraCache) -> None:
+        """Remux one native source stream into cached JPEG frame updates."""
+
+        session = async_get_clientsession(self._hass)
+        timeout = aiohttp.ClientTimeout(
+            total=None,
+            sock_connect=_NATIVE_STREAM_CONNECT_TIMEOUT,
+            sock_read=None,
+        )
+
+        while (
+            not self._stopped
+            and cache.subscribers
+            and self._source_is_available(cache)
+        ):
+            response: aiohttp.ClientResponse | None = None
+            try:
+                stream_url = self._source_native_stream_url(cache)
+                if stream_url is None:
+                    return
+                async with asyncio.timeout(_NATIVE_STREAM_CONNECT_TIMEOUT):
+                    response = await session.get(stream_url, timeout=timeout)
+                response.raise_for_status()
+                content_type = response.headers.get("Content-Type", "")
+                if not content_type.lower().startswith("multipart/"):
+                    raise ValueError(
+                        "source returned unsupported native stream content type "
+                        f"{content_type!r}"
+                    )
+
+                buffer = bytearray()
+                frame_started = False
+                while cache.subscribers and not self._stopped:
+                    async with asyncio.timeout(_NATIVE_STREAM_READ_TIMEOUT):
+                        chunk = await response.content.read(
+                            _NATIVE_STREAM_CHUNK_SIZE
+                        )
+                    if not chunk:
+                        raise ConnectionError("native MJPEG stream ended")
+                    buffer.extend(chunk)
+
+                    while True:
+                        if not frame_started:
+                            start = buffer.find(b"\xff\xd8")
+                            if start < 0:
+                                # Retain a trailing 0xff in case the JPEG start
+                                # marker straddles two network chunks.
+                                if len(buffer) > 1:
+                                    del buffer[:-1]
+                                break
+                            del buffer[:start]
+                            frame_started = True
+
+                        end = buffer.find(b"\xff\xd9", 2)
+                        if end < 0:
+                            if len(buffer) > _MAX_NATIVE_FRAME_SIZE:
+                                raise ValueError(
+                                    "native MJPEG frame exceeded the size limit"
+                                )
+                            break
+
+                        frame = bytes(buffer[: end + 2])
+                        del buffer[: end + 2]
+                        frame_started = False
+                        self._async_record_success(
+                            cache, frame, notify_listeners=False
+                        )
+                        cache.last_completed_at = time.monotonic()
+                        cache.first_attempt_completed.set()
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # Native camera handlers fail variably.
+                if self._stopped or not cache.subscribers:
+                    return
+                if isinstance(err, (ConnectionError, TimeoutError, ValueError)):
+                    reason = str(err) or type(err).__name__
+                else:
+                    # Client exceptions may include the proxy URL and its camera
+                    # access token, so only expose their type to logs and state.
+                    reason = type(err).__name__
+                await self._async_record_failure(cache, reason)
+            finally:
+                if response is not None:
+                    response.close()
+
+            if cache.subscribers and self._source_is_available(cache):
+                await asyncio.sleep(_NATIVE_STREAM_RETRY_INTERVAL)
+
+    @callback
     def _async_schedule(
         self,
         cache: _CameraCache,
@@ -242,7 +453,11 @@ class _ProgressiveCameraManager:
         *,
         replace: bool = False,
     ) -> None:
-        if self._stopped or cache.in_flight is not None:
+        if (
+            self._stopped
+            or cache.in_flight is not None
+            or cache.native_stream is not None
+        ):
             return
         if (
             not replace
@@ -270,6 +485,7 @@ class _ProgressiveCameraManager:
                         for cache in self._caches.values()
                         if cache.subscribers
                         and cache.in_flight is None
+                        and cache.native_stream is None
                         and cache.scheduled_at is not None
                         and cache.scheduled_at <= now
                     ),
@@ -331,6 +547,7 @@ class _ProgressiveCameraManager:
             cache
             for cache in self._caches.values()
             if cache.in_flight is None
+            and cache.native_stream is None
             and cache.scheduled_at is not None
             and cache.scheduled_at <= now
         ]
@@ -369,7 +586,9 @@ class _ProgressiveCameraManager:
         scheduled = [
             cache.scheduled_at
             for cache in self._caches.values()
-            if cache.in_flight is None and cache.scheduled_at is not None
+            if cache.in_flight is None
+            and cache.native_stream is None
+            and cache.scheduled_at is not None
         ]
         if not scheduled:
             return None
@@ -414,18 +633,27 @@ class _ProgressiveCameraManager:
                 raise ValueError(
                     f"source returned unsupported content type {content_type!r}"
                 )
-            self._async_record_success(cache, image.content)
+            # A background request may finish after a live relay has started.
+            # Its older snapshot must not overwrite a newer native stream frame.
+            if cache.native_stream is None:
+                self._async_record_success(cache, image.content)
         except asyncio.CancelledError:
             raise
         except Exception as err:  # Home Assistant integrations expose varied errors.
-            if self._stopped:
+            # The native relay is authoritative once live; a late background
+            # failure must not cover healthy native frames with an error marker.
+            if self._stopped or cache.native_stream is not None:
                 return
             await self._async_record_failure(cache, str(err) or type(err).__name__)
         finally:
             cache.in_flight = None
             cache.last_completed_at = time.monotonic()
             cache.first_attempt_completed.set()
-            if not self._stopped and self._source_is_available(cache):
+            if (
+                not self._stopped
+                and self._source_is_available(cache)
+                and cache.native_stream is None
+            ):
                 if cache.subscribers:
                     interval = self._source_frame_interval(cache)
                     # Match Home Assistant's still-stream cadence: request the
@@ -456,7 +684,13 @@ class _ProgressiveCameraManager:
             return MIN_STREAM_INTERVAL
 
     @callback
-    def _async_record_success(self, cache: _CameraCache, frame: bytes) -> None:
+    def _async_record_success(
+        self,
+        cache: _CameraCache,
+        frame: bytes,
+        *,
+        notify_listeners: bool = True,
+    ) -> None:
         was_failed = cache.failed
         previous_display = cache.display_frame
         cache.status_revision += 1
@@ -470,8 +704,10 @@ class _ProgressiveCameraManager:
                 "Progressive camera source %s recovered", cache.source_entity_id
             )
         if previous_display != frame:
-            self._async_publish(cache, frame)
-        else:
+            self._async_publish(
+                cache, frame, notify_listeners=notify_listeners
+            )
+        elif notify_listeners:
             self._async_notify_listeners(cache)
 
     async def _async_record_failure(
@@ -520,10 +756,17 @@ class _ProgressiveCameraManager:
         self._async_publish(cache, overlay_frame)
 
     @callback
-    def _async_publish(self, cache: _CameraCache, frame: bytes) -> None:
+    def _async_publish(
+        self,
+        cache: _CameraCache,
+        frame: bytes,
+        *,
+        notify_listeners: bool = True,
+    ) -> None:
         for queue in tuple(cache.subscribers):
             self._async_replace_queued_frame(queue, frame)
-        self._async_notify_listeners(cache)
+        if notify_listeners:
+            self._async_notify_listeners(cache)
 
     @staticmethod
     @callback
@@ -573,13 +816,18 @@ class _ProgressiveCameraManager:
             # transition without waiting for the next snapshot attempt.
             self._async_notify_listeners(cache)
         if new_available and not old_available:
-            self._async_schedule(
-                cache, time.monotonic(), _PRIORITY_INTERACTIVE
-            )
+            if cache.subscribers:
+                self._async_start_live_source(cache)
+            else:
+                self._async_schedule(
+                    cache, time.monotonic(), _PRIORITY_INTERACTIVE
+                )
         elif not new_available and old_available:
             # Recovery is event-driven, so an unavailable source needs no timed
             # retry that would only consume a dispatcher slot.
             cache.scheduled_at = None
+            if cache.native_stream is not None:
+                cache.native_stream.cancel()
             self._wake.set()
             task = self._entry.async_create_background_task(
                 self._hass,
@@ -606,7 +854,7 @@ class _ProgressiveCameraManager:
     @staticmethod
     @callback
     def _needs_interactive_refresh(cache: _CameraCache) -> bool:
-        if cache.in_flight is not None:
+        if cache.in_flight is not None or cache.native_stream is not None:
             return False
         if cache.failed or cache.last_success_at is None:
             return True

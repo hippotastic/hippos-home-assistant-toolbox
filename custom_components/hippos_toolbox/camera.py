@@ -5,11 +5,9 @@ from typing import cast
 from aiohttp import web
 
 from homeassistant.components.camera import Camera
-from homeassistant.components.camera.helper import get_camera_from_entity_id
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.const import CONTENT_TYPE_MULTIPART
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device import async_entity_id_to_device
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -122,26 +120,8 @@ class _ProgressiveSnapshotCamera(Camera):
 
     async def handle_async_mjpeg_stream(
         self, request: web.Request
-    ) -> web.StreamResponse | None:
-        """Hand native MJPEG through, or stream cached snapshot refreshes."""
-
-        try:
-            source_camera = get_camera_from_entity_id(
-                self._token_store_hass, self._source_entity_id
-            )
-        except HomeAssistantError:
-            source_camera = None
-
-        if (
-            source_camera is not None
-            and not isinstance(source_camera, _ProgressiveSnapshotCamera)
-            and type(source_camera).handle_async_mjpeg_stream
-            is not Camera.handle_async_mjpeg_stream
-        ):
-            # Native handlers proxy one persistent device connection and preserve
-            # its real frame rate. Static cards and thumbnails still use the
-            # progressive entity's separately cached camera image.
-            return await source_camera.handle_async_mjpeg_stream(request)
+    ) -> web.StreamResponse:
+        """Push the cache first and relay subsequent source frames."""
 
         response = web.StreamResponse()
         response.content_type = CONTENT_TYPE_MULTIPART.format(f"--{_BOUNDARY}")
@@ -169,4 +149,7 @@ class _ProgressiveSnapshotCamera(Camera):
             "Content-Type: image/jpeg\r\n"
             f"Content-Length: {len(frame)}\r\n\r\n"
         ).encode()
-        await response.write(header + frame + b"\r\n")
+        # Keep large JPEG payloads out of a concatenated temporary bytes object.
+        await response.write(header)
+        await response.write(frame)
+        await response.write(b"\r\n")

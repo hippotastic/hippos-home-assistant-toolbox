@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, patch
 
 from PIL import Image as PillowImage
 
+from homeassistant.components.camera import Camera
+
 from custom_components.hippos_toolbox import progressive_camera
 from custom_components.hippos_toolbox.progressive_camera import (
     _ProgressiveCameraManager,
@@ -46,6 +48,49 @@ class _Entry:
         if eager_start:
             raise AssertionError("manager tasks must not use eager start")
         return asyncio.create_task(coroutine, name=name)
+
+
+class _NativeMjpegCamera(Camera):
+    async def handle_async_mjpeg_stream(self, _request):
+        raise AssertionError("the manager must consume the HA proxy endpoint")
+
+
+class _NativeStreamContent:
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks = list(chunks)
+        self._keep_open = asyncio.Event()
+
+    async def read(self, _size: int) -> bytes:
+        if self._chunks:
+            await asyncio.sleep(0)
+            return self._chunks.pop(0)
+        await self._keep_open.wait()
+        return b""
+
+
+class _NativeStreamResponse:
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self.headers = {
+            "Content-Type": "multipart/x-mixed-replace; boundary=source"
+        }
+        self.content = _NativeStreamContent(chunks)
+        self.closed = False
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _NativeStreamSession:
+    def __init__(self, response: _NativeStreamResponse) -> None:
+        self.response = response
+        self.calls: list[tuple[object, object]] = []
+
+    async def get(self, url, *, timeout):
+        self.calls.append((url, timeout))
+        return self.response
 
 
 async def _wait_until(predicate, timeout: float = 1.0) -> None:
@@ -194,6 +239,71 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(maximum_active, len(sources))
 
+    async def test_native_stream_is_remuxed_once_for_all_live_cards(self) -> None:
+        source = "camera.front_door"
+        hass = _Hass((source,))
+        manager = _ProgressiveCameraManager(hass, _Entry(), {"front": source})
+        cache = manager._caches["front"]
+        cache.display_frame = b"cached"
+        cache.last_success_at = asyncio.get_running_loop().time()
+        cache.last_completed_at = cache.last_success_at
+        second = b"\xff\xd8second-native\xff\xd9"
+        response = _NativeStreamResponse(
+            (
+                b"--source\r\nContent-Type: image/jpeg\r\n\r\n\xff",
+                b"\xd8first-native\xff",
+                b"\xd9\r\n--source\r\nContent-Type: image/jpeg\r\n\r\n"
+                + second,
+            )
+        )
+        session = _NativeStreamSession(response)
+        source_camera = _NativeMjpegCamera()
+
+        with (
+            patch.object(
+                progressive_camera,
+                "get_camera_from_entity_id",
+                return_value=source_camera,
+            ),
+            patch.object(
+                progressive_camera,
+                "get_url",
+                return_value="http://127.0.0.1:8123",
+            ),
+            patch.object(
+                progressive_camera,
+                "async_get_clientsession",
+                return_value=session,
+            ),
+        ):
+            first_queue = manager.async_subscribe("front")
+            second_queue = manager.async_subscribe("front")
+            self.assertEqual(first_queue.get_nowait(), b"cached")
+            self.assertEqual(second_queue.get_nowait(), b"cached")
+
+            await _wait_until(lambda: cache.display_frame == second)
+
+            self.assertEqual(first_queue.get_nowait(), second)
+            self.assertEqual(second_queue.get_nowait(), second)
+            self.assertEqual(cache.last_good_frame, second)
+            self.assertEqual(cache.status_revision, 2)
+            self.assertEqual(len(session.calls), 1)
+            stream_url, _timeout = session.calls[0]
+            self.assertEqual(stream_url.path, f"/api/camera_proxy_stream/{source}")
+            self.assertEqual(
+                stream_url.query["token"], source_camera.access_tokens[-1]
+            )
+
+            relay_task = cache.native_stream
+            manager.async_unsubscribe("front", first_queue)
+            self.assertIs(cache.native_stream, relay_task)
+            manager.async_unsubscribe("front", second_queue)
+            await _wait_until(lambda: cache.native_stream is None)
+
+            self.assertTrue(response.closed)
+            self.assertIsNotNone(cache.scheduled_at)
+            await manager.async_stop()
+
     async def test_live_view_interrupts_background_handoff_wait(self) -> None:
         sources = ("camera.background", "camera.live")
         hass = _Hass(sources)
@@ -286,6 +396,44 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
                 places=3,
             )
 
+    async def test_slow_background_snapshot_cannot_replace_native_frame(self) -> None:
+        source = "camera.garden"
+        hass = _Hass((source,))
+        manager = _ProgressiveCameraManager(hass, _Entry(), {"garden": source})
+        cache = manager._caches["garden"]
+        native = _jpeg((20, 120, 80))
+        stale_snapshot = _jpeg((120, 20, 80))
+        cache.display_frame = native
+        cache.last_good_frame = native
+        relay_task = asyncio.create_task(asyncio.sleep(60))
+        cache.native_stream = relay_task
+
+        with patch.object(
+            progressive_camera,
+            "async_get_image",
+            AsyncMock(
+                return_value=SimpleNamespace(
+                    content_type="image/jpeg", content=stale_snapshot
+                )
+            ),
+        ):
+            await manager._async_fetch(cache)
+
+        self.assertIs(cache.display_frame, native)
+        self.assertIs(cache.last_good_frame, native)
+        with patch.object(
+            progressive_camera,
+            "async_get_image",
+            AsyncMock(side_effect=RuntimeError("stale request failed")),
+        ):
+            await manager._async_fetch(cache)
+
+        self.assertFalse(cache.failed)
+        self.assertIs(cache.display_frame, native)
+        relay_task.cancel()
+        await asyncio.gather(relay_task, return_exceptions=True)
+        cache.native_stream = None
+
     async def test_live_cards_share_one_immediate_source_schedule(self) -> None:
         source = "camera.garage_snapshots"
         hass = _Hass((source,))
@@ -298,10 +446,15 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
         cache.scheduled_at = now + progressive_camera._BACKGROUND_REFRESH_INTERVAL
         cache.scheduled_priority = progressive_camera._PRIORITY_BACKGROUND
 
-        subscribed_at = asyncio.get_running_loop().time()
-        first_queue = manager.async_subscribe("garage")
-        scheduled_order = cache.scheduled_order
-        second_queue = manager.async_subscribe("garage")
+        with patch.object(
+            progressive_camera,
+            "get_camera_from_entity_id",
+            return_value=SimpleNamespace(frame_interval=0.5),
+        ):
+            subscribed_at = asyncio.get_running_loop().time()
+            first_queue = manager.async_subscribe("garage")
+            scheduled_order = cache.scheduled_order
+            second_queue = manager.async_subscribe("garage")
 
         self.assertEqual(first_queue.get_nowait(), b"cached")
         self.assertEqual(second_queue.get_nowait(), b"cached")
@@ -432,9 +585,14 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
         cache.last_success_at = asyncio.get_running_loop().time()
         cache.last_completed_at = cache.last_success_at
 
-        queue = manager.async_subscribe("patio")
-        manager._async_publish(cache, b"fresh-one")
-        manager._async_publish(cache, b"fresh-two")
+        with patch.object(
+            progressive_camera,
+            "get_camera_from_entity_id",
+            return_value=SimpleNamespace(frame_interval=0.5),
+        ):
+            queue = manager.async_subscribe("patio")
+            manager._async_publish(cache, b"fresh-one")
+            manager._async_publish(cache, b"fresh-two")
 
         self.assertEqual(queue.qsize(), 1)
         self.assertEqual(queue.get_nowait(), b"fresh-two")
