@@ -29,6 +29,17 @@ describe('Blueprint YAML', () => {
 			expect(document.warnings, `${file} contains YAML warnings`).toEqual([])
 		}
 	})
+
+	test('defines the intended music controller defaults', () => {
+		const document = parseDocument(readFileSync(join(process.cwd(), 'blueprints', 'automation', 'push_button_music_controller.yaml'), 'utf8'), {
+			customTags: HOME_ASSISTANT_YAML_TAGS,
+		})
+
+		expect(document.getIn(['blueprint', 'input', 'volume_section', 'input', 'start_volume', 'default'])).toBe(50)
+		expect(document.getIn(['blueprint', 'input', 'volume_section', 'input', 'minimum_volume', 'default'])).toBe(25)
+		expect(document.getIn(['blueprint', 'input', 'volume_section', 'input', 'maximum_volume', 'default'])).toBe(75)
+		expect(document.getIn(['blueprint', 'input', 'favorites_section', 'input', 'shuffle_mode', 'default'])).toBe('off')
+	})
 })
 
 function validationYamlFiles(): string[] {

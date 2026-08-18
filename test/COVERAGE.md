@@ -104,6 +104,7 @@ that remain stable across future implementations.
 | Button isolation      | Presses from different buttons are not combined; duplicate inputs fall back to one-button mode with a log       | `dual`, `duplicateButton`          |
 | Pause expiry          | A pause older than 30 minutes resets logically and the next tap begins with Favorite 1                           | `main`                             |
 | Favorite failover     | Failed items are tried once cyclically; success stores its index; total failure resets the session              | `failover`, `allFail`              |
+| Favorite shuffle      | Off preserves player state; standard starts then shuffles; Sonos jumps to a random queue item and safely falls back | `optional`, `standardShuffle`, `shuffle`, queue-failure scenarios |
 | Resume failover       | Failed resume retries the current known favorite before later items                                             | `resumeFail`                       |
 | Safe replacement      | Existing playback must reach a non-playing baseline before favorite switching                                  | `main`                             |
 | Player reconciliation | External playing is adopted; buffering, pause, idle, and unavailable update helper and feedback safely          | `main`                             |

@@ -68,6 +68,49 @@ describe("Hippo's Push-Button Music Controller", () => {
 		})
 	})
 
+	test('starts Sonos shuffle from a random queue item after favorite failover', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.shuffle, async ({ client, expectHelper, mediaCalls, scenario, singleTap, sonosCalls }) => {
+			await singleTap()
+			await expectHelper({ active: true, favorite: 1 })
+			await client.waitForState(scenario.entities.player, { attributes: { shuffle: true }, state: 'playing' })
+
+			const media = await mediaCalls()
+			const sonos = await sonosCalls()
+			expect(media.filter((call) => call.service === 'shuffle_set')).toHaveLength(1)
+			expect(media.find((call) => call.service === 'shuffle_set')?.serviceData).toMatchObject({ shuffle: true })
+			expect(sonos.map((call) => call.service)).toEqual(['get_queue', 'play_queue'])
+			expect(sonos.find((call) => call.service === 'play_queue')?.serviceData.queue_position).toBeGreaterThanOrEqual(0)
+			expect(sonos.find((call) => call.service === 'play_queue')?.serviceData.queue_position).toBeLessThan(3)
+
+			const playbackCalls = (await client.serviceCalls()).filter((call) => ['media_player', 'sonos'].includes(call.domain)).map((call) => `${call.domain}.${call.service}`)
+			expect(playbackCalls.findIndex((call) => call === 'sonos.get_queue')).toBeGreaterThan(playbackCalls.findLastIndex((call) => call === 'media_player.play_media'))
+			expect(playbackCalls.findIndex((call) => call === 'sonos.play_queue')).toBeGreaterThan(playbackCalls.findIndex((call) => call === 'sonos.get_queue'))
+			expect(playbackCalls.findIndex((call) => call === 'media_player.shuffle_set')).toBeGreaterThan(playbackCalls.findIndex((call) => call === 'sonos.play_queue'))
+		})
+	})
+
+	test('supports standard shuffle without inspecting or jumping through a Sonos queue', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.standardShuffle, async ({ client, expectHelper, mediaCalls, scenario, singleTap, sonosCalls }) => {
+			await singleTap()
+			await expectHelper({ active: true, favorite: 0 })
+			await client.waitForState(scenario.entities.player, { attributes: { shuffle: true }, state: 'playing' })
+			expect((await client.getState(scenario.entities.player))?.attributes.queue_position).toBeUndefined()
+			expect((await mediaCalls()).filter((call) => call.service === 'shuffle_set')).toHaveLength(1)
+			expect(await sonosCalls()).toHaveLength(0)
+		})
+	})
+
+	test('keeps successful playback and standard shuffle when Sonos queue actions fail', async () => {
+		for (const scenario of [MUSIC_SCENARIOS.shuffleQueueEmpty, MUSIC_SCENARIOS.shuffleQueueFailure, MUSIC_SCENARIOS.shuffleQueueJumpFailure]) {
+			await withMusicScenario(scenario, async ({ client, expectHelper, mediaCalls, scenario: activeScenario, singleTap }) => {
+				await singleTap()
+				await expectHelper({ active: true, favorite: 0 })
+				await client.waitForState(activeScenario.entities.player, { attributes: { shuffle: true }, state: 'playing' })
+				expect((await mediaCalls()).filter((call) => call.service === 'shuffle_set')).toHaveLength(1)
+			})
+		}
+	})
+
 	test('retries the current favorite before the rest when resume fails', async () => {
 		await withMusicScenario(MUSIC_SCENARIOS.resumeFail, async ({ configurePlayer, expectHelper, mediaCalls, singleTap }) => {
 			await configurePlayer({ resume_fails: true })
@@ -295,10 +338,12 @@ describe("Hippo's Push-Button Music Controller", () => {
 		})
 	})
 
-	test('works with optional feedback outputs omitted', async () => {
-		await withMusicScenario(MUSIC_SCENARIOS.optional, async ({ expectHelper, singleTap }) => {
+	test('works with optional feedback outputs omitted and leaves shuffle unchanged by default', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.optional, async ({ client, expectHelper, mediaCalls, scenario, singleTap }) => {
 			await singleTap()
 			await expectHelper({ active: true, favorite: 0 })
+			expect((await client.getState(scenario.entities.player))?.attributes.shuffle).toBe(false)
+			expect((await mediaCalls()).some((call) => call.service === 'shuffle_set')).toBe(false)
 		})
 	})
 })

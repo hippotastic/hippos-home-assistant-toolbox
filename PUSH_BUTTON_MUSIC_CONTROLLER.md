@@ -13,6 +13,9 @@ Create or select:
   volume-down control;
 - one media player that supports browsing media, starting selected media,
   play, pause, and absolute volume changes;
+- shuffle control on that player if Standard or Sonos shuffle is selected;
+- for Sonos random-first shuffle, a native Sonos media-player entity (the group
+  coordinator when speakers are grouped);
 - at least one playlist or favorite exposed by that player's Home Assistant
   Media Picker;
 - one dedicated Text helper with a maximum length of 255 characters.
@@ -62,11 +65,12 @@ problem and safely falls back to one-button alternating behavior.
 
 ## Sessions and volume
 
-The configured start volume applies only to a new session. Resume and
-double-tap preserve the reported player volume while clamping it into the
-configured minimum and maximum range. If minimum and maximum are accidentally
-reversed, the automation safely uses the lower value as the minimum and logs
-the correction. The new-session volume is also clamped into that range.
+The default start volume is 50%, with a 25% minimum and 75% maximum. The
+configured start volume applies only to a new session. Resume and double-tap
+preserve the reported player volume while clamping it into the configured
+minimum and maximum range. If minimum and maximum are accidentally reversed,
+the automation safely uses the lower value as the minimum and logs the
+correction. The new-session volume is also clamped into that range.
 
 A paused session remains resumable for 30 minutes. After that, the controller
 logically resets without stopping or powering off the player; the next single
@@ -98,6 +102,26 @@ is reset, feedback turns off, and the next single tap begins with Favorite 1.
 The selected media content is always sent to the media player configured in the
 blueprint. Any player or browse entity embedded by the Media Picker is ignored.
 This lets every favorite share one explicit playback target.
+
+Shuffle is disabled by default. The setting has three modes:
+
+| Mode                     | Behavior                                                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------------- |
+| Off                      | Preserve the player's existing shuffle state                                              |
+| Standard shuffle         | Start the favorite normally, then enable shuffle; the first track can therefore be fixed  |
+| Sonos: random first track | Read the newly created Sonos queue, jump to a random item, then enable shuffle             |
+
+Shuffle is applied only after a favorite reaches `playing`, so failed favorites
+do not change it. Sonos briefly begins the queue at its normal first item before
+the controller jumps to the random position; that transition may be audible.
+Select the native Sonos entity and, for grouped speakers, its coordinator.
+
+If the Sonos queue cannot be read, is empty, or rejects the random jump, the
+favorite remains successful and continues from its normal first track with
+standard shuffle. Selecting the Sonos mode for a non-Sonos entity also falls
+back to standard shuffle and writes a configuration warning to the Logbook. A
+player that does not support Home Assistant's shuffle service still starts
+playback because shuffle errors are isolated from the favorite result.
 
 ## Status feedback
 

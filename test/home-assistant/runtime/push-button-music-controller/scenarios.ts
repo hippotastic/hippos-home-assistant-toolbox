@@ -14,6 +14,10 @@ type MusicScenarioOptions = {
 	maximumVolume?: number
 	minimumVolume?: number
 	secondButton?: boolean | 'same'
+	shuffleMode?: 'off' | 'sonos' | 'standard'
+	sonosPlayQueueFails?: boolean
+	sonosQueueFails?: boolean
+	sonosQueueSize?: number
 	startVolume?: number
 	volumeSetFails?: boolean
 }
@@ -60,6 +64,7 @@ function musicScenario(id: string, favoriteIds: string[], options: MusicScenario
 			playing_feedback_entity: feedback ? `light.${prefix}_playing` : [],
 			second_button_entity: secondButton ?? [],
 			seeking_feedback_entity: feedback ? `switch.${prefix}_seeking` : [],
+			...(options.shuffleMode === undefined ? {} : { shuffle_mode: options.shuffleMode }),
 			start_volume: options.startVolume ?? 12,
 			status_helper_entity: `input_text.${prefix}_status`,
 		},
@@ -78,6 +83,9 @@ function musicScenario(id: string, favoriteIds: string[], options: MusicScenario
 			playerState: options.initialPlayerState ?? 'idle',
 			volume: options.initialVolume ?? 0.11,
 			volumeSetFails: options.volumeSetFails ?? false,
+			sonosPlayQueueFails: options.sonosPlayQueueFails ?? false,
+			sonosQueueFails: options.sonosQueueFails ?? false,
+			sonosQueueSize: options.sonosQueueSize ?? 3,
 		},
 	}
 }
@@ -101,6 +109,11 @@ export const MUSIC_SCENARIOS = {
 		initialPlayerState: 'paused',
 		initialVolume: 0.13,
 	}),
+	shuffle: musicScenario('shuffle', ['test://fail/one', 'test://success/two'], { shuffleMode: 'sonos' }),
+	shuffleQueueEmpty: musicScenario('shuffle_queue_empty', ['test://success/one'], { shuffleMode: 'sonos', sonosQueueSize: 0 }),
+	shuffleQueueFailure: musicScenario('shuffle_queue_failure', ['test://success/one'], { shuffleMode: 'sonos', sonosQueueFails: true }),
+	shuffleQueueJumpFailure: musicScenario('shuffle_queue_jump_failure', ['test://success/one'], { shuffleMode: 'sonos', sonosPlayQueueFails: true }),
+	standardShuffle: musicScenario('standard_shuffle', ['test://success/one'], { shuffleMode: 'standard' }),
 	slow: musicScenario('slow', ['test://slow/one', 'test://success/two']),
 	volumeFail: musicScenario('volume_fail', ['test://success/one'], { initialVolume: 0.08, volumeSetFails: true }),
 } as const

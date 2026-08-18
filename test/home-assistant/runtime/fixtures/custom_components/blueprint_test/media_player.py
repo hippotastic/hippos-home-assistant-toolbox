@@ -15,12 +15,16 @@ from homeassistant.components.media_player import (
     MediaType,
     PLATFORM_SCHEMA,
 )
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 
 DOMAIN = "blueprint_test"
 SERVICE_CONFIGURE = "configure_media_player"
+SONOS_DOMAIN = "sonos"
+SONOS_SERVICE_GET_QUEUE = "get_queue"
+SONOS_SERVICE_PLAY_QUEUE = "play_queue"
 TEST_STATES = [state.value for state in MediaPlayerState] + ["unavailable", "unknown"]
 
 ENTITY_SCHEMA = vol.Schema(
@@ -46,6 +50,10 @@ CONFIGURE_SCHEMA = vol.Schema(
         ),
         vol.Optional("pause_fails"): bool,
         vol.Optional("resume_fails"): bool,
+        vol.Optional("shuffle"): bool,
+        vol.Optional("sonos_play_queue_fails"): bool,
+        vol.Optional("sonos_queue_fails"): bool,
+        vol.Optional("sonos_queue_size"): vol.All(vol.Coerce(int), vol.Range(min=0)),
         vol.Optional("volume_set_fails"): bool,
     }
 )
@@ -80,6 +88,58 @@ async def async_setup_platform(
         configure_media_player,
         schema=CONFIGURE_SCHEMA,
     )
+    _register_sonos_services(hass)
+
+
+def _register_sonos_services(hass: HomeAssistant) -> None:
+    """Register deterministic Sonos queue actions for runtime tests."""
+
+    async def get_queue(call: ServiceCall) -> dict[str, list[dict[str, str]]]:
+        result: dict[str, list[dict[str, str]]] = {}
+        for entity_id in _entity_ids(call):
+            player = _test_player(hass, entity_id)
+            if player.sonos_queue_fails:
+                continue
+            result[entity_id] = player.sonos_queue
+        return result
+
+    async def play_queue(call: ServiceCall) -> None:
+        for entity_id in _entity_ids(call):
+            player = _test_player(hass, entity_id)
+            if player.sonos_play_queue_fails:
+                continue
+            player.play_sonos_queue(call.data.get("queue_position", 0))
+
+    hass.services.async_register(
+        SONOS_DOMAIN,
+        SONOS_SERVICE_GET_QUEUE,
+        get_queue,
+        schema=vol.Schema({vol.Required("entity_id"): vol.Any(str, [str])}),
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        SONOS_DOMAIN,
+        SONOS_SERVICE_PLAY_QUEUE,
+        play_queue,
+        schema=vol.Schema(
+            {
+                vol.Required("entity_id"): vol.Any(str, [str]),
+                vol.Optional("queue_position", default=0): vol.Coerce(int),
+            }
+        ),
+    )
+
+
+def _entity_ids(call: ServiceCall) -> list[str]:
+    entity_ids = call.data["entity_id"]
+    return [entity_ids] if isinstance(entity_ids, str) else entity_ids
+
+
+def _test_player(hass: HomeAssistant, entity_id: str) -> BlueprintTestMediaPlayer:
+    player = hass.data[DOMAIN]["media_players"].get(entity_id)
+    if player is None:
+        raise HomeAssistantError(f"Unknown test media player: {entity_id}")
+    return player
 
 
 class BlueprintTestMediaPlayer(MediaPlayerEntity):
@@ -91,6 +151,7 @@ class BlueprintTestMediaPlayer(MediaPlayerEntity):
         | MediaPlayerEntityFeature.PAUSE
         | MediaPlayerEntityFeature.PLAY
         | MediaPlayerEntityFeature.PLAY_MEDIA
+        | MediaPlayerEntityFeature.SHUFFLE_SET
         | MediaPlayerEntityFeature.VOLUME_SET
     )
 
@@ -109,8 +170,12 @@ class BlueprintTestMediaPlayer(MediaPlayerEntity):
         self._attr_volume_level = config["volume_level"]
         self._attr_media_content_id: str | None = None
         self._attr_media_content_type: str | None = None
+        self._attr_shuffle = False
         self._pause_fails = False
         self._resume_fails = False
+        self._sonos_play_queue_fails = False
+        self._sonos_queue_fails = False
+        self._sonos_queue_size = 3
         self._volume_set_fails = False
         self._play_generation = 0
 
@@ -131,6 +196,14 @@ class BlueprintTestMediaPlayer(MediaPlayerEntity):
             self._pause_fails = data["pause_fails"]
         if "resume_fails" in data:
             self._resume_fails = data["resume_fails"]
+        if "shuffle" in data:
+            self._attr_shuffle = data["shuffle"]
+        if "sonos_play_queue_fails" in data:
+            self._sonos_play_queue_fails = data["sonos_play_queue_fails"]
+        if "sonos_queue_fails" in data:
+            self._sonos_queue_fails = data["sonos_queue_fails"]
+        if "sonos_queue_size" in data:
+            self._sonos_queue_size = data["sonos_queue_size"]
         if "volume_set_fails" in data:
             self._volume_set_fails = data["volume_set_fails"]
         self.async_write_ha_state()
@@ -157,6 +230,47 @@ class BlueprintTestMediaPlayer(MediaPlayerEntity):
         if not self._volume_set_fails:
             self._attr_volume_level = volume
             self.async_write_ha_state()
+
+    async def async_set_shuffle(self, shuffle: bool) -> None:
+        """Set shuffle mode immediately."""
+
+        self._attr_shuffle = shuffle
+        self.async_write_ha_state()
+
+    @property
+    def sonos_play_queue_fails(self) -> bool:
+        """Return whether the fake Sonos queue jump should fail."""
+
+        return self._sonos_play_queue_fails
+
+    @property
+    def sonos_queue_fails(self) -> bool:
+        """Return whether the fake Sonos queue lookup should fail."""
+
+        return self._sonos_queue_fails
+
+    @property
+    def sonos_queue(self) -> list[dict[str, str]]:
+        """Return the deterministic queue created by successful playback."""
+
+        if self._attr_state != MediaPlayerState.PLAYING:
+            return []
+        return [
+            {
+                "media_content_id": f"{self._attr_media_content_id}/track/{index}",
+                "media_title": f"Track {index + 1}",
+            }
+            for index in range(self._sonos_queue_size)
+        ]
+
+    def play_sonos_queue(self, queue_position: int) -> None:
+        """Record a queue jump while preserving the selected favorite."""
+
+        if queue_position < 0 or queue_position >= len(self.sonos_queue):
+            raise HomeAssistantError(f"Invalid test queue position: {queue_position}")
+        self._attr_extra_state_attributes = {"queue_position": queue_position}
+        self._attr_state = MediaPlayerState.PLAYING
+        self.async_write_ha_state()
 
     async def async_play_media(
         self,
