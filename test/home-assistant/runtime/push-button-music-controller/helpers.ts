@@ -26,20 +26,22 @@ function scenarioContext(client: BlueprintRuntimeClient, scenario: MusicScenario
 		client,
 		scenario,
 		configurePlayer: (configuration: PlayerConfiguration) => configurePlayer(client, scenario, configuration),
-		doubleTap: () => doubleTap(client, scenario),
+		doubleTap: (buttonEntity?: string) => doubleTap(client, scenario, buttonEntity),
 		expectHelper: (expected: Partial<MusicControllerState>) => expectHelper(client, scenario, expected),
-		holdFor: (milliseconds: number) => holdFor(client, scenario, milliseconds),
+		holdFor: (milliseconds: number, buttonEntity?: string) => holdFor(client, scenario, milliseconds, buttonEntity),
 		logMessages: () => logMessages(client, scenario),
 		mediaCalls: () => mediaCalls(client, scenario),
 		prepareNextAction: () => prepareNextAction(client, scenario),
 		setHelper: (value: MusicControllerState | string) => setHelper(client, scenario, value),
-		singleTap: () => singleTap(client, scenario),
+		singleTap: (buttonEntity?: string) => singleTap(client, scenario, buttonEntity),
 	}
 }
 
 async function initializeScenario(client: BlueprintRuntimeClient, scenario: MusicScenario): Promise<void> {
 	await client.callService('automation', 'turn_off', { entity_id: scenario.entities.automation })
-	await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.button })
+	for (const buttonEntity of new Set([scenario.entities.button, scenario.entities.secondButton].filter((entityId): entityId is string => entityId !== undefined))) {
+		await client.callService('input_boolean', 'turn_off', { entity_id: buttonEntity })
+	}
 	if (scenario.entities.seeking) {
 		await client.callService('homeassistant', 'turn_off', { entity_id: scenario.entities.seeking })
 	}
@@ -73,25 +75,25 @@ async function setHelper(client: BlueprintRuntimeClient, scenario: MusicScenario
 	})
 }
 
-async function singleTap(client: BlueprintRuntimeClient, scenario: MusicScenario): Promise<void> {
-	await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.button })
-	await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.button })
+async function singleTap(client: BlueprintRuntimeClient, scenario: MusicScenario, buttonEntity = scenario.entities.button): Promise<void> {
+	await client.callService('input_boolean', 'turn_on', { entity_id: buttonEntity })
+	await client.callService('input_boolean', 'turn_off', { entity_id: buttonEntity })
 	await client.waitForActionToSettle([scenario.entities.automation], { timeoutMs: 3_000 })
 }
 
-async function doubleTap(client: BlueprintRuntimeClient, scenario: MusicScenario): Promise<void> {
-	await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.button })
-	await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.button })
+async function doubleTap(client: BlueprintRuntimeClient, scenario: MusicScenario, buttonEntity = scenario.entities.button): Promise<void> {
+	await client.callService('input_boolean', 'turn_on', { entity_id: buttonEntity })
+	await client.callService('input_boolean', 'turn_off', { entity_id: buttonEntity })
 	await settle(20)
-	await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.button })
-	await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.button })
+	await client.callService('input_boolean', 'turn_on', { entity_id: buttonEntity })
+	await client.callService('input_boolean', 'turn_off', { entity_id: buttonEntity })
 	await client.waitForActionToSettle([scenario.entities.automation], { timeoutMs: 3_000 })
 }
 
-async function holdFor(client: BlueprintRuntimeClient, scenario: MusicScenario, milliseconds: number): Promise<void> {
-	await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.button })
+async function holdFor(client: BlueprintRuntimeClient, scenario: MusicScenario, milliseconds: number, buttonEntity = scenario.entities.button): Promise<void> {
+	await client.callService('input_boolean', 'turn_on', { entity_id: buttonEntity })
 	await settle(milliseconds)
-	await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.button })
+	await client.callService('input_boolean', 'turn_off', { entity_id: buttonEntity })
 	await client.waitForActionToSettle([scenario.entities.automation], { timeoutMs: 3_000 })
 }
 
@@ -144,6 +146,7 @@ function scenarioEntityIds(scenario: MusicScenario): string[] {
 	return [
 		scenario.entities.automation,
 		scenario.entities.button,
+		...(scenario.entities.secondButton ? [scenario.entities.secondButton] : []),
 		scenario.entities.helper,
 		scenario.entities.player,
 		...(scenario.entities.playing ? [scenario.entities.playing] : []),

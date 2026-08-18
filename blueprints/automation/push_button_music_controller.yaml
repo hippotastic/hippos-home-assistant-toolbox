@@ -1,10 +1,12 @@
 blueprint:
   name: Hippo's Push-Button Music Controller
   description: >-
-    Control one media player with a single press/release button. Tap to start,
+    Control one media player with one or two press/release buttons. Tap to start,
     pause, or resume; double-tap to move to the next favorite; and hold to fade
-    the volume up and down. Failed favorites are skipped automatically. Requires
-    one dedicated Text helper with a maximum length of 255 characters. (V1.0)
+    the volume. With one button, successive holds alternate direction; with two,
+    the first raises and the second lowers volume. Failed favorites are skipped
+    automatically. Requires one dedicated Text helper with a maximum length of
+    255 characters. (V1.1)
   domain: automation
   source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/push_button_music_controller.yaml
   author: Hippo
@@ -16,10 +18,26 @@ blueprint:
       collapsed: false
       input:
         button_entity:
-          name: Push button
+          name: Push button / volume up
           description: >-
             An entity that changes to on while the physical button is pressed and
-            back to off when it is released.
+            back to off when it is released. If a second button is selected below,
+            holding this button only raises the volume.
+          selector:
+            entity:
+              filter:
+                - domain:
+                    - binary_sensor
+                    - input_boolean
+                    - switch
+
+        second_button_entity:
+          name: Second push button / volume down (optional)
+          description: >-
+            When selected, taps and double-taps behave exactly like the first button,
+            while holding this button only lowers the volume. Without it, successive
+            holds on the first button continue to alternate direction.
+          default: []
           selector:
             entity:
               filter:
@@ -183,6 +201,7 @@ blueprint:
 
 trigger_variables:
   button_entity: !input button_entity
+  second_button_entity: !input second_button_entity
   media_player_entity: !input media_player_entity
   status_helper_entity: !input status_helper_entity
   pause_reset_seconds: 1800
@@ -192,6 +211,14 @@ triggers:
     entity_id: !input button_entity
     to: 'on'
     id: button_pressed
+
+  - trigger: template
+    value_template: >-
+      {{
+        second_button_entity != [] and second_button_entity != button_entity and
+        is_state(second_button_entity, "on")
+      }}
+    id: second_button_pressed
 
   - trigger: state
     entity_id: !input media_player_entity
@@ -225,6 +252,7 @@ max_exceeded: silent
 
 variables:
   favorites: !input favorites
+  second_button_entity: !input second_button_entity
   start_volume_input: !input start_volume
   minimum_volume_input: !input minimum_volume
   maximum_volume_input: !input maximum_volume
@@ -240,6 +268,7 @@ variables:
   maximum_volume: '{{ [minimum_volume_input | int(0), maximum_volume_input | int(0)] | max }}'
   start_volume: '{{ [[start_volume_input | int(0), minimum_volume] | max, maximum_volume] | min }}'
   favorite_count: '{{ favorites | count }}'
+  dual_button_mode: '{{ second_button_entity != [] and second_button_entity != button_entity }}'
 
 actions:
   - if:
@@ -261,11 +290,29 @@ actions:
 
   - if:
       - condition: template
+        value_template: >-
+          {{
+            trigger.id | default("") == "automation_enabled" and
+            second_button_entity != [] and second_button_entity == button_entity
+          }}
+    then:
+      - action: logbook.log
+        data:
+          name: Hippo's Push-Button Music Controller
+          message: >-
+            The second push button matches the first; using one-button alternating
+            volume control instead.
+          entity_id: '{{ media_player_entity }}'
+          domain: media_player
+
+  - if:
+      - condition: template
         value_template: '{{ favorite_count < 1 }}'
     then:
       - if:
           - condition: template
-            value_template: "{{ trigger.id | default('') in ['automation_enabled', 'button_pressed'] }}"
+            value_template: >-
+              {{ trigger.id | default("") in ["automation_enabled", "button_pressed", "second_button_pressed"] }}
         then:
           - action: logbook.log
             data:
@@ -293,16 +340,17 @@ actions:
 
   - if:
       - condition: template
-        value_template: "{{ trigger.id | default('') == 'button_pressed' }}"
+        value_template: "{{ trigger.id | default('') in ['button_pressed', 'second_button_pressed'] }}"
     then:
       # Recognize the complete gesture before changing playback. A second press
       # held past the threshold becomes only a long press, never a double-tap.
       - variables:
           gesture: ''
+          pressed_button_entity: >-
+            {{ second_button_entity if trigger.id == "second_button_pressed" else button_entity }}
       - wait_for_trigger:
-          - trigger: state
-            entity_id: !input button_entity
-            to: 'off'
+          - trigger: template
+            value_template: "{{ is_state(pressed_button_entity, 'off') }}"
         timeout:
           milliseconds: '{{ long_press_milliseconds }}'
         continue_on_timeout: true
@@ -314,9 +362,8 @@ actions:
               gesture: long
         else:
           - wait_for_trigger:
-              - trigger: state
-                entity_id: !input button_entity
-                to: 'on'
+              - trigger: template
+                value_template: "{{ is_state(pressed_button_entity, 'on') }}"
             timeout:
               milliseconds: '{{ double_tap_gap_milliseconds }}'
             continue_on_timeout: true
@@ -328,9 +375,8 @@ actions:
                   gesture: single
             else:
               - wait_for_trigger:
-                  - trigger: state
-                    entity_id: !input button_entity
-                    to: 'off'
+                  - trigger: template
+                    value_template: "{{ is_state(pressed_button_entity, 'off') }}"
                 timeout:
                   milliseconds: '{{ long_press_milliseconds }}'
                 continue_on_timeout: true
@@ -357,14 +403,29 @@ actions:
               current_volume: "{{ (state_attr(media_player_entity, 'volume_level') | float(-1) * 100) | round(0) | int }}"
               clamped_volume: '{{ [[current_volume, minimum_volume] | max, maximum_volume] | min }}'
               fade_direction: >-
-                {% if current_volume >= maximum_volume %}
+                {% if dual_button_mode %}
+                  {{ "down" if trigger.id == "second_button_pressed" else "up" }}
+                {% elif current_volume >= maximum_volume %}
                   down
                 {% elif current_volume <= minimum_volume %}
                   up
                 {% else %}
                   {{ long_status.direction }}
                 {% endif %}
-              next_fade_direction: "{{ 'down' if fade_direction == 'up' else 'up' }}"
+              initial_fade_volume: >-
+                {% if not dual_button_mode %}
+                  {{ clamped_volume }}
+                {% elif fade_direction == "up" %}
+                  {{ [current_volume, minimum_volume] | max }}
+                {% else %}
+                  {{ [current_volume, maximum_volume] | min }}
+                {% endif %}
+              next_fade_direction: >-
+                {{
+                  long_status.direction
+                  if dual_button_mode
+                  else iif(fade_direction == "up", "down", "up")
+                }}
               volume_step_delay: >-
                 {{ full_volume_fade_seconds | float(15) / [1, maximum_volume - minimum_volume] | max }}
           - if:
@@ -380,18 +441,18 @@ actions:
             else:
               - if:
                   - condition: template
-                    value_template: '{{ current_volume != clamped_volume }}'
+                    value_template: '{{ current_volume != initial_fade_volume }}'
                 then:
                   - action: media_player.volume_set
                     continue_on_error: true
                     target:
                       entity_id: '{{ media_player_entity }}'
                     data:
-                      volume_level: '{{ clamped_volume / 100 }}'
+                      volume_level: '{{ initial_fade_volume / 100 }}'
               - repeat:
                   while:
                     - condition: template
-                      value_template: "{{ is_state(button_entity, 'on') }}"
+                      value_template: "{{ is_state(pressed_button_entity, 'on') }}"
                     - condition: template
                       value_template: '{{ repeat.index <= maximum_volume - minimum_volume + 1 }}'
                     - condition: template
@@ -419,7 +480,8 @@ actions:
                         volume_level: '{{ next_volume / 100 }}'
                     - delay:
                         seconds: '{{ volume_step_delay }}'
-              # Alternation belongs to the controller, not to the listening session.
+              # Direction alternation belongs to one-button mode, not to the
+              # listening session. Two-button mode preserves it for later reuse.
               - action: input_text.set_value
                 target:
                   entity_id: '{{ status_helper_entity }}'

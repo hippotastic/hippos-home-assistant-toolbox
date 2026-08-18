@@ -13,6 +13,7 @@ type MusicScenarioOptions = {
 	initialVolume?: number
 	maximumVolume?: number
 	minimumVolume?: number
+	secondButton?: boolean | 'same'
 	startVolume?: number
 	volumeSetFails?: boolean
 }
@@ -33,6 +34,8 @@ function favorite(id: string, title: string) {
 function musicScenario(id: string, favoriteIds: string[], options: MusicScenarioOptions = {}) {
 	const prefix = `fixture_music_${id}`
 	const feedback = options.feedback ?? true
+	const button = `input_boolean.${prefix}_button`
+	const secondButton = options.secondButton === true ? `input_boolean.${prefix}_second_button` : options.secondButton === 'same' ? button : undefined
 	const helper =
 		options.initialHelper ??
 		({
@@ -46,7 +49,7 @@ function musicScenario(id: string, favoriteIds: string[], options: MusicScenario
 	return {
 		id,
 		commonInputs: {
-			button_entity: `input_boolean.${prefix}_button`,
+			button_entity: button,
 			double_tap_gap_milliseconds: 120,
 			favorites: favoriteIds.map((favoriteId, index) => favorite(favoriteId, `Favorite ${index + 1}`)),
 			full_volume_fade_seconds: 1,
@@ -55,16 +58,18 @@ function musicScenario(id: string, favoriteIds: string[], options: MusicScenario
 			media_player_entity: `media_player.${prefix}_player`,
 			minimum_volume: options.minimumVolume ?? 10,
 			playing_feedback_entity: feedback ? `light.${prefix}_playing` : [],
+			second_button_entity: secondButton ?? [],
 			seeking_feedback_entity: feedback ? `switch.${prefix}_seeking` : [],
 			start_volume: options.startVolume ?? 12,
 			status_helper_entity: `input_text.${prefix}_status`,
 		},
 		entities: {
 			automation: `automation.${prefix}`,
-			button: `input_boolean.${prefix}_button`,
+			button,
 			helper: `input_text.${prefix}_status`,
 			player: `media_player.${prefix}_player`,
 			playing: feedback ? `light.${prefix}_playing` : undefined,
+			secondButton,
 			seeking: feedback ? `switch.${prefix}_seeking` : undefined,
 		},
 		favoriteIds,
@@ -79,6 +84,8 @@ function musicScenario(id: string, favoriteIds: string[], options: MusicScenario
 
 export const MUSIC_SCENARIOS = {
 	allFail: musicScenario('all_fail', ['test://fail/one', 'test://fail/two']),
+	dual: musicScenario('dual', ['test://success/one', 'test://success/two', 'test://success/three'], { secondButton: true }),
+	duplicateButton: musicScenario('duplicate_button', ['test://success/one'], { secondButton: 'same' }),
 	failover: musicScenario('failover', ['test://fail/one', 'test://success/two', 'test://success/three']),
 	inverted: musicScenario('inverted', ['test://success/one'], {
 		initialVolume: 0.2,

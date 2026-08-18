@@ -106,6 +106,91 @@ describe("Hippo's Push-Button Music Controller", () => {
 		})
 	})
 
+	test('shares tap gestures across two buttons', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.dual, async ({ client, doubleTap, expectHelper, prepareNextAction, scenario, singleTap }) => {
+			const secondButton = scenario.entities.secondButton!
+
+			await singleTap(secondButton)
+			await client.waitForState(scenario.entities.player, { state: 'playing' })
+			await expectHelper({ active: true, favorite: 0 })
+
+			await prepareNextAction()
+			await singleTap()
+			await client.waitForState(scenario.entities.player, { state: 'paused' })
+
+			await prepareNextAction()
+			await singleTap(secondButton)
+			await client.waitForState(scenario.entities.player, { state: 'playing' })
+
+			await prepareNextAction()
+			await doubleTap(secondButton)
+			await expectHelper({ active: true, favorite: 1 })
+		})
+	})
+
+	test('assigns fixed hold directions to two buttons and stops at their bounds', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.dual, async ({ client, configurePlayer, expectHelper, holdFor, mediaCalls, prepareNextAction, scenario, setHelper }) => {
+			const secondButton = scenario.entities.secondButton!
+
+			await setHelper({ active: false, direction: 'down', favorite: null, paused: null, v: 1 })
+			await prepareNextAction()
+			await holdFor(550)
+			const raisedVolume = (await client.getState(scenario.entities.player))?.attributes.volume_level
+			expect(raisedVolume as number).toBeGreaterThan(0.11)
+			await expectHelper({ direction: 'down' })
+			expect((await mediaCalls()).every((call) => call.service === 'volume_set')).toBe(true)
+
+			await configurePlayer({ state: 'idle', volume_level: 0.13 })
+			await setHelper({ active: false, direction: 'up', favorite: null, paused: null, v: 1 })
+			await prepareNextAction()
+			await holdFor(550, secondButton)
+			const loweredVolume = (await client.getState(scenario.entities.player))?.attributes.volume_level
+			expect(loweredVolume as number).toBeLessThan(0.13)
+			await expectHelper({ direction: 'up' })
+			expect((await mediaCalls()).every((call) => call.service === 'volume_set')).toBe(true)
+
+			await configurePlayer({ state: 'idle', volume_level: 0.14 })
+			await prepareNextAction()
+			await holdFor(350)
+			expect((await client.getState(scenario.entities.player))?.attributes.volume_level).toBe(0.14)
+			expect(await mediaCalls()).toHaveLength(0)
+
+			await configurePlayer({ state: 'idle', volume_level: 0.1 })
+			await prepareNextAction()
+			await holdFor(350, secondButton)
+			expect((await client.getState(scenario.entities.player))?.attributes.volume_level).toBe(0.1)
+			expect(await mediaCalls()).toHaveLength(0)
+		})
+	})
+
+	test('falls back to alternating holds when both inputs select the same button', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.duplicateButton, async ({ client, expectHelper, holdFor, logMessages, scenario }) => {
+			await client.callService('automation', 'turn_off', { entity_id: scenario.entities.automation })
+			await client.callService('automation', 'turn_on', { entity_id: scenario.entities.automation })
+			await client.waitForActionToSettle([scenario.entities.automation], { timeoutMs: 3_000 })
+			expect(await logMessages()).toContain('The second push button matches the first; using one-button alternating volume control instead.')
+
+			await holdFor(550)
+			await expectHelper({ direction: 'down' })
+		})
+	})
+
+	test('does not combine presses from different buttons into one gesture', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.dual, async ({ client, expectHelper, mediaCalls, scenario }) => {
+			await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.button })
+			await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.button })
+			await settle(20)
+			await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.secondButton })
+			await settle(350)
+			await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.secondButton })
+			await client.waitForActionToSettle([scenario.entities.automation], { timeoutMs: 3_000 })
+
+			await expectHelper({ active: true, favorite: 0 })
+			expect((await mediaCalls()).filter((call) => call.service === 'play_media')).toHaveLength(1)
+			expect((await mediaCalls()).filter((call) => call.service === 'volume_set')).toHaveLength(1)
+		})
+	})
+
 	test('treats tap-then-hold as only a long press and ignores presses while seeking', async () => {
 		await withMusicScenario(MUSIC_SCENARIOS.main, async ({ client, expectHelper, mediaCalls, scenario }) => {
 			await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.button })

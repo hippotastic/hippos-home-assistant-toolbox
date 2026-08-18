@@ -207,7 +207,7 @@ export function generatedFixtureFiles(): Record<string, string> {
 	const sensorScenarios = Object.values(SENSOR_SCENARIOS)
 	const inputBooleans = unique([
 		...coverScenarios.flatMap((scenario) => [scenario.controls.automatic, scenario.controls.lockout, scenario.controls.night, scenario.controls.privacy, scenario.controls.sun]),
-		...musicScenarios.map((scenario) => scenario.entities.button),
+		...musicScenarios.flatMap((scenario) => [scenario.entities.button, ...(scenario.entities.secondButton ? [scenario.entities.secondButton] : [])]),
 		...sensorScenarios.flatMap((scenario) => [
 			...scenario.inputs,
 			...(scenario.conditionOn ? [scenario.conditionOn] : []),

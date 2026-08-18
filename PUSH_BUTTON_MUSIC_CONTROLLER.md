@@ -1,14 +1,16 @@
 # Push-Button Music Controller
 
-Hippo's Push-Button Music Controller turns one momentary on/off entity into a
-complete music control. It is designed for wall switches such as a KNX button
-that changes to `on` while pressed and back to `off` when released.
+Hippo's Push-Button Music Controller turns one or two momentary on/off entities
+into a complete music control. It is designed for wall switches such as KNX
+buttons that change to `on` while pressed and back to `off` when released.
 
 ## Requirements
 
 Create or select:
 
 - one `binary_sensor`, `input_boolean`, or `switch` for the button;
+- optionally, a distinct second entity from the same domains for dedicated
+  volume-down control;
 - one media player that supports browsing media, starting selected media,
   play, pause, and absolute volume changes;
 - at least one playlist or favorite exposed by that player's Home Assistant
@@ -27,23 +29,36 @@ support possible.
 
 ## Button behavior
 
-| Gesture                               | Result                                                     |
-| ------------------------------------- | ---------------------------------------------------------- |
-| Single tap while inactive             | Start Favorite 1 at the configured new-session volume      |
-| Single tap while playing or buffering | Pause the player                                           |
-| Single tap during an active pause     | Resume playback                                            |
-| Double-tap while inactive             | Start Favorite 2, or Favorite 1 if only one exists         |
-| Double-tap during a known session     | Start the next favorite, wrapping at the end               |
-| Hold                                  | Fade volume; the next hold fades in the opposite direction |
+Single- and double-tap behavior is identical on both configured buttons.
+
+| Gesture                               | Result                                                |
+| ------------------------------------- | ----------------------------------------------------- |
+| Single tap while inactive             | Start Favorite 1 at the configured new-session volume |
+| Single tap while playing or buffering | Pause the player                                      |
+| Single tap during an active pause     | Resume playback                                       |
+| Double-tap while inactive             | Start Favorite 2, or Favorite 1 if only one exists    |
+| Double-tap during a known session     | Start the next favorite, wrapping at the end          |
 
 If the first tap is followed by a second press that becomes a hold, the gesture
 is only a long press. It does not also change the favorite. Button input is
 ignored while a favorite is starting or failover is in progress.
 
-The long-press direction starts upward. It alternates after every completed
-hold, including while the player is idle or paused. Starting at the maximum
-forces the next fade downward; starting at the minimum forces it upward. A hold
-never starts, pauses, or changes media.
+With one configured button, the long-press direction starts upward and
+alternates after every completed hold, including while the player is idle or
+paused. Starting at the maximum forces the next fade downward; starting at the
+minimum forces it upward.
+
+With two distinct buttons, holding the first button only raises volume and
+holding the second only lowers it. The buttons stop at their respective maximum
+and minimum instead of reversing direction. The stored one-button direction is
+left untouched, so removing the second button later restores the previous
+alternation state. A hold never starts, pauses, or changes media.
+
+Each gesture remains bound to the button that started it. Pressing or holding
+the other button while a gesture, fade, or failover is already running is
+ignored rather than being combined into a double-tap or long press. If both
+button inputs select the same entity, the controller logs the configuration
+problem and safely falls back to one-button alternating behavior.
 
 ## Sessions and volume
 
@@ -105,7 +120,8 @@ button LED, while Playing can drive its normal steady status indication.
 
 The advanced gesture defaults are a 400 ms double-tap gap, a 700 ms long-press
 threshold, and 15 seconds to traverse the complete configured volume range.
-Volume changes use one-percentage-point steps.
+These timings apply equally to both buttons. Volume changes use
+one-percentage-point steps.
 
 The Logbook records successful favorite starts, every failed favorite, complete
 failover, resume failures, and safety/configuration problems. Favorites are
