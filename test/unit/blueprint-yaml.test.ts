@@ -38,7 +38,7 @@ describe('Blueprint YAML', () => {
 		expect(document.getIn(['blueprint', 'input', 'volume_section', 'input', 'start_volume', 'default'])).toBe(50)
 		expect(document.getIn(['blueprint', 'input', 'volume_section', 'input', 'minimum_volume', 'default'])).toBe(25)
 		expect(document.getIn(['blueprint', 'input', 'volume_section', 'input', 'maximum_volume', 'default'])).toBe(75)
-		expect(document.getIn(['blueprint', 'input', 'favorites_section', 'input', 'shuffle_mode', 'default'])).toBe('off')
+		expect(document.getIn(['blueprint', 'input', 'favorites_section', 'input', 'shuffle_favorites', 'default'])).toBe(false)
 	})
 })
 

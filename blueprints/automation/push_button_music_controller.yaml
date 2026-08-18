@@ -92,22 +92,14 @@ blueprint:
                   selector:
                     media:
 
-        shuffle_mode:
-          name: Favorite shuffle mode
+        shuffle_favorites:
+          name: Shuffle favorite playlists
           description: >-
-            Off preserves the player's shuffle setting. Standard enables shuffle
-            after playback starts, so the first track may be fixed. Sonos reads the
-            new queue, jumps to a random first track, then enables shuffle.
-          default: 'off'
+            Enable shuffle after a favorite starts successfully. Leave disabled to
+            preserve the media player's existing shuffle setting.
+          default: false
           selector:
-            select:
-              options:
-                - label: 'Off'
-                  value: 'off'
-                - label: Standard shuffle
-                  value: standard
-                - label: 'Sonos: random first track'
-                  value: sonos
+            boolean:
 
     volume_section:
       name: ' 🔊 Volume'
@@ -269,7 +261,7 @@ max_exceeded: silent
 
 variables:
   favorites: !input favorites
-  shuffle_mode: !input shuffle_mode
+  shuffle_favorites: !input shuffle_favorites
   second_button_entity: !input second_button_entity
   start_volume_input: !input start_volume
   minimum_volume_input: !input minimum_volume
@@ -287,26 +279,8 @@ variables:
   start_volume: '{{ [[start_volume_input | int(0), minimum_volume] | max, maximum_volume] | min }}'
   favorite_count: '{{ favorites | count }}'
   dual_button_mode: '{{ second_button_entity != [] and second_button_entity != button_entity }}'
-  is_sonos_player: '{{ media_player_entity in integration_entities("sonos") }}' # @blueprint-test-value true
 
 actions:
-  - if:
-      - condition: template
-        value_template: >-
-          {{
-            trigger.id | default("") == "automation_enabled" and
-            shuffle_mode == "sonos" and not is_sonos_player
-          }}
-    then:
-      - action: logbook.log
-        data:
-          name: Hippo's Push-Button Music Controller
-          message: >-
-            Sonos shuffle was selected for a non-Sonos entity; using standard
-            shuffle instead.
-          entity_id: '{{ media_player_entity }}'
-          domain: media_player
-
   - if:
       - condition: template
         value_template: >-
@@ -835,51 +809,12 @@ actions:
                                         - condition: template
                                           value_template: "{{ is_state(media_player_entity, 'playing') }}"
                                       then:
-                                        # Shuffle is deliberately outside favorite failover: queue
-                                        # inspection and shuffle support cannot turn a successful
-                                        # favorite into a failed one.
+                                        # Apply shuffle only after the new queue exists. A player
+                                        # without shuffle support must not block successful playback.
                                         - if:
                                             - condition: template
-                                              value_template: '{{ shuffle_mode != "off" }}'
+                                              value_template: '{{ shuffle_favorites }}'
                                           then:
-                                            - if:
-                                                - condition: template
-                                                  value_template: '{{ shuffle_mode == "sonos" and is_sonos_player }}'
-                                              then:
-                                                - action: sonos.get_queue
-                                                  continue_on_error: true
-                                                  target:
-                                                    entity_id: '{{ media_player_entity }}'
-                                                  response_variable: sonos_queue_response
-                                                - variables:
-                                                    sonos_queue: >-
-                                                      {%- set response = sonos_queue_response | default({}) %}
-                                                      {{
-                                                        response.get(media_player_entity, [])
-                                                        if response is mapping else []
-                                                      }}
-                                                - if:
-                                                    - condition: template
-                                                      value_template: '{{ sonos_queue | count > 0 }}'
-                                                  then:
-                                                    - variables:
-                                                        sonos_queue_position: >-
-                                                          {{ range(sonos_queue | count) | random }}
-                                                    - action: sonos.play_queue
-                                                      continue_on_error: true
-                                                      target:
-                                                        entity_id: '{{ media_player_entity }}'
-                                                      data:
-                                                        queue_position: '{{ sonos_queue_position }}'
-                                                  else:
-                                                    - action: logbook.log
-                                                      data:
-                                                        name: Hippo's Push-Button Music Controller
-                                                        message: >-
-                                                          Could not read the Sonos queue; continuing
-                                                          from its first track with standard shuffle.
-                                                        entity_id: '{{ media_player_entity }}'
-                                                        domain: media_player
                                             - action: media_player.shuffle_set
                                               continue_on_error: true
                                               target:

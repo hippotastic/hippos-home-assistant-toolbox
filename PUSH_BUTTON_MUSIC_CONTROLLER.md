@@ -13,9 +13,7 @@ Create or select:
   volume-down control;
 - one media player that supports browsing media, starting selected media,
   play, pause, and absolute volume changes;
-- shuffle control on that player if Standard or Sonos shuffle is selected;
-- for Sonos random-first shuffle, a native Sonos media-player entity (the group
-  coordinator when speakers are grouped);
+- shuffle control on that player if the optional Shuffle setting is enabled;
 - at least one playlist or favorite exposed by that player's Home Assistant
   Media Picker;
 - one dedicated Text helper with a maximum length of 255 characters.
@@ -103,25 +101,12 @@ The selected media content is always sent to the media player configured in the
 blueprint. Any player or browse entity embedded by the Media Picker is ignored.
 This lets every favorite share one explicit playback target.
 
-Shuffle is disabled by default. The setting has three modes:
-
-| Mode                     | Behavior                                                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------------- |
-| Off                      | Preserve the player's existing shuffle state                                              |
-| Standard shuffle         | Start the favorite normally, then enable shuffle; the first track can therefore be fixed  |
-| Sonos: random first track | Read the newly created Sonos queue, jump to a random item, then enable shuffle             |
-
-Shuffle is applied only after a favorite reaches `playing`, so failed favorites
-do not change it. Sonos briefly begins the queue at its normal first item before
-the controller jumps to the random position; that transition may be audible.
-Select the native Sonos entity and, for grouped speakers, its coordinator.
-
-If the Sonos queue cannot be read, is empty, or rejects the random jump, the
-favorite remains successful and continues from its normal first track with
-standard shuffle. Selecting the Sonos mode for a non-Sonos entity also falls
-back to standard shuffle and writes a configuration warning to the Logbook. A
-player that does not support Home Assistant's shuffle service still starts
-playback because shuffle errors are isolated from the favorite result.
+Shuffle is disabled by default. When enabled, the controller turns shuffle on
+after a favorite has successfully created its new queue. Failed favorites do
+not change shuffle. Leaving the option disabled preserves the player's existing
+shuffle state instead of forcing it off. A player that does not support Home
+Assistant's shuffle service still starts playback; the unsupported shuffle call
+is isolated from the favorite result.
 
 ## Status feedback
 

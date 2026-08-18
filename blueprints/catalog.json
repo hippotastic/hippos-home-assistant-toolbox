@@ -37,7 +37,7 @@
       "id": "push_button_music_controller",
       "name": "Hippo's Push-Button Music Controller",
       "path": "blueprints/automation/push_button_music_controller.yaml",
-      "sha256": "719b9d0f01201141fbee0f827386fc14692c8ac62cec396c1e40c900660911d3",
+      "sha256": "71787ad404faad8bc9116dd23df3beb36039b7ff7afdf79fc0a4cb07ea0bda86",
       "status": "active"
     },
     {

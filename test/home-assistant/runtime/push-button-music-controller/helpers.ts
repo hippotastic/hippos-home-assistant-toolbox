@@ -8,9 +8,6 @@ type PlayerConfiguration = {
 	pause_fails?: boolean
 	resume_fails?: boolean
 	shuffle?: boolean
-	sonos_play_queue_fails?: boolean
-	sonos_queue_fails?: boolean
-	sonos_queue_size?: number
 	state?: string
 	volume_level?: number
 	volume_set_fails?: boolean
@@ -38,7 +35,6 @@ function scenarioContext(client: BlueprintRuntimeClient, scenario: MusicScenario
 		prepareNextAction: () => prepareNextAction(client, scenario),
 		setHelper: (value: MusicControllerState | string) => setHelper(client, scenario, value),
 		singleTap: (buttonEntity?: string) => singleTap(client, scenario, buttonEntity),
-		sonosCalls: () => sonosCalls(client, scenario),
 	}
 }
 
@@ -57,9 +53,6 @@ async function initializeScenario(client: BlueprintRuntimeClient, scenario: Musi
 		pause_fails: false,
 		resume_fails: false,
 		shuffle: false,
-		sonos_play_queue_fails: scenario.initial.sonosPlayQueueFails,
-		sonos_queue_fails: scenario.initial.sonosQueueFails,
-		sonos_queue_size: scenario.initial.sonosQueueSize,
 		state: scenario.initial.playerState,
 		volume_level: scenario.initial.volume,
 		volume_set_fails: scenario.initial.volumeSetFails,
@@ -129,10 +122,6 @@ async function expectHelper(client: BlueprintRuntimeClient, scenario: MusicScena
 
 async function mediaCalls(client: BlueprintRuntimeClient, scenario: MusicScenario): Promise<BlueprintServiceCall[]> {
 	return (await client.serviceCalls()).filter((call) => call.domain === 'media_player' && targetsEntity(call, scenario.entities.player))
-}
-
-async function sonosCalls(client: BlueprintRuntimeClient, scenario: MusicScenario): Promise<BlueprintServiceCall[]> {
-	return (await client.serviceCalls()).filter((call) => call.domain === 'sonos' && targetsEntity(call, scenario.entities.player))
 }
 
 async function logMessages(client: BlueprintRuntimeClient, scenario: MusicScenario): Promise<string[]> {
