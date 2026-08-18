@@ -12,7 +12,7 @@ Create or select:
 - optionally, a distinct second entity from the same domains for dedicated
   volume-down control;
 - one media player that supports browsing media, starting selected media,
-  play, pause, and absolute volume changes;
+  play, pause, next-track, and absolute volume changes;
 - shuffle control on that player if the optional Shuffle setting is enabled;
 - at least one playlist or favorite exposed by that player's Home Assistant
   Media Picker;
@@ -30,19 +30,27 @@ support possible.
 
 ## Button behavior
 
-Single- and double-tap behavior is identical on both configured buttons.
+Single-, double-, and triple-tap behavior is identical on both configured buttons.
 
-| Gesture                               | Result                                                |
-| ------------------------------------- | ----------------------------------------------------- |
-| Single tap while inactive             | Start Favorite 1 at the configured new-session volume |
-| Single tap while playing or buffering | Pause the player                                      |
-| Single tap during an active pause     | Resume playback                                       |
-| Double-tap while inactive             | Start Favorite 2, or Favorite 1 if only one exists    |
-| Double-tap during a known session     | Start the next favorite, wrapping at the end          |
+| Gesture                               | Result                                                     |
+| ------------------------------------- | ---------------------------------------------------------- |
+| Single tap while inactive             | Start Favorite 1 at the configured new-session volume      |
+| Single tap while playing or buffering | Pause the player                                           |
+| Single tap during an active pause     | Resume playback                                            |
+| Double-tap                            | Send next-track without changing session, volume, or state |
+| Triple-tap while inactive             | Start Favorite 2, or Favorite 1 if only one exists         |
+| Triple-tap during a known session     | Start the next favorite, wrapping at the end               |
 
-If the first tap is followed by a second press that becomes a hold, the gesture
-is only a long press. It does not also change the favorite. Button input is
-ignored while a favorite is starting or failover is in progress.
+If an earlier tap is followed by a second or third press that becomes a hold,
+the complete gesture is only a long press. It does not also skip a track or
+change the favorite. Button input is ignored while a favorite is starting or
+failover is in progress.
+
+Double-tap forwards next-track even while the player is paused or inactive and
+does not force a playback-state change. The selected player decides the outcome;
+an inactive player will normally do nothing, while a paused player can remain
+paused on its next track. Double-tap waits one additional multi-tap window after
+the second release so a third tap can still upgrade the gesture.
 
 With one configured button, the long-press direction starts upward and
 alternates after every completed hold, including while the player is idle or
@@ -59,12 +67,13 @@ Each gesture remains bound to the button that started it. Pressing or holding
 the other button while a gesture, fade, or failover is already running is
 ignored rather than being combined into a double-tap or long press. If both
 button inputs select the same entity, the controller logs the configuration
-problem and safely falls back to one-button alternating behavior.
+problem and safely falls back to one-button alternating behavior. Cross-button
+presses are never combined into a triple-tap either.
 
 ## Sessions and volume
 
 The default start volume is 50%, with a 25% minimum and 75% maximum. The
-configured start volume applies only to a new session. Resume and double-tap
+configured start volume applies only to a new session. Resume and triple-tap
 preserve the reported player volume while clamping it into the configured
 minimum and maximum range. If minimum and maximum are accidentally reversed,
 the automation safely uses the lower value as the minimum and logs the
@@ -127,10 +136,10 @@ button LED, while Playing can drive its normal steady status indication.
 
 ## Configuration notes
 
-The advanced gesture defaults are a 400 ms double-tap gap, a 700 ms long-press
+The advanced gesture defaults are a 400 ms gap between taps, a 700 ms long-press
 threshold, and 15 seconds to traverse the complete configured volume range.
-These timings apply equally to both buttons. Volume changes use
-one-percentage-point steps.
+These timings apply equally to both buttons. Volume changes use one-percentage-
+point steps.
 
 The Logbook records successful favorite starts, every failed favorite, complete
 failover, resume failures, and safety/configuration problems. Favorites are

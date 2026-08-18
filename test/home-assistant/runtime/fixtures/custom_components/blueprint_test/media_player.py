@@ -92,6 +92,7 @@ class BlueprintTestMediaPlayer(MediaPlayerEntity):
         | MediaPlayerEntityFeature.PAUSE
         | MediaPlayerEntityFeature.PLAY
         | MediaPlayerEntityFeature.PLAY_MEDIA
+        | MediaPlayerEntityFeature.NEXT_TRACK
         | MediaPlayerEntityFeature.SHUFFLE_SET
         | MediaPlayerEntityFeature.VOLUME_SET
     )
@@ -114,6 +115,7 @@ class BlueprintTestMediaPlayer(MediaPlayerEntity):
         self._attr_shuffle = False
         self._pause_fails = False
         self._resume_fails = False
+        self._next_track_count = 0
         self._volume_set_fails = False
         self._play_generation = 0
 
@@ -155,6 +157,15 @@ class BlueprintTestMediaPlayer(MediaPlayerEntity):
         if not self._resume_fails:
             self._attr_state = MediaPlayerState.PLAYING
             self.async_write_ha_state()
+
+    async def async_media_next_track(self) -> None:
+        """Record a track skip without changing playback state."""
+
+        self._next_track_count += 1
+        self._attr_extra_state_attributes = {
+            "next_track_count": self._next_track_count
+        }
+        self.async_write_ha_state()
 
     async def async_set_volume_level(self, volume: float) -> None:
         """Set volume immediately unless the test configured a failure."""

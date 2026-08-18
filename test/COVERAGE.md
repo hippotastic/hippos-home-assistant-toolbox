@@ -96,10 +96,11 @@ that remain stable across future implementations.
 | Area                  | Required behavior                                                                                               | Runtime scenario                   |
 | --------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | Single tap            | Inactive starts Favorite 1 at start volume; playing pauses; an active pause resumes                             | `main`                             |
-| Double-tap            | Reset starts Favorite 2, known sessions advance cyclically, and the final item wraps to Favorite 1              | `main`                             |
-| Gesture arbitration   | A second press held past the threshold becomes only a long press; input during seeking is ignored               | `main`, `slow`                     |
+| Double-tap            | Sends next-track without starting, resuming, or changing the stored session                                     | `main`                             |
+| Triple-tap            | Reset starts Favorite 2, known sessions advance cyclically, and the final item wraps to Favorite 1              | `main`                             |
+| Gesture arbitration   | A second or third press held past the threshold becomes only a long press; input during seeking is ignored      | `main`, `slow`                     |
 | Long press            | Volume moves in one-point steps, alternates direction, reverses at bounds, and never changes playback           | `main`                             |
-| Two-button taps       | Either button provides the same single-tap and double-tap playback controls                                     | `dual`                             |
+| Two-button taps       | Either button provides the same single-, double-, and triple-tap playback controls                              | `dual`                             |
 | Two-button holds      | The first button only raises and the second only lowers; bounds stop movement and stored alternation is retained | `dual`                             |
 | Button isolation      | Presses from different buttons are not combined; duplicate inputs fall back to one-button mode with a log       | `dual`, `duplicateButton`          |
 | Pause expiry          | A pause older than 30 minutes resets logically and the next tap begins with Favorite 1                           | `main`                             |

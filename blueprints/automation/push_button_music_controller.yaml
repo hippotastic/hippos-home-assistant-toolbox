@@ -2,11 +2,11 @@ blueprint:
   name: Hippo's Push-Button Music Controller
   description: >-
     Control one media player with one or two press/release buttons. Tap to start,
-    pause, or resume; double-tap to move to the next favorite; and hold to fade
-    the volume. With one button, successive holds alternate direction; with two,
-    the first raises and the second lowers volume. Failed favorites are skipped
-    automatically. Requires one dedicated Text helper with a maximum length of
-    255 characters. (V1.2)
+    pause, or resume; double-tap to skip a track; triple-tap to move to the next
+    favorite; and hold to fade the volume. With one button, successive holds
+    alternate direction; with two, the first raises and the second lowers volume.
+    Failed favorites are skipped automatically. Requires one dedicated Text helper
+    with a maximum length of 255 characters. (V1.2)
   domain: automation
   source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/push_button_music_controller.yaml
   author: Hippo
@@ -34,9 +34,10 @@ blueprint:
         second_button_entity:
           name: Second push button / volume down (optional)
           description: >-
-            When selected, taps and double-taps behave exactly like the first button,
-            while holding this button only lowers the volume. Without it, successive
-            holds on the first button continue to alternate direction.
+            When selected, taps, double-taps, and triple-taps behave exactly like
+            the first button, while holding this button only lowers the volume.
+            Without it, successive holds on the first button continue to alternate
+            direction.
           default: []
           selector:
             entity:
@@ -50,7 +51,8 @@ blueprint:
           name: Media player
           description: >-
             The single player controlled by this automation. It must support media
-            browsing and playback, play, pause, and absolute volume changes.
+            browsing and playback, play, pause, next-track, and absolute volume
+            changes.
           selector:
             entity:
               filter:
@@ -173,8 +175,8 @@ blueprint:
       collapsed: true
       input:
         double_tap_gap_milliseconds:
-          name: Double-tap gap
-          description: Maximum time from the first release to the second press.
+          name: Multi-tap gap
+          description: Maximum time from each release to the following press.
           default: 400
           selector:
             number:
@@ -352,8 +354,8 @@ actions:
       - condition: template
         value_template: "{{ trigger.id | default('') in ['button_pressed', 'second_button_pressed'] }}"
     then:
-      # Recognize the complete gesture before changing playback. A second press
-      # held past the threshold becomes only a long press, never a double-tap.
+      # Recognize the complete gesture before changing playback. A later press
+      # held past the threshold becomes only a long press, never a partial tap.
       - variables:
           gesture: ''
           pressed_button_entity: >-
@@ -390,8 +392,34 @@ actions:
                 timeout:
                   milliseconds: '{{ long_press_milliseconds }}'
                 continue_on_timeout: true
-              - variables:
-                  gesture: "{{ 'double' if wait.completed else 'long' }}"
+              - if:
+                  - condition: template
+                    value_template: '{{ not wait.completed }}'
+                then:
+                  - variables:
+                      gesture: long
+                else:
+                  - wait_for_trigger:
+                      - trigger: template
+                        value_template: "{{ is_state(pressed_button_entity, 'on') }}"
+                    timeout:
+                      milliseconds: '{{ double_tap_gap_milliseconds }}'
+                    continue_on_timeout: true
+                  - if:
+                      - condition: template
+                        value_template: '{{ not wait.completed }}'
+                    then:
+                      - variables:
+                          gesture: double
+                    else:
+                      - wait_for_trigger:
+                          - trigger: template
+                            value_template: "{{ is_state(pressed_button_entity, 'off') }}"
+                        timeout:
+                          milliseconds: '{{ long_press_milliseconds }}'
+                        continue_on_timeout: true
+                      - variables:
+                          gesture: "{{ 'triple' if wait.completed else 'long' }}"
 
       - if:
           - condition: template
@@ -515,7 +543,7 @@ actions:
 
       - if:
           - condition: template
-            value_template: "{{ gesture in ['single', 'double'] }}"
+            value_template: "{{ gesture in ['single', 'double', 'triple'] }}"
         then:
           - variables:
               controller_status: >-
@@ -545,6 +573,8 @@ actions:
                   pause
                 {% elif gesture == "single" and states(media_player_entity) == "paused" and controller_status.active %}
                   resume
+                {% elif gesture == "double" %}
+                  next
                 {% else %}
                   favorite
                 {% endif %}
@@ -586,6 +616,17 @@ actions:
                       message: The player did not pause after a single tap.
                       entity_id: '{{ media_player_entity }}'
                       domain: media_player
+
+          - if:
+              - condition: template
+                value_template: "{{ playback_command == 'next' }}"
+            then:
+              # Track skipping deliberately leaves controller session state,
+              # playback state, and volume entirely to the selected player.
+              - action: media_player.media_next_track
+                continue_on_error: true
+                target:
+                  entity_id: '{{ media_player_entity }}'
 
           - if:
               - condition: template

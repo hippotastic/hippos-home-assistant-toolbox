@@ -3,4 +3,5 @@
 ---
 
 Change the Push-Button Music Controller defaults to 50% start volume with a
-25–75% range, and add optional shuffle for successfully started favorites.
+25–75% range, add optional shuffle for successfully started favorites, and map
+double-tap to next-track while moving favorite cycling to triple-tap.

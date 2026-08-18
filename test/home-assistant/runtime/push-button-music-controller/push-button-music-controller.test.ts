@@ -4,8 +4,8 @@ import { withMusicScenario } from './helpers.ts'
 import { MUSIC_SCENARIOS } from './scenarios.ts'
 
 describe("Hippo's Push-Button Music Controller", () => {
-	test('starts, pauses, resumes, and cycles favorites with the configured feedback', async () => {
-		await withMusicScenario(MUSIC_SCENARIOS.main, async ({ client, doubleTap, expectHelper, mediaCalls, prepareNextAction, scenario, singleTap }) => {
+	test('starts, pauses, resumes, skips tracks, and cycles favorites with the configured feedback', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.main, async ({ client, doubleTap, expectHelper, mediaCalls, prepareNextAction, scenario, singleTap, tripleTap }) => {
 			await singleTap()
 			await client.waitForState(scenario.entities.player, { attributes: { volume_level: 0.12 }, state: 'playing' })
 			await client.waitForState(scenario.entities.playing!, { state: 'on' })
@@ -30,6 +30,11 @@ describe("Hippo's Push-Button Music Controller", () => {
 
 			await prepareNextAction()
 			await doubleTap()
+			await expectHelper({ active: true, favorite: 0, paused: null })
+			expect((await mediaCalls()).map((call) => call.service)).toEqual(['media_next_track'])
+
+			await prepareNextAction()
+			await tripleTap()
 			await expectHelper({ active: true, favorite: 1, paused: null })
 			expect((await mediaCalls()).filter((call) => call.service === 'play_media')[0]?.serviceData).toMatchObject({
 				media_content_id: 'test://success/two',
@@ -37,15 +42,33 @@ describe("Hippo's Push-Button Music Controller", () => {
 		})
 	})
 
-	test('starts Favorite 2 on a reset double-tap and wraps a known favorite', async () => {
-		await withMusicScenario(MUSIC_SCENARIOS.main, async ({ doubleTap, expectHelper, prepareNextAction, setHelper }) => {
-			await doubleTap()
+	test('starts Favorite 2 on a reset triple-tap and wraps a known favorite', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.main, async ({ expectHelper, prepareNextAction, setHelper, tripleTap }) => {
+			await tripleTap()
 			await expectHelper({ active: true, favorite: 1 })
 
 			await setHelper({ active: true, direction: 'up', favorite: 2, paused: null, v: 1 })
 			await prepareNextAction()
-			await doubleTap()
+			await tripleTap()
 			await expectHelper({ active: true, favorite: 0 })
+		})
+	})
+
+	test('double-tap only forwards next-track while inactive or paused', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.main, async ({ client, configurePlayer, doubleTap, expectHelper, mediaCalls, prepareNextAction, scenario, setHelper }) => {
+			await doubleTap()
+			await client.waitForState(scenario.entities.player, { state: 'idle' })
+			await expectHelper({ active: false, favorite: null, paused: null })
+			expect((await mediaCalls()).map((call) => call.service)).toEqual(['media_next_track'])
+
+			const pausedAt = Math.floor(Date.now() / 1000)
+			await configurePlayer({ state: 'paused' })
+			await setHelper({ active: true, direction: 'up', favorite: 0, paused: pausedAt, v: 1 })
+			await prepareNextAction()
+			await doubleTap()
+			await client.waitForState(scenario.entities.player, { state: 'paused' })
+			await expectHelper({ active: true, favorite: 0, paused: pausedAt })
+			expect((await mediaCalls()).map((call) => call.service)).toEqual(['media_next_track'])
 		})
 	})
 
@@ -120,7 +143,7 @@ describe("Hippo's Push-Button Music Controller", () => {
 	})
 
 	test('shares tap gestures across two buttons', async () => {
-		await withMusicScenario(MUSIC_SCENARIOS.dual, async ({ client, doubleTap, expectHelper, prepareNextAction, scenario, singleTap }) => {
+		await withMusicScenario(MUSIC_SCENARIOS.dual, async ({ client, doubleTap, expectHelper, mediaCalls, prepareNextAction, scenario, singleTap, tripleTap }) => {
 			const secondButton = scenario.entities.secondButton!
 
 			await singleTap(secondButton)
@@ -137,6 +160,11 @@ describe("Hippo's Push-Button Music Controller", () => {
 
 			await prepareNextAction()
 			await doubleTap(secondButton)
+			await expectHelper({ active: true, favorite: 0 })
+			expect((await mediaCalls()).map((call) => call.service)).toEqual(['media_next_track'])
+
+			await prepareNextAction()
+			await tripleTap(secondButton)
 			await expectHelper({ active: true, favorite: 1 })
 		})
 	})
@@ -204,8 +232,8 @@ describe("Hippo's Push-Button Music Controller", () => {
 		})
 	})
 
-	test('treats tap-then-hold as only a long press and ignores presses while seeking', async () => {
-		await withMusicScenario(MUSIC_SCENARIOS.main, async ({ client, expectHelper, mediaCalls, scenario }) => {
+	test('treats a second or third held press as only a long press and ignores presses while seeking', async () => {
+		await withMusicScenario(MUSIC_SCENARIOS.main, async ({ client, expectHelper, mediaCalls, prepareNextAction, scenario }) => {
 			await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.button })
 			await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.button })
 			await settle(20)
@@ -215,6 +243,20 @@ describe("Hippo's Push-Button Music Controller", () => {
 			await client.waitForActionToSettle([scenario.entities.automation], { timeoutMs: 3_000 })
 			expect((await mediaCalls()).every((call) => call.service === 'volume_set')).toBe(true)
 			await expectHelper({ active: false, direction: 'down', favorite: null })
+
+			await prepareNextAction()
+			await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.button })
+			await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.button })
+			await settle(20)
+			await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.button })
+			await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.button })
+			await settle(20)
+			await client.callService('input_boolean', 'turn_on', { entity_id: scenario.entities.button })
+			await settle(350)
+			await client.callService('input_boolean', 'turn_off', { entity_id: scenario.entities.button })
+			await client.waitForActionToSettle([scenario.entities.automation], { timeoutMs: 3_000 })
+			expect((await mediaCalls()).every((call) => call.service === 'volume_set')).toBe(true)
+			await expectHelper({ active: false, direction: 'up', favorite: null })
 		})
 
 		await withMusicScenario(MUSIC_SCENARIOS.slow, async ({ client, expectHelper, mediaCalls, scenario }) => {
@@ -274,12 +316,12 @@ describe("Hippo's Push-Button Music Controller", () => {
 	})
 
 	test('aborts favorite switching when existing playback cannot be paused', async () => {
-		await withMusicScenario(MUSIC_SCENARIOS.main, async ({ client, configurePlayer, expectHelper, mediaCalls, prepareNextAction, scenario, doubleTap }) => {
+		await withMusicScenario(MUSIC_SCENARIOS.main, async ({ client, configurePlayer, expectHelper, mediaCalls, prepareNextAction, scenario, tripleTap }) => {
 			await configurePlayer({ state: 'playing' })
 			await expectHelper({ active: true, favorite: null })
 			await configurePlayer({ pause_fails: true })
 			await prepareNextAction()
-			await doubleTap()
+			await tripleTap()
 
 			await client.waitForState(scenario.entities.player, { state: 'playing' })
 			await client.waitForState(scenario.entities.seeking!, { state: 'off' })
