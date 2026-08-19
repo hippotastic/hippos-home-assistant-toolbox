@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.9.0
+
+### Minor Changes
+
+- f1ed857: Warn before replacing a locally modified blueprint when existing automations are missing newly required inputs, and abort the Repair when compatibility cannot be checked safely.
+
 ## 0.8.0
 
 ### Minor Changes
