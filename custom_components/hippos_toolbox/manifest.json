@@ -3,6 +3,7 @@
   "name": "Hippo's Home Assistant Toolbox",
   "after_dependencies": [
     "automation",
+    "blueprint",
     "logbook",
     "script",
     "template"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 import logging
 import os
@@ -11,6 +12,18 @@ import shutil
 import tempfile
 from typing import Any
 
+import voluptuous as vol
+
+from homeassistant.components.automation.config import AUTOMATION_BLUEPRINT_SCHEMA
+from homeassistant.components.blueprint import (
+    BLUEPRINT_INSTANCE_FIELDS,
+    Blueprint,
+    BlueprintInputs,
+    is_blueprint_instance_config,
+)
+from homeassistant.components.blueprint.const import CONF_USE_BLUEPRINT
+from homeassistant.config import async_hass_config_yaml
+from homeassistant.const import CONF_ALIAS, CONF_ID, CONF_PATH
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
@@ -30,7 +43,13 @@ from .const import (
     STORAGE_VERSION,
 )
 from .hashing import blueprint_hash
-from .models import BlueprintState, CatalogEntry, CoordinatorData, RemoteSnapshot
+from .models import (
+    AffectedAutomation,
+    BlueprintState,
+    CatalogEntry,
+    CoordinatorData,
+    RemoteSnapshot,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -230,20 +249,117 @@ class BlueprintManager:
 
         await self._async_install_ids(data.snapshot, list(data.update_ids))
 
+    async def async_check_restore_compatibility(
+        self, blueprint_id: str
+    ) -> tuple[AffectedAutomation, ...]:
+        """Predict missing inputs before replacing a modified blueprint."""
+
+        snapshot = self.snapshot or await self.api.async_fetch_snapshot()
+        entry = self._active_entry(snapshot, blueprint_id)
+        if entry.domain != "automation":
+            raise HomeAssistantError(
+                f"Compatibility checks do not support {entry.domain} blueprints"
+            )
+
+        source = await self.api.async_fetch_blueprint(snapshot, entry)
+        blueprint = await self.hass.async_add_executor_job(
+            self._load_candidate_blueprint, source, entry
+        )
+        if validation_errors := blueprint.validate():
+            raise HomeAssistantError("; ".join(validation_errors))
+
+        # This loads a fresh configuration mapping with includes and packages
+        # resolved. It does not install the candidate or reload automations.
+        config = await async_hass_config_yaml(self.hass)
+        raw_automations = config.get("automation", [])
+        if raw_automations is None:
+            return ()
+        if isinstance(raw_automations, Mapping):
+            automations = [raw_automations]
+        elif isinstance(raw_automations, list):
+            automations = raw_automations
+        else:
+            raise HomeAssistantError("Automation configuration is not a list")
+
+        references = {
+            self._blueprint_reference(self._installed_path(entry), entry),
+            *(
+                self._blueprint_reference(path, entry)
+                for path in self._adoptable_paths(entry)
+            ),
+        }
+        affected: list[AffectedAutomation] = []
+
+        for index, automation in enumerate(automations):
+            if not isinstance(automation, dict):
+                raise HomeAssistantError(
+                    f"Automation configuration item {index + 1} is not an object"
+                )
+            if not is_blueprint_instance_config(automation):
+                continue
+
+            use_blueprint = automation.get(CONF_USE_BLUEPRINT)
+            if not isinstance(use_blueprint, Mapping):
+                raise HomeAssistantError(
+                    f"Automation configuration item {index + 1} has an invalid "
+                    "use_blueprint block"
+                )
+            blueprint_path = use_blueprint.get(CONF_PATH)
+            if not isinstance(blueprint_path, str):
+                raise HomeAssistantError(
+                    f"Automation configuration item {index + 1} has no valid "
+                    "blueprint path"
+                )
+            if blueprint_path not in references:
+                continue
+
+            try:
+                validated = BLUEPRINT_INSTANCE_FIELDS(automation)
+            except vol.Invalid as err:
+                raise HomeAssistantError(
+                    f"Automation configuration item {index + 1} has invalid "
+                    f"blueprint inputs: {err}"
+                ) from err
+
+            inputs = BlueprintInputs(blueprint, validated)
+            missing_inputs = tuple(
+                sorted(set(blueprint.inputs) - set(inputs.inputs_with_default))
+            )
+            if not missing_inputs:
+                continue
+
+            automation_id_value = automation.get(CONF_ID)
+            automation_id = (
+                str(automation_id_value)
+                if automation_id_value is not None
+                else None
+            )
+            name_value = automation.get(CONF_ALIAS)
+            name = (
+                str(name_value)
+                if name_value
+                else automation_id or f"Automation {index + 1}"
+            )
+            affected.append(
+                AffectedAutomation(
+                    name=name,
+                    automation_id=automation_id,
+                    missing_inputs=missing_inputs,
+                )
+            )
+
+        return tuple(
+            sorted(
+                affected,
+                key=lambda item: (item.name.casefold(), item.automation_id or ""),
+            )
+        )
+
     async def async_restore_blueprint(self, blueprint_id: str) -> bool:
         """Explicitly replace a modified local file with the published version."""
 
         snapshot = self.snapshot or await self.api.async_fetch_snapshot()
-        entry = next(
-            (
-                candidate
-                for candidate in snapshot.entries
-                if candidate.id == blueprint_id and candidate.status == "active"
-            ),
-            None,
-        )
-        if entry is None:
-            raise HomeAssistantError(f"Blueprint {blueprint_id} is no longer active")
+        entry = self._active_entry(snapshot, blueprint_id)
 
         adoptable_path = await self.hass.async_add_executor_job(
             self._find_adoptable_path, entry
@@ -263,6 +379,32 @@ class BlueprintManager:
             state for state in evaluated.blueprints if state.entry.id == blueprint_id
         )
         return restored_state.status == STATUS_CURRENT
+
+    @staticmethod
+    def _active_entry(snapshot: RemoteSnapshot, blueprint_id: str) -> CatalogEntry:
+        entry = next(
+            (
+                candidate
+                for candidate in snapshot.entries
+                if candidate.id == blueprint_id and candidate.status == "active"
+            ),
+            None,
+        )
+        if entry is None:
+            raise HomeAssistantError(f"Blueprint {blueprint_id} is no longer active")
+        return entry
+
+    @staticmethod
+    def _load_candidate_blueprint(source: str, entry: CatalogEntry) -> Blueprint:
+        value = yaml_util.parse_yaml(source)
+        if not isinstance(value, dict):
+            raise HomeAssistantError(f"Blueprint {entry.path} is not a YAML object")
+        return Blueprint(
+            value,
+            expected_domain=entry.domain,
+            path=entry.path,
+            schema=AUTOMATION_BLUEPRINT_SCHEMA,
+        )
 
     async def _async_install_ids(
         self,

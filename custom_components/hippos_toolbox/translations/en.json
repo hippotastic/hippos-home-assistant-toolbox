@@ -81,9 +81,13 @@
     "local_modified": {
       "fix_flow": {
         "abort": {
+          "compatibility_check_failed": "The compatibility check could not be completed:\n\n```\n{error}\n```\n\nCorrect the problem and retry this Repair.",
           "integration_not_configured": "The integration is no longer configured.",
           "issue_ignored": "The local file for **{blueprint_name}** was left unchanged, and this Repair has been ignored. The integration will not overwrite this file while it differs from the published version.",
           "migration_incomplete": "The published version of **{blueprint_name}** was installed, but at least one reference to `{path}` could not be migrated safely. The old file was kept, and the Repair remains open. Update the remaining `use_blueprint.path` reference manually and check for updates again."
+        },
+        "error": {
+          "confirmation_required": "Confirmation is required."
         },
         "step": {
           "init": {
@@ -96,6 +100,14 @@
           },
           "restore": {
             "description": "The current file at `{path}` will be backed up and replaced with the latest published version of **{blueprint_name}**. Local edits cannot be merged.\n\nIf the file is still located under `hippo/`, existing YAML `use_blueprint.path` references will be migrated to `hippotastic/`. If any reference cannot be migrated safely, the old file will be kept.\n\nSelect **Submit** to confirm the replacement.",
+            "title": "Replace local {blueprint_name}"
+          },
+          "restore_with_compatibility_warning": {
+            "data": {
+              "confirm_compatibility": "I understand that the affected automations will require repair after replacement."
+            },
+            "description": "**Compatibility warning**\n\nThe published blueprint would cause **{affected_automation_count} existing {affected_automation_noun} to fail** because required inputs are not stored in their YAML:\n\n{affected_automations}",
+            "submit": "Replace anyway",
             "title": "Replace local {blueprint_name}"
           }
         }
