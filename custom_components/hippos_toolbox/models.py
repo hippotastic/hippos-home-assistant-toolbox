@@ -37,6 +37,15 @@ class BlueprintState:
 
 
 @dataclass(frozen=True, slots=True)
+class AffectedAutomation:
+    """Describe one automation incompatible with a blueprint replacement."""
+
+    name: str
+    automation_id: str | None
+    missing_inputs: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CoordinatorData:
     """Current collection state exposed to Home Assistant entities."""
 

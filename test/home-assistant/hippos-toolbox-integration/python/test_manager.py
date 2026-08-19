@@ -3,6 +3,9 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, patch
+
+from homeassistant.exceptions import HomeAssistantError
 
 from repository import find_repository_root
 
@@ -14,7 +17,11 @@ from custom_components.hippos_toolbox.manager import (
     STATUS_MISSING,
     STATUS_MODIFIED,
 )
-from custom_components.hippos_toolbox.models import CatalogEntry, RemoteSnapshot
+from custom_components.hippos_toolbox.models import (
+    AffectedAutomation,
+    CatalogEntry,
+    RemoteSnapshot,
+)
 
 
 class FakeConfig:
@@ -90,6 +97,26 @@ def snapshot(entry: CatalogEntry) -> RemoteSnapshot:
         revision="2026.08.06.abcdef0",
         commit_sha="a" * 40,
         release_url="https://github.com/example/commit/abcdef0",
+    )
+
+
+def compatibility_blueprint_source() -> str:
+    """Return a valid blueprint with one required and one optional input."""
+
+    return (
+        "blueprint:\n"
+        "  name: Example\n"
+        "  domain: automation\n"
+        "  input:\n"
+        "    required_entity:\n"
+        "      selector:\n"
+        "        entity: {}\n"
+        "    optional_entity:\n"
+        "      default: sensor.default\n"
+        "      selector:\n"
+        "        entity: {}\n"
+        "triggers: []\n"
+        "actions: []\n"
     )
 
 
@@ -170,6 +197,102 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data.blueprints[0].status, STATUS_MODIFIED)
         self.assertEqual(data.update_ids, ())
         self.assertEqual(data.conflict_ids, (entry.id,))
+
+    async def test_restore_compatibility_reports_missing_required_inputs(
+        self,
+    ) -> None:
+        source = compatibility_blueprint_source()
+        entry = catalog_entry(source)
+        self.manager.api = FakeApi(source)
+        self.manager.snapshot = snapshot(entry)
+        config = {
+            "automation": [
+                {
+                    "id": "affected",
+                    "alias": "Affected automation",
+                    "use_blueprint": {
+                        "path": "hippotastic/example.yaml",
+                        "input": {"optional_entity": "sensor.optional"},
+                    },
+                },
+                {
+                    "id": "safe",
+                    "alias": "Safe automation",
+                    "use_blueprint": {
+                        "path": "hippo/example.yaml",
+                        "input": {"required_entity": "sensor.required"},
+                    },
+                },
+                {
+                    "id": "other",
+                    "alias": "Other blueprint",
+                    "use_blueprint": {
+                        "path": "someone_else/example.yaml",
+                        "input": {},
+                    },
+                },
+            ]
+        }
+
+        with patch(
+            "custom_components.hippos_toolbox.manager.async_hass_config_yaml",
+            new=AsyncMock(return_value=config),
+        ):
+            affected = await self.manager.async_check_restore_compatibility(
+                entry.id
+            )
+
+        self.assertEqual(
+            affected,
+            (
+                AffectedAutomation(
+                    name="Affected automation",
+                    automation_id="affected",
+                    missing_inputs=("required_entity",),
+                ),
+            ),
+        )
+        self.assertFalse(self.installed_path().exists())
+        self.assertIsNone(self.manager._store.saved)
+
+    async def test_restore_compatibility_rejects_a_malformed_candidate(
+        self,
+    ) -> None:
+        source = "blueprint: ["
+        entry = catalog_entry(source)
+        self.manager.api = FakeApi(source)
+        self.manager.snapshot = snapshot(entry)
+
+        with self.assertRaises(HomeAssistantError):
+            await self.manager.async_check_restore_compatibility(entry.id)
+
+    async def test_restore_compatibility_rejects_malformed_target_inputs(
+        self,
+    ) -> None:
+        source = compatibility_blueprint_source()
+        entry = catalog_entry(source)
+        self.manager.api = FakeApi(source)
+        self.manager.snapshot = snapshot(entry)
+        config = {
+            "automation": [
+                {
+                    "id": "malformed",
+                    "use_blueprint": {
+                        "path": "hippotastic/example.yaml",
+                        "input": [],
+                    },
+                }
+            ]
+        }
+
+        with (
+            patch(
+                "custom_components.hippos_toolbox.manager.async_hass_config_yaml",
+                new=AsyncMock(return_value=config),
+            ),
+            self.assertRaises(HomeAssistantError),
+        ):
+            await self.manager.async_check_restore_compatibility(entry.id)
 
     async def test_finds_an_exact_blueprint_in_hippo_for_adoption(self) -> None:
         source = "blueprint:\n  name: Example\n  domain: automation\n"
