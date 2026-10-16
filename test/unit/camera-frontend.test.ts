@@ -85,7 +85,7 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 	Object.assign(w, { hassConnection: Promise.resolve({ conn }) })
 	class CameraStream extends w.HTMLElement {
 		stateObj = { entity_id: 'camera.front_door' }
-		_capabilities = { frontend_stream_types: [] }
+		_capabilities = { frontend_stream_types: [] as string[] }
 		_posterUrl: string | undefined
 		updateComplete = Promise.resolve()
 		fitMode = 'cover'
@@ -333,10 +333,57 @@ describe('camera frontend', () => {
 	test('uses English camera recovery messages and reasons', async () => {
 		const f = await fixture()
 		await f.settings(false, true, true)
-		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] MJPEG stream recovery', { camera: 'camera.front_door', reason: 'Opening MJPEG view', attempt: 1 }])
+		f.camera.shadowRoot!.querySelector('img')!.dispatchEvent(new f.w.Event('error'))
+		await flush()
+		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] MJPEG stream recovery', { camera: 'camera.front_door', reason: 'Image error', attempt: 1 }])
 		f.camera.remove()
 		await f.tick()
 		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] MJPEG stream stopped on server', { camera: 'camera.front_door' }])
+		f.dispose()
+	})
+
+	test.each([false, true])('opens a normal MJPEG view silently with recovery=%s', async (recovery) => {
+		const f = await fixture()
+		await f.settings(false, recovery, true)
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(1)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/hippos_toolbox/camera_stream/')
+		expect(f.logs).toHaveLength(0)
+		f.dispose()
+	})
+
+	test('starts real MJPEG recovery at attempt one and backs off only recovery attempts', async () => {
+		const f = await fixture()
+		await f.settings(false, true, true)
+		const image = f.camera.shadowRoot!.querySelector('img')!
+		image.dispatchEvent(new f.w.Event('error'))
+		await flush()
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(2)
+		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] MJPEG stream recovery', { camera: 'camera.front_door', reason: 'Image error', attempt: 1 }])
+		image.dispatchEvent(new f.w.Event('error'))
+		await f.tick(999)
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(2)
+		await f.tick(1)
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(3)
+		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] MJPEG stream recovery', { camera: 'camera.front_door', reason: 'Image error', attempt: 2 }])
+		f.dispose()
+	})
+
+	test('reports an initial reservation failure as opening failure without a recovery attempt', async () => {
+		const f = await fixture()
+		f.camera._api.callWS = () => Promise.reject(new Error('Backend unavailable'))
+		await f.settings(false, true, true)
+		expect(f.logs).toEqual([['[Hippo Camera Recovery] Could not open MJPEG view', { camera: 'camera.front_door' }]])
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		f.dispose()
+	})
+
+	test('still reports actual HLS fallback during initial view setup', async () => {
+		const f = await fixture()
+		f.camera._capabilities.frontend_stream_types = ['hls']
+		Object.assign(f.camera, { _hlsStreams: { hasVideo: false } })
+		await f.settings(false, true, true)
+		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] HLS stream recovery', { camera: 'camera.front_door', reason: 'HLS fell back to a still image', attempt: 1 }])
+		expect(f.logs.some(([message]) => message === '[Hippo Camera Recovery] MJPEG stream recovery')).toBe(false)
 		f.dispose()
 	})
 

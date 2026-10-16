@@ -103,6 +103,9 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 		const image = stream.shadowRoot?.querySelector('img')
 		if (!image) return
 		const isHlsFallback = hlsFallback(stream, image)
+		// Initial MJPEG reservations use the same renewal path, but are ordinary
+		// setup. Only an interruption or HLS fallback counts as recovery.
+		const isRecovery = reason !== undefined || isHlsFallback
 		let url
 		if (!isHlsFallback && !state.managedEntity) {
 			const source = image.getAttribute('src')
@@ -119,15 +122,17 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 		}
 
 		if (state.managedEntity && !isHlsFallback) stopControlledStream(stream, state)
-		state.nextRetryAt = now + Math.min(1000 * 2 ** Math.min(state.attempts, 5), MAX_RETRY_DELAY)
-		state.attempts += 1
+		if (isRecovery) {
+			state.nextRetryAt = now + Math.min(1000 * 2 ** Math.min(state.attempts, 5), MAX_RETRY_DELAY)
+			state.attempts += 1
+			console.info(`[Hippo Camera Recovery] ${isHlsFallback ? 'HLS' : 'MJPEG'} stream recovery`, {
+				camera: stream.stateObj.entity_id,
+				reason: reason ?? 'HLS fell back to a still image',
+				attempt: state.attempts,
+			})
+		}
 		state.lastAttemptAt = now
 		state.failed = false
-		console.info(`[Hippo Camera Recovery] ${isHlsFallback ? 'HLS' : 'MJPEG'} stream recovery`, {
-			camera: stream.stateObj.entity_id,
-			reason,
-			attempt: state.attempts,
-		})
 
 		if (isHlsFallback) {
 			if (state.managedEntity) {
@@ -165,9 +170,9 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 					stream.requestUpdate()
 				}
 				state.failed = true
-				console.warn('[Hippo Camera Recovery] Could not renew stream URL', {
+				console.warn(isRecovery ? '[Hippo Camera Recovery] Could not renew stream URL' : '[Hippo Camera Recovery] Could not open MJPEG view', {
 					camera: stream.stateObj.entity_id,
-					attempt: state.attempts,
+					...(isRecovery ? { attempt: state.attempts } : {}),
 				})
 			} finally {
 				if (state.generation === generation) state.refreshing = false
@@ -221,7 +226,7 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 			image?.addEventListener('error', state.onError)
 		}
 		hookPlayer(stream.shadowRoot?.querySelector('ha-hls-player'))
-		if (state.managedEntity && image && !state.streamId) recover(stream, state, 'Opening MJPEG view')
+		if (state.managedEntity && image && !state.streamId) recover(stream, state)
 		return state
 	}
 
