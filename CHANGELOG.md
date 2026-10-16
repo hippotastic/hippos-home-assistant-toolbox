@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.9.1
+
+### Patch Changes
+
+- 8be3d47: Remove unsupported `none` and `query failed` error states from the cover automation blueprint to prevent Spook repair warnings. Continue ignoring `unknown` and `unavailable` states and waiting ten seconds after an input recovers.
+
 ## 0.9.0
 
 ### Minor Changes
