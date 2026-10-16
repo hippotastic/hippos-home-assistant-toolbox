@@ -10,15 +10,19 @@ pnpm install
 
 Commit blueprint changes and the synchronized `blueprints/catalog.json` to `main`, then select the Development channel on a test Home Assistant instance. Development users receive those changes directly from `main`; Stable users do not receive them until they are included in a published release. New blueprints and deprecation tombstones follow the same process.
 
-Run the canonical local validation suite:
+Before creating a commit, run the canonical local validation suite and require it to pass:
 
 ```sh
 pnpm validate
 ```
 
-`pnpm validate` is the complete local check. It first synchronizes the generated blueprint catalog so changed sources and their SHA-256 hashes cannot drift apart. It then orders checks to fail early and quickly: ESLint and catalog consistency run first, followed by TypeScript and unit tests. Finally, one Vitest run starts a network-isolated Home Assistant container and executes both repository validation and blueprint runtime tests. Commit an updated `blueprints/catalog.json` alongside its blueprint changes. Do not run additional checks before or after a successful validation unless the working tree changed. The YAML linter reports lines longer than 140 characters as warnings.
+`pnpm validate` is the complete local check. It synchronizes the generated blueprint catalog, then runs ESLint, catalog consistency and compatibility against `origin/main`, TypeScript, and unit tests. Next, the official hassfest and HACS containers validate the integration and repository. Finally, one Vitest run starts a network-isolated Home Assistant container and executes both repository validation and blueprint runtime tests. Every stage must pass before a commit. Commit an updated `blueprints/catalog.json` alongside its blueprint changes. The YAML linter reports lines longer than 140 characters as warnings.
 
-GitHub Actions runs the Docker-free portion of the same validation flow. The full Home Assistant-backed suite remains local.
+Reserve full validation for commits, rather than every reply or handoff. During development, use focused checks when needed. Changes to the validation pipeline itself require exercising that pipeline. After a successful validation, do not repeat checks unless the working tree changed or new evidence calls the result into question.
+
+Docker and network access are required. HACS uses `GH_TOKEN`, `GITHUB_TOKEN`, or the existing `gh auth login` session to read GitHub metadata. The validators read local files, including untracked additions and deletions, so a push is not required to validate a change. See `test/README.md` for the container and authentication details.
+
+GitHub Actions runs lint, catalog checks, TypeScript, unit tests, hassfest, and HACS. The full Home Assistant-backed suite remains local. Before deploying a pushed commit to the user's Home Assistant, verify that the GitHub Validate workflow for that exact commit passed.
 
 The shared validation and runtime container uses Docker networking mode `none`. No Python installation is required on the host; Python regression tests execute inside the Home Assistant container and are orchestrated by Vitest. See `test/README.md` for details.
 

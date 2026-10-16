@@ -12,10 +12,54 @@ Run the complete repository validation from the project root:
 pnpm validate
 ```
 
-This is the canonical and complete check. It deliberately runs fast static
-checks before slower tests and starts Home Assistant only after those checks
-pass. No preliminary or follow-up validation commands are needed when it
-succeeds and the working tree remains unchanged.
+This is the canonical and complete check required before every commit. Full
+validation is not required before replies or handoffs; use focused checks
+during development. Exercise the complete pipeline when changing that pipeline.
+No preliminary or follow-up validation commands are needed when it succeeds
+and the working tree remains unchanged.
+
+The stages run in order and stop on the first failure:
+
+1. Synchronize the blueprint catalog.
+2. Run strict lint and catalog consistency checks.
+3. Check catalog compatibility against `origin/main` (fetch that ref first if missing).
+4. Type-check and run Node.js unit tests.
+5. Run the official hassfest validator against local integrations.
+6. Run adapter regression tests and all official HACS checks.
+7. Start Home Assistant and run the configuration, integration, and runtime tests.
+
+The CI workflow runs the same static and HACS/hassfest checks; the Home
+Assistant suite remains local. Before a live deployment, also require the
+GitHub Validate workflow for the pushed commit to pass.
+
+## HACS and hassfest
+
+Run either external validator directly when investigating a focused failure:
+
+```sh
+pnpm validate:hassfest
+pnpm validate:hacs
+```
+
+Both commands require Docker. They pull the current `ghcr.io/home-assistant/hassfest:latest`
+and `ghcr.io/hacs/action:main` images used by CI on every invocation to avoid
+silently validating with a stale cached validator. Both images run as
+`linux/amd64`, including on Apple Silicon, and mount the checkout read-only.
+After pulling its image, hassfest runs without network access.
+
+The [official HACS action](https://hacs.xyz/docs/publish/action/) normally reads
+files from GitHub. `tools/validation/hacs.py` substitutes local file reads and
+the Git file list while keeping the action's registration and dynamically
+discovered checks. This includes untracked, non-ignored files and excludes
+deleted files. The adapter's regression tests run inside the same HACS container.
+Repository metadata such as description, topics, license, and issue settings
+still comes from the live GitHub repository. HACS therefore needs network access
+and `GH_TOKEN`, `GITHUB_TOKEN`, or a successful `gh auth login`. Credentials are
+passed through the container environment rather than command-line values.
+Missing authentication, network failures, and validator failures fail validation;
+none of these checks are silently skipped. No host Python installation is needed.
+
+## Home Assistant image
 
 The default image is `ghcr.io/home-assistant/home-assistant:stable`. The harness
 uses Docker's `--pull never` policy so the tested Home Assistant version changes

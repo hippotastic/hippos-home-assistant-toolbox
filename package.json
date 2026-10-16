@@ -18,7 +18,9 @@
     "test:ha:runtime": "vitest run --config test/home-assistant/runtime/vitest.config.ts",
     "test:unit": "vitest run --config test/unit/vitest.config.ts",
     "typecheck": "tsc --noEmit",
-    "validate": "pnpm catalog:sync && pnpm lint:strict && pnpm typecheck && pnpm test",
+    "validate": "pnpm catalog:sync && pnpm lint:strict && pnpm catalog:check --base origin/main && pnpm typecheck && pnpm test:unit && pnpm validate:hassfest && pnpm validate:hacs && pnpm test:ha",
+    "validate:hacs": "node tools/validation/cli.ts hacs",
+    "validate:hassfest": "node tools/validation/cli.ts hassfest",
     "release:publish": "changeset publish",
     "release:version": "changeset version && node tools/release/sync-version.ts"
   },
