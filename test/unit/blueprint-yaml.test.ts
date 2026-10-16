@@ -40,6 +40,20 @@ describe('Blueprint YAML', () => {
 		expect(document.getIn(['blueprint', 'input', 'volume_section', 'input', 'maximum_volume', 'default'])).toBe(75)
 		expect(document.getIn(['blueprint', 'input', 'favorites_section', 'input', 'shuffle_favorites', 'default'])).toBe(false)
 	})
+
+	test('excludes only standard Home Assistant error states in cover input triggers', () => {
+		const document = parseDocument(readFileSync(join(process.cwd(), 'blueprints', 'automation', 'cover_automation.yaml'), 'utf8'), {
+			customTags: HOME_ASSISTANT_YAML_TAGS,
+		})
+		const { triggers } = document.toJS() as { triggers: { id: string; not_to?: string[] }[] }
+		const inputTriggers = triggers.filter((trigger) => trigger.not_to !== undefined)
+
+		expect(inputTriggers).toHaveLength(8)
+		for (const trigger of inputTriggers) {
+			// Spook validates excluded states against the entity's supported states too
+			expect(trigger.not_to, trigger.id).toEqual(['unavailable', 'unknown'])
+		}
+	})
 })
 
 function validationYamlFiles(): string[] {

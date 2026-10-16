@@ -223,27 +223,56 @@ describe("Hippo's Cover Automation", () => {
 		}
 	})
 
-	test('does nothing when the cover or a configured mode entity is unavailable', async () => {
-		await withCoverScenario(COVER_SCENARIOS.availability, async ({ scenario, client, prepareNextAction, setAutomaticControl, expectNoHelperChanges, expectNoCoverUpdates }) => {
-			// If a configured mode entity is unavailable,
-			// expect automatic control to abort without state changes
-			await client.setState(scenario.controls.privacy, 'unavailable')
-			await prepareNextAction()
-			await setAutomaticControl(true)
-			await Promise.all([expectNoHelperChanges(), expectNoCoverUpdates()])
-		})
-
-		await withCoverScenario(
-			COVER_SCENARIOS.requiredAvailability,
-			async ({ scenario, client, prepareNextAction, setAutomaticControl, expectNoHelperChanges, expectNoCoverUpdates }) => {
-				// If the required cover entity is unavailable,
+	test('does nothing when the cover or a configured mode entity is unknown or unavailable', async () => {
+		for (const state of ['unknown', 'unavailable']) {
+			await withCoverScenario(COVER_SCENARIOS.availability, async ({ scenario, client, prepareNextAction, setAutomaticControl, expectNoHelperChanges, expectNoCoverUpdates }) => {
+				// If a configured mode entity has no usable state,
 				// expect automatic control to abort without state changes
-				await client.setState(scenario.entities.cover, 'unavailable')
+				await client.setState(scenario.controls.privacy, state)
 				await prepareNextAction()
 				await setAutomaticControl(true)
 				await Promise.all([expectNoHelperChanges(), expectNoCoverUpdates()])
-			}
-		)
+			})
+
+			await withCoverScenario(
+				COVER_SCENARIOS.requiredAvailability,
+				async ({ scenario, client, prepareNextAction, setAutomaticControl, expectNoHelperChanges, expectNoCoverUpdates }) => {
+					// If the required cover entity has no usable state,
+					// expect automatic control to abort without state changes
+					await client.setState(scenario.entities.cover, state)
+					await prepareNextAction()
+					await setAutomaticControl(true)
+					await Promise.all([expectNoHelperChanges(), expectNoCoverUpdates()])
+				}
+			)
+		}
+	})
+
+	test('waits ten seconds after a mode recovers from unknown or unavailable and applies later mode changes immediately', async () => {
+		for (const state of ['unknown', 'unavailable']) {
+			await withCoverScenario(
+				COVER_SCENARIOS.availability,
+				async ({ scenario, client, prepareNextAction, setAutomaticControl, setMode, expectHelperToBecome, expectCoverToBecome, expectNoHelperChanges, expectNoCoverUpdates }) => {
+					await client.setState(scenario.controls.privacy, state)
+					await prepareNextAction()
+					await setAutomaticControl(true)
+					await Promise.all([expectNoHelperChanges(), expectNoCoverUpdates()])
+
+					// If a mode recovers, expect it to stay stable for ten seconds before moving
+					await prepareNextAction()
+					await setMode('privacy', true)
+					await Promise.all([expectNoHelperChanges({ forMs: 9000 }), expectNoCoverUpdates({ forMs: 9000 })])
+					await expectHelperToBecome({ angle: 25, modes: ['privacy'], position: 40 }, { withinMs: 2000 })
+					await expectCoverToBecome({ angle: 25, position: 40 })
+
+					// If a healthy mode changes again, expect no recovery delay
+					await prepareNextAction()
+					await setMode('privacy', false)
+					await expectHelperToBecome({ angle: 40, modes: [], position: 70 })
+					await expectCoverToBecome({ angle: 40, position: 70 })
+				}
+			)
+		}
 	})
 
 	test('works even if no mode entities are configured', async () => {

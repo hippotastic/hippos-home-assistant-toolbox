@@ -373,36 +373,28 @@ triggers:
     not_to:
       - "unavailable"
       - "unknown"
-      - "none"
-      - "query failed"
-    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown'], '00:00:10', '00:00:00') }}"
     id: "trigger_sun_protection"
   - trigger: state
     entity_id: !input privacy_mode_entity
     not_to:
       - "unavailable"
       - "unknown"
-      - "none"
-      - "query failed"
-    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown'], '00:00:10', '00:00:00') }}"
     id: "trigger_privacy_mode"
   - trigger: state
     entity_id: !input night_mode_entity
     not_to:
       - "unavailable"
       - "unknown"
-      - "none"
-      - "query failed"
-    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown'], '00:00:10', '00:00:00') }}"
     id: "trigger_night_mode"
   - trigger: state
     entity_id: !input lockout_prevention_entity
     not_to:
       - "unavailable"
       - "unknown"
-      - "none"
-      - "query failed"
-    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown'], '00:00:10', '00:00:00') }}"
     id: "trigger_lockout_prevention"
   # External input for any angle override was changed
   - trigger: state
@@ -410,36 +402,28 @@ triggers:
     not_to:
       - "unavailable"
       - "unknown"
-      - "none"
-      - "query failed"
-    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown'], '00:00:10', '00:00:00') }}"
     id: "trigger_default_angle"
   - trigger: state
     entity_id: !input sun_protection_angle_entity
     not_to:
       - "unavailable"
       - "unknown"
-      - "none"
-      - "query failed"
-    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown'], '00:00:10', '00:00:00') }}"
     id: "trigger_sun_protection_angle"
   - trigger: state
     entity_id: !input privacy_mode_angle_entity
     not_to:
       - "unavailable"
       - "unknown"
-      - "none"
-      - "query failed"
-    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown'], '00:00:10', '00:00:00') }}"
     id: "trigger_privacy_mode_angle"
   - trigger: state
     entity_id: !input night_mode_angle_entity
     not_to:
       - "unavailable"
       - "unknown"
-      - "none"
-      - "query failed"
-    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown', 'none', 'query failed'], '00:00:10', '00:00:00') }}"
+    for: "{{ iif(trigger.from_state.state in ['unavailable', 'unknown'], '00:00:10', '00:00:00') }}"
     id: "trigger_night_mode_angle"
   # Sun visibility based on the configuration was changed
   - trigger: template
@@ -491,7 +475,7 @@ conditions:
   # Don't run the automation if it was disabled through the input binary sensor
   - "{{ automatic_control_enabled_entity == [] or is_state(automatic_control_enabled_entity, ['on', 'true']) }}"
   # Don't run the automation if the new state of the trigger is unknown
-  - "{{ trigger.to_state.state not in ['unavailable', 'unknown', 'none', 'query failed'] }}"
+  - "{{ trigger.to_state.state not in ['unavailable', 'unknown'] }}"
 
 # If the automation is triggered again while still being executed, queue another run
 # to prevent half-finished cover angle homing from being interpreted as user override
@@ -721,7 +705,7 @@ action:
   # Only continue if all configured entities are available
   - condition: template
     value_template: >-
-      {% set ignored_states = ['unavailable', 'unknown', 'none', 'query failed'] %}
+      {% set ignored_states = ['unavailable', 'unknown'] %}
       {% set control = automatic_control_enabled_entity %}
       {% set sun = sun_protection_entity %}
       {% set privacy = privacy_mode_entity %}

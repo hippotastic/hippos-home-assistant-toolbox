@@ -5,7 +5,7 @@
       "id": "cover_automation",
       "name": "Hippo's Cover Automation",
       "path": "blueprints/automation/cover_automation.yaml",
-      "sha256": "2fbd4b228487194f3e60a1afd5f6e08d0fe32f563a8032bc80c77251f6e7e64b",
+      "sha256": "4a8073d18912b2eb03fa906291f355df30bd762fcec40f70c1fedf6c878e7bc1",
       "status": "active"
     },
     {
