@@ -192,7 +192,7 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
         with patch(
             "custom_components.hippos_toolbox.camera.async_entity_id_to_device",
             return_value=SimpleNamespace(id="source-device"),
-        ):
+        ), patch("custom_components.hippos_toolbox.camera.async_setup_camera_streams"):
             await async_setup_entry(hass, entry, add_entities)
 
         self.assertEqual(len(added), 1)

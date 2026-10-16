@@ -51,13 +51,19 @@
     "step": {
       "init": {
         "data": {
-          "update_channel": "Update channel"
+          "update_channel": "Update channel",
+          "camera_zoom": "Camera zoom",
+          "camera_recovery": "Automatically restore camera streams",
+          "camera_stream_cleanup": "Reliably close abandoned camera streams"
         },
         "data_description": {
-          "update_channel": "Stable checks published releases once a day. Development checks the main branch every two hours and may include changes that have not been released yet."
+          "update_channel": "Stable checks published releases once a day. Development checks the main branch every two hours and may include changes that have not been released yet.",
+          "camera_zoom": "Enlarge camera dialogs and enable zoom and pan.",
+          "camera_recovery": "Restore interrupted streams when returning to the frontend or after loading errors.",
+          "camera_stream_cleanup": "Close individual MJPEG connections when leaving a camera view or putting the app in the background."
         },
-        "description": "Choose which blueprint updates this Home Assistant instance follows.",
-        "title": "Configure blueprint updates"
+        "description": "Configure blueprint updates and camera features.",
+        "title": "Configure toolbox"
       }
     }
   },

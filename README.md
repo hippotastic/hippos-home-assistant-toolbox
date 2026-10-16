@@ -43,6 +43,14 @@ To allow testing unreleased changes, open **Settings > Devices & services > Hipp
 
 The Development channel only affects blueprint content. HACS continues to update the integration itself from published releases.
 
+## Camera Frontend Features
+
+The toolbox adds camera zoom, automatic stream recovery, and reliable cleanup of abandoned MJPEG connections. These address expired streams after returning to a tab and camera connections that can block the iOS frontend after navigating between views.
+
+All three features are enabled by default and can be switched independently under **Settings > Devices & services > Hippo's Home Assistant Toolbox > Configure**. The integration loads one shared frontend bundle automatically.
+
+Configuration, behavior, limitations, and migration from local dashboard scripts are documented in [Camera Frontend Features](CAMERAS.md).
+
 ## Progressive Snapshot Cameras
 
 The integration can expose an existing JPEG snapshot camera through a RAM-only cache. Dashboard cards receive the previous full-resolution frame immediately while the source is refreshed in the background. With a live camera card, a newly fetched frame replaces the cached image without reloading the dashboard.

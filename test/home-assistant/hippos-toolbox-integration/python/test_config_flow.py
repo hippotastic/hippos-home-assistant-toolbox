@@ -14,6 +14,7 @@ from custom_components.hippos_toolbox.config_flow import (
     ToolboxOptionsFlow,
 )
 from custom_components.hippos_toolbox.const import (
+    CAMERA_FRONTEND_OPTIONS,
     CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
@@ -39,7 +40,7 @@ class ToolboxOptionsFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], FlowResultType.FORM)
         self.assertEqual(
             result["data_schema"]({}),
-            {CONF_UPDATE_CHANNEL: UPDATE_CHANNEL_STABLE},
+            {CONF_UPDATE_CHANNEL: UPDATE_CHANNEL_STABLE, **dict.fromkeys(CAMERA_FRONTEND_OPTIONS, True)},
         )
 
     async def test_accepts_development_selection(self) -> None:

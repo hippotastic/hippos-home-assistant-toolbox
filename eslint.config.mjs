@@ -70,7 +70,7 @@ const tsRules = {
 
 export default [
 	{
-		ignores: ['**/node_modules/**', '.ha-imported-blueprints/**', 'pnpm-lock.yaml'],
+		ignores: ['**/node_modules/**', '.ha-imported-blueprints/**', 'pnpm-lock.yaml', 'custom_components/hippos_toolbox/frontend/cameras.js'],
 	},
 	js.configs.recommended,
 	eslintConfigPrettier,
@@ -163,5 +163,10 @@ export default [
 			'@typescript-eslint': tseslint,
 		},
 		rules: tsRules,
+	},
+	{
+		files: ['frontend/**/*.js'],
+		languageOptions: { globals: globals.browser },
+		rules: { 'no-console': 'off', 'no-invalid-this': 'off', 'consistent-this': 'off' },
 	},
 ]

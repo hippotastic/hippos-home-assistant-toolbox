@@ -12,6 +12,7 @@ from homeassistant.helpers.device import async_entity_id_to_device
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import ToolboxConfigEntry
+from .camera_stream import async_setup_camera_streams
 from .const import (
     CONF_SOURCE_ENTITY_ID,
     DOMAIN,
@@ -41,6 +42,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up one proxy entity for every camera config subentry."""
 
+    async_setup_camera_streams(hass)
     manager = entry.runtime_data.progressive_camera_manager
     subentries = tuple(
         subentry

@@ -1,0 +1,626 @@
+/* Method references are compared or passed to Reflect.apply with an explicit receiver. */
+/* eslint-disable @typescript-eslint/unbound-method */
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { buildCameraFrontend } from '../../tools/frontend/bundle.ts'
+import { JSDOM } from 'jsdom'
+import { afterEach, describe, expect, test } from 'vitest'
+
+const root = fileURLToPath(new URL('../../', import.meta.url))
+const source = readFileSync(`${root}custom_components/hippos_toolbox/frontend/cameras.js`, 'utf8')
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
+const windows: JSDOM[] = []
+
+afterEach(() => {
+	for (const dom of windows.splice(0)) dom.window.close()
+})
+
+async function fixture({ deferOpen = false, deferSubscription = false, rejectSubscription = false, ios = false } = {}) {
+	const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://ha.example/', runScripts: 'outside-only', pretendToBeVisual: true })
+	windows.push(dom)
+	const w = dom.window
+	if (ios) Object.defineProperty(w.navigator, 'userAgent', { value: 'iPhone' })
+	const logs: unknown[][] = []
+	Object.assign(w, {
+		console: {
+			info: (...args: unknown[]) => {
+				logs.push(args)
+			},
+			warn: (...args: unknown[]) => {
+				logs.push(args)
+			},
+		},
+	})
+	const intervals = new Set<() => void>()
+	w.setInterval = (callback: () => void) => {
+		intervals.add(callback)
+		return intervals.size
+	}
+	w.clearInterval = () => intervals.clear()
+	w.requestAnimationFrame = () => 1
+	w.cancelAnimationFrame = () => undefined
+	let now = 100000
+	w.Date.now = () => now
+	let timerId = 0
+	type ScheduledTimeout = { callback: () => void; due: number }
+	const timeouts = new Map<number, ScheduledTimeout>()
+	w.setTimeout = (callback: () => void, delay = 0) => {
+		const id = ++timerId
+		timeouts.set(id, { callback, due: now + delay })
+		return id
+	}
+	w.clearTimeout = (id?: number) => {
+		if (id !== undefined) timeouts.delete(id)
+	}
+	const calls: Array<{ type: string; stream_id?: string; entity_id?: string; path?: string }> = []
+	let subscription: ((settings: unknown) => void) | undefined
+	const callbacks: NonNullable<typeof subscription>[] = []
+	const settingsRequests: Array<{ command: { type: string; protocol: number }; options: { resubscribe: boolean } }> = []
+	let finishSubscription: (() => void) | undefined
+	let finishOpen: (() => void) | undefined
+	let unsubscribed = 0
+	let subscriptions = 0
+	let sequence = 0
+	const subscribeMessage = async (
+		callback: NonNullable<typeof subscription>,
+		command: (typeof settingsRequests)[number]['command'],
+		options: (typeof settingsRequests)[number]['options']
+	) => {
+		subscriptions++
+		subscription = callback
+		callbacks.push(callback)
+		settingsRequests.push({ command, options })
+		if (rejectSubscription) throw new Error('Settings subscription unavailable')
+		if (deferSubscription)
+			await new Promise<void>((resolve) => {
+				finishSubscription = resolve
+			})
+		return () => {
+			unsubscribed++
+			return Promise.resolve()
+		}
+	}
+	const conn = new w.EventTarget()
+	Object.assign(conn, { subscribeMessage })
+	Object.assign(w, { hassConnection: Promise.resolve({ conn }) })
+	class CameraStream extends w.HTMLElement {
+		stateObj = { entity_id: 'camera.front_door' }
+		_capabilities = { frontend_stream_types: [] }
+		_posterUrl: string | undefined
+		updateComplete = Promise.resolve()
+		fitMode = 'cover'
+		_connection = { hassUrl: (path: string) => new URL(path, 'http://ha.example/').href }
+		_api = {
+			callWS: async (command: (typeof calls)[number]) => {
+				calls.push(command)
+				if (command.type.endsWith('/open')) {
+					const id = `session-${++sequence}`
+					if (deferOpen)
+						await new Promise<void>((resolve) => {
+							finishOpen = resolve
+						})
+					return { stream_id: id, path: `/api/hippos_toolbox/camera_stream/${command.entity_id}?stream_id=${id}&authSig=test` }
+				}
+				if (command.type.endsWith('/stop')) return { stopped: true }
+				return { path: `${command.path}&authSig=test` }
+			},
+		}
+		constructor() {
+			super()
+			this.attachShadow({ mode: 'open' }).innerHTML = '<img>'
+		}
+		_renderStream(_transport: { type: string }) {
+			return { strings: ['<img .src=', '>'], values: [`/api/camera_proxy_stream/${this.stateObj.entity_id}?token=old`] as unknown[] }
+		}
+		requestUpdate() {
+			queueMicrotask(() => {
+				const result = this._renderStream({ type: 'mjpeg' })
+				const image = this.shadowRoot!.querySelector('img')
+				if (image && result.values[0] !== Symbol.for('lit-noChange')) image.src = result.values[0] as string
+			})
+		}
+	}
+	class Dialog extends w.HTMLElement {
+		_entityId = 'camera.front_door'
+		_currView = 'info'
+		_fill = false
+		showDialog(params: { entityId: string }) {
+			this._entityId = params.entityId
+		}
+		requestUpdate() {
+			this._fill = Boolean(this._fill)
+		}
+	}
+	w.customElements.define('ha-camera-stream', CameraStream)
+	w.customElements.define('ha-more-info-dialog', Dialog)
+	const dialog = new Dialog()
+	const camera = new CameraStream()
+	dialog.append(camera)
+	w.document.body.append(dialog)
+	const originalRender = CameraStream.prototype._renderStream
+	const originalDialog = Dialog.prototype.showDialog
+	const originalAttach = w.HTMLElement.prototype.attachShadow
+	const originalDefine = w.customElements.define
+	const dispose = () => w.eval("globalThis[Symbol.for('hippo.toolbox.cameras')]?.dispose()") as void
+	const install = async () => {
+		w.eval(source)
+		await flush()
+	}
+	await install()
+	const send = async (payload: unknown) => {
+		subscription!(payload)
+		await flush()
+		camera.requestUpdate()
+		await flush()
+	}
+	return {
+		w,
+		conn,
+		camera,
+		dialog,
+		calls,
+		logs,
+		intervals,
+		callbacks,
+		settingsRequests,
+		originalRender,
+		originalDialog,
+		originalAttach,
+		originalDefine,
+		send,
+		settings: (zoom: boolean, recovery: boolean, cleanup: boolean) => send({ protocol: 1, camera_zoom: zoom, camera_recovery: recovery, camera_stream_cleanup: cleanup }),
+		tick: async (elapsed = 2000) => {
+			now += elapsed
+			for (const [id, timer] of [...timeouts]) {
+				if (timer.due <= now) {
+					timeouts.delete(id)
+					timer.callback()
+				}
+			}
+			await flush()
+			for (const callback of [...intervals]) callback()
+			await flush()
+		},
+		finishOpen: () => finishOpen!(),
+		finishSubscription: () => finishSubscription!(),
+		install,
+		dispose,
+		counts: () => ({ subscriptions, unsubscribed }),
+		rejectSubscription: () => {
+			rejectSubscription = true
+		},
+	}
+}
+
+describe('camera frontend', () => {
+	test('ships one current bundle with no external module imports or CSS indentation', async () => {
+		expect(source).toBe(await buildCameraFrontend())
+		expect(source).not.toMatch(/\bimport\s*\(/)
+		expect(source).not.toMatch(/\n[ \t]{2,}/)
+	})
+
+	test('preserves CSS selectors and interpolated iOS animation values when minifying', async () => {
+		const f = await fixture({ ios: true })
+		await f.settings(true, false, false)
+		class Player extends f.w.HTMLElement {
+			constructor() {
+				super()
+				this.attachShadow({ mode: 'open' }).innerHTML = '<video></video>'
+			}
+		}
+		f.w.customElements.define('ha-hls-player', Player)
+		const player = new Player()
+		f.camera.shadowRoot!.append(player)
+		await flush()
+		const preflight = player.shadowRoot!.querySelector('style[data-hippo-camera-zoom-preflight-style]')!.textContent
+		expect(preflight).toContain('animation:hippo-camera-video-reveal 1ms step-end 5000ms forwards')
+		expect(preflight).toContain('visibility:hidden')
+		expect(preflight).toContain('@keyframes hippo-camera-video-reveal')
+		expect(preflight).not.toContain('HIPPO_CSS_EXPRESSION_')
+		expect(player.shadowRoot!.querySelector('style[data-hippo-camera-zoom-style]')!.textContent).toContain(':host([data-hippo-camera-zoom]) video')
+		expect(f.camera.shadowRoot!.querySelector('style[data-hippo-camera-zoom-style]')!.textContent).toContain(':host([data-hippo-camera-zoom])>img')
+		f.dispose()
+	})
+
+	test('keeps native rendering usable when the initial settings subscription fails', async () => {
+		const f = await fixture({ rejectSubscription: true })
+		f.camera.requestUpdate()
+		await flush()
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		expect(f.intervals.size).toBe(0)
+		expect(f.calls).toHaveLength(0)
+		expect(f.w.HTMLElement.prototype.attachShadow).toBe(f.originalAttach)
+		expect(f.logs).toEqual([["Hippo's Toolbox: camera extensions disabled; using the native viewer because backend communication failed or is incompatible."]])
+		f.conn.dispatchEvent(new f.w.Event('ready'))
+		await f.tick(30000)
+		expect(f.counts()).toEqual({ subscriptions: 2, unsubscribed: 0 })
+		f.dispose()
+	})
+
+	test('waits for settings without blocking native camera rendering or guessing enabled defaults', async () => {
+		const f = await fixture({ deferSubscription: true })
+		f.camera.requestUpdate()
+		await f.tick(9000)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		expect(f.intervals.size).toBe(0)
+		expect(f.calls).toHaveLength(0)
+		expect(f.logs).toHaveLength(0)
+		f.finishSubscription()
+		await flush()
+		expect(f.intervals.size).toBe(0)
+		await f.settings(true, true, true)
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(1)
+		f.dispose()
+	})
+
+	test('restores native hooks and sources immediately on disconnect and ignores old callbacks', async () => {
+		const f = await fixture()
+		await f.settings(true, true, true)
+		f.conn.dispatchEvent(new f.w.Event('disconnected'))
+		await f.settings(true, true, true)
+		expect(f.intervals.size).toBe(0)
+		expect(f.w.HTMLElement.prototype.attachShadow).toBe(f.originalAttach)
+		expect((Object.getPrototypeOf(f.camera) as typeof f.camera)._renderStream).toBe(f.originalRender)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(1)
+		f.dispose()
+	})
+
+	test.each([
+		null,
+		{},
+		{ protocol: 2, camera_zoom: true, camera_recovery: true, camera_stream_cleanup: true },
+		{ camera_zoom: true, camera_recovery: true, camera_stream_cleanup: true },
+		{ protocol: 1, camera_zoom: true, camera_recovery: true },
+		{ protocol: 1, camera_zoom: true, camera_recovery: 'true', camera_stream_cleanup: true },
+	])('falls back safely for invalid or incompatible settings %j after activation', async (payload) => {
+		const f = await fixture()
+		await f.settings(true, true, true)
+		await f.send(payload)
+		expect(f.intervals.size).toBe(0)
+		expect(f.w.HTMLElement.prototype.attachShadow).toBe(f.originalAttach)
+		expect((Object.getPrototypeOf(f.camera) as typeof f.camera)._renderStream).toBe(f.originalRender)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		expect(f.counts().unsubscribed).toBe(1)
+		await f.settings(true, true, true)
+		expect(f.intervals.size).toBe(0)
+		f.dispose()
+	})
+
+	test.each([false, true])('times out a missing settings snapshot with pending acknowledgement=%s and ignores late replies', async (pendingAck) => {
+		const f = await fixture({ deferSubscription: pendingAck })
+		await f.tick(10000)
+		if (pendingAck) {
+			f.finishSubscription()
+			await flush()
+		}
+		await f.settings(true, true, true)
+		expect(f.counts()).toEqual({ subscriptions: 1, unsubscribed: 1 })
+		expect(f.intervals.size).toBe(0)
+		expect(f.calls).toHaveLength(0)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		f.dispose()
+	})
+
+	test('does not activate a settings snapshot until its subscription is acknowledged', async () => {
+		const f = await fixture({ deferSubscription: true })
+		await f.settings(true, true, true)
+		expect(f.intervals.size).toBe(0)
+		expect(f.calls).toHaveLength(0)
+		f.finishSubscription()
+		await flush()
+		expect(f.intervals.size).toBe(1)
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(1)
+		f.dispose()
+	})
+
+	test('an old browser bundle stays native if the updated backend rejects its protocol on reconnect', async () => {
+		const f = await fixture()
+		await f.settings(true, true, true)
+		f.conn.dispatchEvent(new f.w.Event('disconnected'))
+		f.rejectSubscription()
+		f.conn.dispatchEvent(new f.w.Event('ready'))
+		await flush()
+		f.callbacks[0]({ protocol: 1, camera_zoom: true, camera_recovery: true, camera_stream_cleanup: true })
+		await f.tick(30000)
+		expect(f.intervals.size).toBe(0)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		expect(f.settingsRequests).toEqual(Array.from({ length: 2 }, () => ({ command: { type: 'hippos_toolbox/frontend/subscribe', protocol: 1 }, options: { resubscribe: false } })))
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(1)
+		f.dispose()
+	})
+
+	test('uses English camera recovery messages and reasons', async () => {
+		const f = await fixture()
+		await f.settings(false, true, true)
+		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] MJPEG stream recovery', { camera: 'camera.front_door', reason: 'Opening MJPEG view', attempt: 1 }])
+		f.camera.remove()
+		await f.tick()
+		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] MJPEG stream stopped on server', { camera: 'camera.front_door' }])
+		f.dispose()
+	})
+
+	test.each(Array.from({ length: 8 }, (_, mask) => [!!(mask & 1), !!(mask & 2), !!(mask & 4)]))(
+		'applies independent switches zoom=%s recovery=%s cleanup=%s',
+		async (zoom, recovery, cleanup) => {
+			const f = await fixture()
+			expect(f.intervals.size).toBe(0)
+			expect(f.calls).toHaveLength(0)
+			await f.settings(zoom, recovery, cleanup)
+			expect(f.intervals.size).toBe(recovery || cleanup ? 1 : 0)
+			expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(cleanup ? 1 : 0)
+			expect(f.w.HTMLElement.prototype.attachShadow === f.originalAttach).toBe(!zoom)
+			expect(f.counts().subscriptions).toBe(1)
+			f.dispose()
+			await flush()
+			expect(f.intervals.size).toBe(0)
+			expect(f.w.HTMLElement.prototype.attachShadow).toBe(f.originalAttach)
+			expect(f.w.customElements.define).toBe(f.originalDefine)
+			expect((Object.getPrototypeOf(f.dialog) as typeof f.dialog).showDialog).toBe(f.originalDialog)
+			expect((Object.getPrototypeOf(f.camera) as typeof f.camera)._renderStream).toBe(f.originalRender)
+		}
+	)
+
+	test('does not reopen streams for identical settings or a zoom-only change', async () => {
+		const f = await fixture()
+		await f.settings(false, true, true)
+		await f.settings(false, true, true)
+		await f.settings(true, true, true)
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(1)
+		expect(f.calls.filter((c) => c.type.endsWith('/stop'))).toHaveLength(0)
+		f.dispose()
+	})
+
+	test('keeps the first image unset until reservation arrives and closes a late reservation after disabling', async () => {
+		const f = await fixture({ deferOpen: true })
+		await f.settings(false, true, true)
+		expect(f.camera.shadowRoot!.querySelector('img')!.getAttribute('src')).toBeNull()
+		await f.settings(false, false, false)
+		f.finishOpen()
+		await flush()
+		expect(f.calls.filter((c) => c.type.endsWith('/stop'))).toHaveLength(1)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		f.dispose()
+	})
+
+	test('closes only the abandoned view when two views use one camera', async () => {
+		const f = await fixture()
+		await f.settings(false, true, true)
+		const other = f.w.document.createElement('ha-camera-stream') as typeof f.camera
+		f.w.document.body.append(other)
+		other.requestUpdate()
+		await flush()
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(2)
+		f.camera.remove()
+		await f.tick()
+		expect(f.calls.filter((c) => c.type.endsWith('/stop'))).toEqual([{ type: 'hippos_toolbox/camera_stream/stop', stream_id: 'session-1' }])
+		expect(other.shadowRoot!.querySelector('img')!.src).toContain('session-2')
+		f.dispose()
+	})
+
+	test('restores zoom styles and gestures on disable and can enable them again', async () => {
+		const f = await fixture()
+		const image = f.camera.shadowRoot!.querySelector('img')!
+		image.style.opacity = '0.8'
+		await f.settings(true, false, false)
+		expect(image.style.touchAction).toBe('none')
+		const event = new f.w.WheelEvent('wheel', { cancelable: true, deltaY: -100 })
+		image.dispatchEvent(event)
+		expect(event.defaultPrevented).toBe(true)
+		await f.settings(false, false, false)
+		expect(image.getAttribute('style')).toBe('opacity: 0.8;')
+		const inactive = new f.w.WheelEvent('wheel', { cancelable: true, deltaY: -100 })
+		image.dispatchEvent(inactive)
+		expect(inactive.defaultPrevented).toBe(false)
+		expect(f.camera.fitMode).toBe('cover')
+		await f.settings(true, false, false)
+		const active = new f.w.WheelEvent('wheel', { cancelable: true, deltaY: -100 })
+		image.dispatchEvent(active)
+		expect(active.defaultPrevented).toBe(true)
+		f.dispose()
+	})
+
+	test('removes old media listeners on close and reattaches on reopening the same dialog', async () => {
+		const f = await fixture()
+		await f.settings(true, false, false)
+		const image = f.camera.shadowRoot!.querySelector('img')!
+		f.dialog.dispatchEvent(new f.w.Event('closed'))
+		const inactive = new f.w.WheelEvent('wheel', { cancelable: true })
+		image.dispatchEvent(inactive)
+		expect(inactive.defaultPrevented).toBe(false)
+		Reflect.apply(f.dialog.showDialog, f.dialog, [{ entityId: 'camera.front_door' }])
+		const active = new f.w.WheelEvent('wheel', { cancelable: true })
+		image.dispatchEvent(active)
+		expect(active.defaultPrevented).toBe(true)
+		f.dispose()
+	})
+
+	test('unsubscribes a late subscription after disposal without activating features', async () => {
+		const f = await fixture({ deferSubscription: true })
+		f.dispose()
+		f.finishSubscription()
+		await flush()
+		await f.settings(true, true, true)
+		expect(f.counts()).toEqual({ subscriptions: 1, unsubscribed: 1 })
+		expect(f.calls).toHaveLength(0)
+		expect(f.intervals.size).toBe(0)
+	})
+
+	test('reopens sessions after a WebSocket reconnect even when settings are identical', async () => {
+		const f = await fixture()
+		await f.settings(false, true, true)
+		f.conn.dispatchEvent(new f.w.Event('disconnected'))
+		f.conn.dispatchEvent(new f.w.Event('ready'))
+		await flush()
+		await f.settings(false, true, true)
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(2)
+		expect(f.calls.filter((c) => c.type.endsWith('/stop'))).toHaveLength(1)
+		expect(f.counts().subscriptions).toBe(2)
+		expect(f.intervals.size).toBe(1)
+		f.dispose()
+	})
+
+	test('reinstalls without duplicate subscriptions, stream hooks or watchdogs', async () => {
+		const f = await fixture()
+		await f.settings(true, true, true)
+		await f.install()
+		await f.settings(true, true, true)
+		expect(f.counts()).toEqual({ subscriptions: 2, unsubscribed: 1 })
+		expect(f.intervals.size).toBe(1)
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(2)
+		f.dispose()
+	})
+
+	test('recovery alone signs a fresh URL without camera tokens and backs off failures', async () => {
+		const f = await fixture()
+		await f.settings(false, true, false)
+		const image = f.camera.shadowRoot!.querySelector('img')!
+		image.dispatchEvent(new f.w.Event('error'))
+		await flush()
+		expect(f.calls).toHaveLength(1)
+		expect(f.calls[0].type).toBe('auth/sign_path')
+		expect(f.calls[0].path).not.toContain('token=')
+		expect(image.src).toContain('authSig=test')
+		image.dispatchEvent(new f.w.Event('error'))
+		await flush()
+		expect(f.calls).toHaveLength(1)
+		await f.tick(1000)
+		expect(f.calls).toHaveLength(2)
+		expect(JSON.stringify(f.logs)).not.toMatch(/authSig|token=|session-/)
+		f.dispose()
+	})
+
+	test('cleanup alone closes and resumes on backgrounding without retrying image errors', async () => {
+		const f = await fixture()
+		await f.settings(false, false, true)
+		const image = f.camera.shadowRoot!.querySelector('img')!
+		image.dispatchEvent(new f.w.Event('error'))
+		await f.tick(21000)
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(1)
+		Object.defineProperty(f.w.document, 'hidden', { configurable: true, value: true })
+		f.w.document.dispatchEvent(new f.w.Event('visibilitychange'))
+		await flush()
+		expect(f.calls.filter((c) => c.type.endsWith('/stop'))).toHaveLength(1)
+		Object.defineProperty(f.w.document, 'hidden', { configurable: true, value: false })
+		f.w.document.dispatchEvent(new f.w.Event('visibilitychange'))
+		await flush()
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(2)
+		f.dispose()
+	})
+
+	test('falls back to native rendering when the backend or required HA context is unavailable', async () => {
+		const f = await fixture()
+		f.camera._api.callWS = () => Promise.reject(Object.assign(new Error('Unsupported command'), { code: 'unknown_command' }))
+		await f.settings(false, true, true)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		await f.settings(false, false, false)
+		Object.assign(f.camera, { _api: undefined })
+		await f.settings(false, true, true)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		f.dispose()
+	})
+
+	test.each([null, {}, { stream_id: 'session-bad' }, { stream_id: 'session-bad', path: '/unexpected/path' }])(
+		'restores native rendering for malformed stream reservations %j',
+		async (response) => {
+			const f = await fixture()
+			const callWS = f.camera._api.callWS
+			Object.assign(f.camera._api, { callWS: (command: (typeof f.calls)[number]) => (command.type.endsWith('/open') ? Promise.resolve(response) : callWS(command)) })
+			await f.settings(false, true, true)
+			expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+			const calls = f.calls.length
+			await f.tick(30000)
+			expect(f.calls).toHaveLength(calls)
+			f.dispose()
+		}
+	)
+
+	test('restores native rendering on a reservation timeout and stops the late reservation', async () => {
+		const f = await fixture({ deferOpen: true })
+		await f.settings(false, true, true)
+		await f.tick(10000)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		f.finishOpen()
+		await flush()
+		expect(f.calls.filter((c) => c.type.endsWith('/stop'))).toEqual([{ type: 'hippos_toolbox/camera_stream/stop', stream_id: 'session-1' }])
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		f.dispose()
+	})
+
+	test('restores every feature even if stopping an old backend session throws synchronously', async () => {
+		const f = await fixture()
+		await f.settings(true, true, true)
+		f.camera._api.callWS = () => {
+			throw new Error('Backend unavailable')
+		}
+		f.conn.dispatchEvent(new f.w.Event('disconnected'))
+		await flush()
+		expect(f.intervals.size).toBe(0)
+		expect(f.w.HTMLElement.prototype.attachShadow).toBe(f.originalAttach)
+		expect((Object.getPrototypeOf(f.camera) as typeof f.camera)._renderStream).toBe(f.originalRender)
+		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		f.dispose()
+	})
+
+	test('retains the native HLS short-background grace period and renews an expired player once', async () => {
+		const f = await fixture()
+		let nativeCalls = 0
+		let renewals = 0
+		const player = Object.assign(f.w.document.createElement('ha-hls-player'), {
+			entityid: 'camera.front_door',
+			_hiddenCleanupTimeout: undefined as number | undefined,
+			_handleVisibilityChange: () => {
+				nativeCalls++
+			},
+			_getStreamUrlFromEntityId: () => {
+				renewals++
+				return Promise.resolve()
+			},
+		})
+		f.w.document.addEventListener('visibilitychange', player._handleVisibilityChange)
+		f.camera.shadowRoot!.querySelector('img')!.remove()
+		f.camera.shadowRoot!.append(player)
+		await f.settings(false, true, false)
+		player._hiddenCleanupTimeout = 42
+		f.w.document.dispatchEvent(new f.w.Event('visibilitychange'))
+		expect(nativeCalls).toBe(1)
+		expect(renewals).toBe(0)
+		player._hiddenCleanupTimeout = undefined
+		f.w.document.dispatchEvent(new f.w.Event('visibilitychange'))
+		f.w.document.dispatchEvent(new f.w.Event('visibilitychange'))
+		await flush()
+		expect(renewals).toBe(1)
+		f.dispose()
+		f.w.document.dispatchEvent(new f.w.Event('visibilitychange'))
+		expect(nativeCalls).toBe(2)
+	})
+
+	test('releases detached zoom media and can enhance the same media when reinserted', async () => {
+		const f = await fixture()
+		await f.settings(true, false, false)
+		const image = f.camera.shadowRoot!.querySelector('img')!
+		image.remove()
+		await flush()
+		const inactive = new f.w.WheelEvent('wheel', { cancelable: true })
+		image.dispatchEvent(inactive)
+		expect(inactive.defaultPrevented).toBe(false)
+		f.camera.shadowRoot!.append(image)
+		await flush()
+		const active = new f.w.WheelEvent('wheel', { cancelable: true })
+		image.dispatchEvent(active)
+		expect(active.defaultPrevented).toBe(true)
+		f.dispose()
+	})
+
+	test('removes zoom effects when a reused dialog switches to another entity domain', async () => {
+		const f = await fixture()
+		await f.settings(true, false, false)
+		Reflect.apply(f.dialog.showDialog, f.dialog, [{ entityId: 'sensor.temperature' }])
+		const event = new f.w.WheelEvent('wheel', { cancelable: true })
+		f.camera.shadowRoot!.querySelector('img')!.dispatchEvent(event)
+		expect(event.defaultPrevented).toBe(false)
+		expect(f.camera.fitMode).toBe('cover')
+		expect(f.dialog.hasAttribute('data-hippo-camera-zoom')).toBe(false)
+		f.dispose()
+	})
+})

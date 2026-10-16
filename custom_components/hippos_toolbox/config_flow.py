@@ -12,6 +12,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import entity_registry as er, selector
 
 from .const import (
+    CAMERA_FRONTEND_OPTIONS,
     CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
     DEFAULT_UPDATE_CHANNEL,
@@ -64,7 +65,7 @@ class ToolboxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class ToolboxOptionsFlow(config_entries.OptionsFlow):
-    """Configure optional blueprint update behavior."""
+    """Configure blueprint updates and camera frontend features."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -91,7 +92,14 @@ class ToolboxOptionsFlow(config_entries.OptionsFlow):
                             UPDATE_CHANNEL_STABLE: "Stable",
                             UPDATE_CHANNEL_DEVELOPMENT: "Development",
                         }
-                    )
+                    ),
+                    **{
+                        vol.Required(
+                            option,
+                            default=self.config_entry.options.get(option, True),
+                        ): selector.BooleanSelector()
+                        for option in CAMERA_FRONTEND_OPTIONS
+                    },
                 }
             ),
         )

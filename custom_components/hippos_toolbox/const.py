@@ -20,6 +20,17 @@ CATALOG_PATH = "blueprints/catalog.json"
 
 CONF_UPDATE_CHANNEL = "update_channel"
 CONF_SOURCE_ENTITY_ID = "source_entity_id"
+CONF_CAMERA_ZOOM = "camera_zoom"
+CONF_CAMERA_RECOVERY = "camera_recovery"
+CONF_CAMERA_STREAM_CLEANUP = "camera_stream_cleanup"
+CAMERA_FRONTEND_OPTIONS = (
+    CONF_CAMERA_ZOOM,
+    CONF_CAMERA_RECOVERY,
+    CONF_CAMERA_STREAM_CLEANUP,
+)
+# Keep compatible releases on the same protocol, even when the bundle changes.
+CAMERA_FRONTEND_PROTOCOL = 1
+DATA_CAMERA_FRONTEND = f"{DOMAIN}.frontend"
 UPDATE_CHANNEL_STABLE = "stable"
 UPDATE_CHANNEL_DEVELOPMENT = "development"
 DEFAULT_UPDATE_CHANNEL = UPDATE_CHANNEL_STABLE

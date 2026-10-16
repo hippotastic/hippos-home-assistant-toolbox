@@ -13,6 +13,8 @@
   ],
   "config_flow": true,
   "dependencies": [
+    "frontend",
+    "http",
     "media_player",
     "media_source",
     "tts"
