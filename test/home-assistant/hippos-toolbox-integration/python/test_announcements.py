@@ -16,11 +16,13 @@ import yaml
 from packaging.requirements import Requirement
 from packaging.version import Version
 
+from homeassistant import loader
 from homeassistant.components import ffmpeg, tts
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.components.media_source.models import PlayMedia
 from homeassistant.config_entries import ConfigEntries, ConfigEntryState
-from homeassistant.core import Context, HomeAssistant, ServiceCall
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_SERVICE_REGISTERED
+from homeassistant.core import Context, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from homeassistant.helpers import selector, service
@@ -194,6 +196,8 @@ class AnnouncementServiceTests(unittest.IsolatedAsyncioTestCase):
         self.file.write_bytes(_wav())
         self.media_id = "media-source://media_source/local/Notification Sound.wav"
         self.hass = HomeAssistant(str(self.root))
+        (self.root / "custom_components").symlink_to(Path(announcements.__file__).parent.parent)
+        loader.async_setup(self.hass)
         self.hass.config_entries = ConfigEntries(self.hass, {})
         self.hass.config.media_dirs = {"local": str(self.media)}
         self.loaded = SimpleNamespace(state=ConfigEntryState.LOADED)
@@ -233,7 +237,6 @@ class AnnouncementServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.hass.services.async_register("media_player", "play_media", record)
         self.hass.services.async_register("media_player", "volume_set", record)
-        await async_setup(self.hass, {})
         self.resolve_patch = patch.object(
             announcements.media_source, "async_resolve_media",
             new=AsyncMock(return_value=PlayMedia("/media/local/sound.wav", "audio/wav", path=self.file)),
@@ -248,6 +251,7 @@ class AnnouncementServiceTests(unittest.IsolatedAsyncioTestCase):
         self.hass.data[tts.DATA_TTS_MANAGER] = self.manager
         self.hass.data[tts.DATA_COMPONENT] = SimpleNamespace(get_entity=lambda _: None)
         self.hass.data[ffmpeg.DATA_FFMPEG] = SimpleNamespace(binary="ffmpeg")
+        await async_setup(self.hass, {})
 
     async def asyncTearDown(self) -> None:
         await self.hass.async_block_till_done(wait_background_tasks=True)
@@ -280,6 +284,133 @@ class AnnouncementServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls[0].data["extra"], {"volume": 85})
         self.assertTrue(self.calls[0].data["announce"])
         self.assertIs(self.calls[0].context, context)
+
+    async def test_engine_picker_lists_modern_and_legacy_engines(self) -> None:
+        descriptions = await service.async_get_all_descriptions(self.hass)
+        definition = descriptions[DOMAIN]["announce_tts"]
+        self.assertEqual(definition["fields"]["engine_id"]["selector"], {
+            "select": {"options": [{"value": "test", "label": "Test speech"}],
+                       "mode": "dropdown", "sort": True},
+        })
+
+        entity = _SpeechEntity()
+        entity.entity_id = "tts.modern_test"
+        self.hass.data[tts.DATA_COMPONENT].get_entity = {entity.entity_id: entity}.get
+        self.manager.providers["modern_adapter"] = SimpleNamespace(has_entity=True, name="Duplicate")
+        self.manager.providers["unnamed"] = SimpleNamespace(has_entity=False, name=None)
+        self.hass.states.async_set(entity.entity_id, "unknown", {"friendly_name": "Modern speech"})
+        self.hass.states.async_set("tts.orphan", "unavailable", {"restored": True})
+        await self.hass.async_block_till_done()
+
+        descriptions = await service.async_get_all_descriptions(self.hass)
+        definition = descriptions[DOMAIN]["announce_tts"]
+        engine_selector = definition["fields"]["engine_id"]["selector"]
+        self.assertEqual(engine_selector["select"]["options"], [
+            {"value": "test", "label": "Test speech"},
+            {"value": "tts.modern_test", "label": "Modern speech"},
+            {"value": "unnamed", "label": "unnamed"},
+        ])
+        picker = selector.SelectSelector(engine_selector["select"])
+        self.assertEqual(picker("test"), "test")
+        self.assertEqual(picker("tts.modern_test"), "tts.modern_test")
+        with self.assertRaises(vol.Invalid):
+            picker("misspelled")
+        self.assertTrue(definition["fields"]["engine_id"]["required"])
+        self.assertTrue(definition["fields"]["message"]["selector"]["text"]["multiline"])
+        self.assertEqual(set(definition["fields"]), {
+            "engine_id", "message", "language", "options", "cache", "volume",
+        })
+        self.assertEqual(
+            selector.TargetSelector.CONFIG_SCHEMA(definition["target"]),
+            selector.TargetSelector.CONFIG_SCHEMA({"entity": {"domain": "media_player"}}),
+        )
+
+    async def test_engine_picker_tracks_entity_names_ids_and_removal(self) -> None:
+        entity = _SpeechEntity()
+        entity.entity_id = "tts.first"
+        engines = {entity.entity_id: entity}
+        self.hass.data[tts.DATA_COMPONENT].get_entity = engines.get
+        self.hass.states.async_set(entity.entity_id, "unknown", {"friendly_name": "First name"})
+        await self.hass.async_block_till_done()
+        notifications = []
+        self.hass.bus.async_listen(
+            EVENT_SERVICE_REGISTERED, callback(lambda event: notifications.append(event.data)),
+        )
+
+        self.hass.states.async_set(entity.entity_id, "unknown", {"friendly_name": "New name"})
+        await self.hass.async_block_till_done()
+        descriptions = await service.async_get_all_descriptions(self.hass)
+        options = descriptions[DOMAIN]["announce_tts"]["fields"]["engine_id"]["selector"]["select"]["options"]
+        self.assertIn({"value": "tts.first", "label": "New name"}, options)
+        self.assertEqual(notifications, [{"domain": DOMAIN, "service": "announce_tts"}])
+
+        # Speech timestamps and unrelated entities must not refresh open editors
+        self.hass.states.async_set(entity.entity_id, "2026-10-16T10:00:00+00:00", {"friendly_name": "New name"})
+        self.hass.states.async_set("sensor.unrelated", "on")
+        await self.hass.async_block_till_done()
+        self.assertEqual(len(notifications), 1)
+
+        engines.pop("tts.first")
+        self.hass.states.async_remove("tts.first")
+        entity.entity_id = "tts.renamed"
+        engines[entity.entity_id] = entity
+        self.hass.states.async_set(entity.entity_id, "unknown", {"friendly_name": "New name"})
+        await self.hass.async_block_till_done()
+        descriptions = await service.async_get_all_descriptions(self.hass)
+        options = descriptions[DOMAIN]["announce_tts"]["fields"]["engine_id"]["selector"]["select"]["options"]
+        self.assertEqual(options, [
+            {"value": "test", "label": "Test speech"},
+            {"value": "tts.renamed", "label": "New name"},
+        ])
+
+        engines.clear()
+        self.hass.states.async_remove(entity.entity_id)
+        await self.hass.async_block_till_done()
+        descriptions = await service.async_get_all_descriptions(self.hass)
+        options = descriptions[DOMAIN]["announce_tts"]["fields"]["engine_id"]["selector"]["select"]["options"]
+        self.assertEqual(options, [{"value": "test", "label": "Test speech"}])
+
+    async def test_engine_picker_refreshes_after_startup_and_legacy_service_changes(self) -> None:
+        # A legacy engine may finish loading after the toolbox's initial setup
+        self.manager.providers["late"] = SimpleNamespace(has_entity=False, name="Late speech")
+        self.hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+        await self.hass.async_block_till_done()
+        descriptions = await service.async_get_all_descriptions(self.hass)
+        options = descriptions[DOMAIN]["announce_tts"]["fields"]["engine_id"]["selector"]["select"]["options"]
+        self.assertIn({"value": "late", "label": "Late speech"}, options)
+
+        self.manager.providers["custom"] = SimpleNamespace(has_entity=False, name="Custom speech")
+        self.hass.services.async_register("tts", "custom_service_name", AsyncMock())
+        service.async_set_service_schema(self.hass, "tts", "custom_service_name", {})
+        await self.hass.async_block_till_done()
+        descriptions = await service.async_get_all_descriptions(self.hass)
+        options = descriptions[DOMAIN]["announce_tts"]["fields"]["engine_id"]["selector"]["select"]["options"]
+        self.assertIn({"value": "custom", "label": "Custom speech"}, options)
+
+        self.manager.providers.clear()
+        self.hass.services.async_remove("tts", "custom_service_name")
+        await self.hass.async_block_till_done()
+        descriptions = await service.async_get_all_descriptions(self.hass)
+        options = descriptions[DOMAIN]["announce_tts"]["fields"]["engine_id"]["selector"]["select"]["options"]
+        self.assertEqual(options, [])
+
+    async def test_engine_picker_refresh_keeps_running_player_queue(self) -> None:
+        self.provider.gate = asyncio.Event()
+        first = asyncio.create_task(self._announce(service="announce_tts"))
+        await self.hass.async_block_till_done()
+
+        self.manager.providers["other"] = _Provider(_wav())
+        self.hass.services.async_register("tts", "other_say", AsyncMock())
+        await self.hass.async_block_till_done()
+        second = asyncio.create_task(self._announce(service="announce_tts", message="Second"))
+        await self.hass.async_block_till_done()
+        self.assertEqual(len(self.provider.calls), 1)
+        self.assertEqual(self.calls, [])
+
+        self.provider.gate.set()
+        await asyncio.wait_for(asyncio.gather(first, second), 2)
+        self.assertEqual(len(self.provider.calls), 2)
+        self.assertEqual([call.service for call in self.calls], ["play_media", "play_media"])
 
     async def test_homepod_volume_order_and_zero_volume(self) -> None:
         await self._announce(self.homepod, volume=0)

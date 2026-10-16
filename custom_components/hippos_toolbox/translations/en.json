@@ -80,8 +80,7 @@
       "description": "Generate and cache speech, then play it as an announcement and wait for its duration.",
       "fields": {
         "engine_id": {
-          "name": "TTS engine",
-          "description": "A TTS entity ID or legacy provider name, such as microsoft."
+          "name": "TTS engine"
         },
         "message": {
           "name": "Message"

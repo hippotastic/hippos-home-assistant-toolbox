@@ -17,14 +17,23 @@ import voluptuous as vol
 from homeassistant.components import media_source, tts
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.const import (
+    EVENT_HOMEASSISTANT_STARTED,
+    EVENT_SERVICE_REGISTERED,
+    EVENT_SERVICE_REMOVED,
+    EVENT_STATE_CHANGED,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
+from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers.service import async_set_service_schema
 from homeassistant.helpers.target import (
     TargetSelection,
     async_extract_referenced_entity_ids,
 )
+from homeassistant.util.yaml import load_yaml_dict
 
 from .const import DOMAIN
 
@@ -113,8 +122,7 @@ def _read_audio_file(path: Path, media_dirs: tuple[str, ...]) -> tuple[str, floa
         raise ServiceValidationError(f"Cannot read announcement file: {err}") from err
 
 
-@callback
-def async_setup_announcements(hass: HomeAssistant) -> None:
+async def async_setup_announcements(hass: HomeAssistant) -> None:
     """Register both actions once, retaining shared queues across entry reloads."""
 
     player_locks: dict[str, asyncio.Lock] = {}
@@ -259,6 +267,57 @@ def async_setup_announcements(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, "announce_tts", handle_announcement, schema=_TTS_SCHEMA
     )
+
+    descriptions = await hass.async_add_executor_job(
+        load_yaml_dict, str(Path(__file__).with_name("services.yaml"))
+    )
+    tts_description = descriptions["announce_tts"]
+    engine_selector = tts_description["fields"]["engine_id"]["selector"]["select"]
+
+    @callback
+    def async_update_tts_engines(event: Event | None = None) -> None:
+        """Keep the native picker in sync with loaded entities and legacy providers."""
+
+        if hass.is_stopping:
+            return
+        if event is not None:
+            if event.event_type == EVENT_STATE_CHANGED:
+                if not event.data["entity_id"].startswith("tts."):
+                    return
+            elif event.event_type in (EVENT_SERVICE_REGISTERED, EVENT_SERVICE_REMOVED):
+                if event.data["domain"] != "tts":
+                    return
+
+        options: list[dict[str, str]] = []
+        component = hass.data.get(tts.DATA_COMPONENT)
+        if component is not None:
+            for state in hass.states.async_all("tts"):
+                # Restored states without a loaded engine are not usable choices.
+                if component.get_entity(state.entity_id) is not None:
+                    options.append({"value": state.entity_id, "label": state.name})
+        manager = hass.data.get(tts.DATA_TTS_MANAGER)
+        if manager is not None:
+            for engine_id, provider in manager.providers.items():
+                # Entity-backed legacy adapters would duplicate a modern engine.
+                if not provider.has_entity:
+                    options.append({"value": engine_id, "label": provider.name or engine_id})
+        options.sort(key=lambda option: option["value"])
+        if event is not None and options == engine_selector["options"]:
+            return
+
+        engine_selector["options"] = options
+        async_set_service_schema(hass, DOMAIN, "announce_tts", tts_description)
+        # Re-register the same handler to notify open editors through HA's service
+        # event; its existing player locks and any running calls remain intact.
+        hass.services.async_register(
+            DOMAIN, "announce_tts", handle_announcement, schema=_TTS_SCHEMA
+        )
+
+    async_update_tts_engines()
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, async_update_tts_engines)
+    hass.bus.async_listen(EVENT_STATE_CHANGED, async_update_tts_engines)
+    hass.bus.async_listen(EVENT_SERVICE_REGISTERED, async_update_tts_engines)
+    hass.bus.async_listen(EVENT_SERVICE_REMOVED, async_update_tts_engines)
 
 
 async def _async_announce_player(

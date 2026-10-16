@@ -32,11 +32,12 @@ announce_tts:
   fields:
     engine_id:
       name: TTS engine
-      description: A TTS entity ID or legacy provider name, such as microsoft.
       required: true
-      example: microsoft
       selector:
-        text:
+        select:
+          options: []
+          mode: dropdown
+          sort: true
     message:
       name: Message
       required: true

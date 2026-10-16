@@ -37,7 +37,7 @@ type ToolboxConfigEntry = ConfigEntry[ToolboxRuntimeData]
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register actions independently of config-entry reloads."""
 
-    async_setup_announcements(hass)
+    await async_setup_announcements(hass)
     return True
 
 

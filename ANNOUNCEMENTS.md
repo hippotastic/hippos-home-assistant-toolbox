@@ -40,9 +40,10 @@ audio data, independently of the player's current track attributes.
 
 ## Announce TTS
 
-Choose a configured TTS engine with `engine_id`. This accepts both current
-entity IDs, such as `tts.speech_engine`, and legacy provider names,
-such as `microsoft`:
+Choose a configured TTS engine from the action's dropdown. It lists loaded TTS
+entities and legacy providers by name and updates when engines are added,
+renamed or removed. In YAML, `engine_id` accepts both current entity IDs, such
+as `tts.speech_engine`, and legacy provider names, such as `microsoft`:
 
 ```yaml
 action: hippos_toolbox.announce_tts
