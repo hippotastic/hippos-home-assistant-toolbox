@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.typing import ConfigType
 
+from .announcements import async_setup_announcements
 from .api import ToolboxApi
 from .const import (
     CONF_SOURCE_ENTITY_ID,
@@ -30,6 +32,13 @@ class ToolboxRuntimeData:
 
 
 type ToolboxConfigEntry = ConfigEntry[ToolboxRuntimeData]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register actions independently of config-entry reloads."""
+
+    async_setup_announcements(hass)
+    return True
 
 
 async def async_setup_entry(

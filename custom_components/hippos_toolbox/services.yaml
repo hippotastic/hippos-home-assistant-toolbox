@@ -1,0 +1,68 @@
+announce_media:
+  name: Announce media
+  description: Play a local WAV or MP3 announcement and wait for its duration.
+  target:
+    entity:
+      domain: media_player
+  fields:
+    media:
+      name: Audio file
+      required: true
+      selector:
+        media:
+          accept:
+            - audio/wav
+            - audio/x-wav
+            - audio/mpeg
+    volume:
+      name: Announcement volume
+      description: Leave unset to use the current volume. Zero means silent.
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01
+
+announce_tts:
+  name: Announce text
+  description: Generate and cache speech, then play it as an announcement and wait for its duration.
+  target:
+    entity:
+      domain: media_player
+  fields:
+    engine_id:
+      name: TTS engine
+      description: A TTS entity ID or legacy provider name, such as microsoft.
+      required: true
+      example: microsoft
+      selector:
+        text:
+    message:
+      name: Message
+      required: true
+      selector:
+        text:
+          multiline: true
+    language:
+      name: Language
+      example: de-de
+      selector:
+        text:
+    options:
+      name: TTS options
+      description: Options supported by the selected engine, such as voice or speaking rate.
+      selector:
+        object:
+    cache:
+      name: Cache speech
+      default: true
+      selector:
+        boolean:
+    volume:
+      name: Announcement volume
+      description: Leave unset to use the current volume. Zero means silent.
+      selector:
+        number:
+          min: 0
+          max: 1
+          step: 0.01

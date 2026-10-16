@@ -61,6 +61,48 @@
       }
     }
   },
+  "services": {
+    "announce_media": {
+      "name": "Announce media",
+      "description": "Play a local WAV or MP3 announcement and wait for its duration.",
+      "fields": {
+        "media": {
+          "name": "Audio file"
+        },
+        "volume": {
+          "name": "Announcement volume",
+          "description": "Leave unset to use the current volume. Zero means silent."
+        }
+      }
+    },
+    "announce_tts": {
+      "name": "Announce text",
+      "description": "Generate and cache speech, then play it as an announcement and wait for its duration.",
+      "fields": {
+        "engine_id": {
+          "name": "TTS engine",
+          "description": "A TTS entity ID or legacy provider name, such as microsoft."
+        },
+        "message": {
+          "name": "Message"
+        },
+        "language": {
+          "name": "Language"
+        },
+        "options": {
+          "name": "TTS options",
+          "description": "Options supported by the selected engine, such as voice or speaking rate."
+        },
+        "cache": {
+          "name": "Cache speech"
+        },
+        "volume": {
+          "name": "Announcement volume",
+          "description": "Leave unset to use the current volume. Zero means silent."
+        }
+      }
+    }
+  },
   "entity": {
     "button": {
       "check_for_updates": {

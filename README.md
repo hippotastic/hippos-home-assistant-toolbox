@@ -67,6 +67,16 @@ The renderer is generic. Optional positional arguments select another SVG, outpu
 pnpm camera-overlay:render -- path/to/icon.svg path/to/icon.png 512
 ```
 
+## Announcements
+
+Use **Announce media** to play a local WAV or MP3 file, or **Announce text** to
+generate and cache speech through a configured TTS engine. Both actions determine
+the audio duration and wait for any time the player did not already wait, with
+shared queues and optional announcement volume.
+
+Action examples, supported media, TTS options, and playback behavior are
+documented in [Announcements](ANNOUNCEMENTS.md).
+
 ## Irrigation Blueprints
 
 Setup, behavior, formulas, triggers, scheduling rules, and log examples are documented in [Irrigation Blueprints](IRRIGATION.md).
