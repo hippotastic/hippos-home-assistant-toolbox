@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.10.0
+
+### Minor Changes
+
+- 766e5b3: Add `hippos_toolbox.announce_media` and `hippos_toolbox.announce_tts` with automatic audio duration, remaining-time waits, shared player queues, and optional announcement volume. TTS uses Home Assistant's existing speech generation and cache, supporting entity-based engines and legacy providers. Its engine picker lists registered engines by name and follows additions, renames, and removals.
+
 ## 0.9.1
 
 ### Patch Changes
