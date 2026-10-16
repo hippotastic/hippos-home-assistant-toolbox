@@ -2,6 +2,7 @@
 
 import asyncio
 from io import BytesIO
+import json
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -12,6 +13,8 @@ import wave
 
 import voluptuous as vol
 import yaml
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 from homeassistant.components import ffmpeg, tts
 from homeassistant.components.media_player import MediaPlayerEntityFeature
@@ -49,6 +52,18 @@ def _mp3(seconds=0.04) -> bytes:
 
 
 class AudioDurationTests(unittest.TestCase):
+    def test_dependency_constraints_allow_both_test_and_current_ha_tts_versions(self) -> None:
+        manifest = json.loads(
+            Path(announcements.__file__).with_name("manifest.json").read_text()
+        )
+        self.assertIn("tts", manifest["dependencies"])
+        # Core TTS owns Mutagen; upgrading HA must not force its downgrade
+        for raw_requirement in manifest["requirements"]:
+            requirement = Requirement(raw_requirement)
+            if requirement.name == "mutagen":
+                for version in ("1.47.0", "1.48.1"):
+                    self.assertIn(Version(version), requirement.specifier)
+
     def test_service_metadata_matches_registered_actions(self) -> None:
         declarations = yaml.safe_load(
             Path(announcements.__file__).with_name("services.yaml").read_text()
