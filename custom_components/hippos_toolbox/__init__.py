@@ -17,6 +17,7 @@ from .const import (
     CONF_UPDATE_CHANNEL,
     DEFAULT_UPDATE_CHANNEL,
     DOMAIN,
+    MONITORING_SUBENTRY_TYPE,
     PLATFORMS,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
     normalize_update_channel,
@@ -29,6 +30,7 @@ from .frontend import (
     async_update_frontend,
 )
 from .manager import BlueprintManager
+from .monitoring import _ProblemMonitor
 from .progressive_camera import _ProgressiveCameraManager
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -43,6 +45,8 @@ class ToolboxRuntimeData:
     progressive_camera_manager: _ProgressiveCameraManager
     update_channel: str
     camera_subentries: dict[str, tuple[str, str]]
+    monitor: _ProblemMonitor | None
+    monitoring_subentries: dict[str, dict]
 
 
 type ToolboxConfigEntry = ConfigEntry[ToolboxRuntimeData]
@@ -83,6 +87,17 @@ async def async_setup_entry(
         hass, entry,
         {subentry_id: source for subentry_id, (source, _) in camera_subentries.items()},
     )
+    monitoring_subentries = {
+        item.subentry_id: dict(item.data) for item in entry.subentries.values()
+        if item.subentry_type == MONITORING_SUBENTRY_TYPE
+    }
+    monitoring_subentry = next((
+        item for item in entry.subentries.values()
+        if item.subentry_type == MONITORING_SUBENTRY_TYPE
+    ), None)
+    monitor = _ProblemMonitor(hass, entry, monitoring_subentry) if monitoring_subentry else None
+    if monitor is not None:
+        await monitor.async_load()
     await progressive_camera_manager.async_start()
     entry.runtime_data = ToolboxRuntimeData(
         manager=manager,
@@ -90,16 +105,22 @@ async def async_setup_entry(
         progressive_camera_manager=progressive_camera_manager,
         update_channel=update_channel,
         camera_subentries=camera_subentries,
+        monitor=monitor,
+        monitoring_subentries=monitoring_subentries,
     )
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         await async_setup_entry_frontend(hass, entry)
+        if monitor is not None:
+            monitor.async_start()
     except Exception:
         async_unload_frontend(hass)
         async_stop_camera_streams(hass)
         await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
         await progressive_camera_manager.async_stop()
+        if monitor is not None:
+            await monitor.async_stop()
         raise
     return True
 
@@ -115,6 +136,8 @@ async def async_unload_entry(
         async_unload_frontend(hass)
         async_stop_camera_streams(hass)
         await entry.runtime_data.progressive_camera_manager.async_stop()
+        if entry.runtime_data.monitor is not None:
+            await entry.runtime_data.monitor.async_stop()
     return unloaded
 
 
@@ -134,8 +157,13 @@ async def _async_reload_entry(
         for subentry in entry.subentries.values()
         if subentry.subentry_type == PROGRESSIVE_CAMERA_SUBENTRY_TYPE
     }
+    monitoring_subentries = {
+        item.subentry_id: dict(item.data) for item in entry.subentries.values()
+        if item.subentry_type == MONITORING_SUBENTRY_TYPE
+    }
     if (
         update_channel != entry.runtime_data.update_channel
         or camera_subentries != entry.runtime_data.camera_subentries
+        or monitoring_subentries != entry.runtime_data.monitoring_subentries
     ):
         await hass.config_entries.async_reload(entry.entry_id)

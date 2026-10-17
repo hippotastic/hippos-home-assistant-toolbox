@@ -45,6 +45,65 @@
         "invalid_source": "Select an existing camera entity.",
         "source_is_progressive_camera": "Select an original camera entity, not another progressive snapshot camera."
       }
+    },
+    "monitoring": {
+      "entry_type": "Problem monitoring",
+      "initiate_flow": {
+        "user": "Add problem monitoring"
+      },
+      "abort": {
+        "already_configured": "Problem monitoring is already configured."
+      },
+      "step": {
+        "user": {
+          "title": "Add problem monitoring",
+          "description": "Monitor problem-class binary sensors, critical battery flags and the selected labels.",
+          "data": {
+            "trigger_delay_minutes": "Warning delay",
+            "solved_delay_minutes": "Solution confirmation delay",
+            "alarm_unavailable_delay_minutes": "Alarm entity unavailable delay",
+            "battery_critical_delay_minutes": "Critical battery delay",
+            "warning_labels": "Warning when on",
+            "alarm_labels": "Alarm entities",
+            "ignored_labels": "Ignored problems",
+            "below_30_labels": "Warning below 30",
+            "below_20_labels": "Warning below 20",
+            "below_10_labels": "Warning below 10"
+          },
+          "data_description": {
+            "trigger_delay_minutes": "Continuous time before a new problem triggers a warning.",
+            "solved_delay_minutes": "Continuous confirmed solution before an open problem is removed and a solution event is emitted.",
+            "alarm_unavailable_delay_minutes": "Total continuous unavailable time before warning about a disconnected alarm entity.",
+            "battery_critical_delay_minutes": "Total continuous critical battery status before warning; protects against temporary incorrect battery flags.",
+            "alarm_labels": "Entities with these labels trigger immediate alarm events while on and availability warnings after the disconnected delay.",
+            "ignored_labels": "Exclude these entities from ordinary warning rules."
+          }
+        },
+        "reconfigure": {
+          "title": "Configure problem monitoring",
+          "description": "Monitor problem-class binary sensors, critical battery flags and the selected labels.",
+          "data": {
+            "trigger_delay_minutes": "Warning delay",
+            "solved_delay_minutes": "Solution confirmation delay",
+            "alarm_unavailable_delay_minutes": "Alarm entity unavailable delay",
+            "battery_critical_delay_minutes": "Critical battery delay",
+            "warning_labels": "Warning when on",
+            "alarm_labels": "Alarm entities",
+            "ignored_labels": "Ignored problems",
+            "below_30_labels": "Warning below 30",
+            "below_20_labels": "Warning below 20",
+            "below_10_labels": "Warning below 10"
+          },
+          "data_description": {
+            "trigger_delay_minutes": "Continuous time before a new problem triggers a warning.",
+            "solved_delay_minutes": "Continuous confirmed solution before an open problem is removed and a solution event is emitted.",
+            "alarm_unavailable_delay_minutes": "Total continuous unavailable time before warning about a disconnected alarm entity.",
+            "battery_critical_delay_minutes": "Total continuous critical battery status before warning; protects against temporary incorrect battery flags.",
+            "alarm_labels": "Entities with these labels trigger immediate alarm events while on and availability warnings after the disconnected delay.",
+            "ignored_labels": "Exclude these entities from ordinary warning rules."
+          }
+        }
+      }
     }
   },
   "options": {
@@ -117,6 +176,29 @@
     "update": {
       "blueprints": {
         "name": "Blueprints"
+      }
+    },
+    "sensor": {
+      "problems": {
+        "name": "Open problems"
+      },
+      "alarms": {
+        "name": "Active alarms"
+      }
+    },
+    "event": {
+      "problem_changes": {
+        "name": "Problem changes",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "triggered": "Problem triggered",
+              "solved": "Problem solved",
+              "alarm_triggered": "Alarm triggered",
+              "alarm_solved": "Alarm ended"
+            }
+          }
+        }
       }
     }
   },

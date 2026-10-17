@@ -11,6 +11,7 @@ from custom_components.hippos_toolbox.const import (
     CONF_CAMERA_STREAM_CLEANUP,
     CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
+    MONITORING_SUBENTRY_TYPE,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
 )
 
@@ -44,7 +45,7 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
             entry_id="toolbox",
             options={},
             subentries={},
-            runtime_data=SimpleNamespace(update_channel="stable", camera_subentries={}),
+            runtime_data=SimpleNamespace(update_channel="stable", camera_subentries={}, monitoring_subentries={}),
         )
 
     def subscribe(self):
@@ -133,6 +134,15 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
             subentry_id="camera", title="New title",
             subentry_type=PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
             data={CONF_SOURCE_ENTITY_ID: "camera.front_door"},
+        )}
+        await _async_reload_entry(self.hass, self.entry)
+        self.hass.config_entries.async_reload.assert_awaited_once_with("toolbox")
+
+    async def test_monitoring_configuration_changes_reload_the_backend(self):
+        self.hass.config_entries = SimpleNamespace(async_reload=AsyncMock())
+        self.entry.subentries = {"monitor": SimpleNamespace(
+            subentry_id="monitor", subentry_type=MONITORING_SUBENTRY_TYPE,
+            data={"alarm_unavailable_delay_minutes": 5},
         )}
         await _async_reload_entry(self.hass, self.entry)
         self.hass.config_entries.async_reload.assert_awaited_once_with("toolbox")

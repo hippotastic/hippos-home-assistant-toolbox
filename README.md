@@ -85,6 +85,19 @@ shared queues and optional announcement volume.
 Action examples, supported media, TTS options, and playback behavior are
 documented in [Announcements](ANNOUNCEMENTS.md).
 
+## Problem Monitoring
+
+Add **Problem monitoring** from the toolbox integration entry's three-dot menu to
+track problem-class binary sensors, critical battery flags and label-based
+warnings. Confirmed problems survive restarts and reloads. The integration exposes
+open-problem and active-alarm sensors, plus events for notification automations.
+Disconnected alarm entities, including smoke detectors, produce availability
+warnings after a separate configurable delay. Actual alarms trigger immediately;
+unknown or unavailable sources do not end an ongoing alarm.
+
+Rules, configuration defaults and migration from existing warning templates are
+documented in [Problem Monitoring](MONITORING.md).
+
 ## Irrigation Blueprints
 
 Setup, behavior, formulas, triggers, scheduling rules, and log examples are documented in [Irrigation Blueprints](IRRIGATION.md).

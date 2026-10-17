@@ -11,10 +11,14 @@ from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.hippos_toolbox.config_flow import (
     ProgressiveCameraSubentryFlow,
+    MonitoringSubentryFlow,
     ToolboxOptionsFlow,
 )
 from custom_components.hippos_toolbox.const import (
     CAMERA_FRONTEND_OPTIONS,
+    MONITORING_DELAY_DEFAULTS,
+    MONITORING_LABEL_DEFAULTS,
+    MONITORING_SUBENTRY_TYPE,
     CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
@@ -184,6 +188,57 @@ class ProgressiveCameraSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             update_subentry.call_args.kwargs["data"],
             {CONF_SOURCE_ENTITY_ID: "camera.front_door_snapshot"},
         )
+
+
+class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_form_defaults_keep_legacy_label_assignments_and_delays(self):
+        flow = MonitoringSubentryFlow()
+        flow.handler = ("test-entry", MONITORING_SUBENTRY_TYPE)
+        flow.hass = SimpleNamespace()
+        labels = SimpleNamespace(async_get_label_by_name=lambda name: SimpleNamespace(label_id=name))
+        with (
+            patch.object(flow, "_get_entry", return_value=SimpleNamespace(subentries={})),
+            patch("custom_components.hippos_toolbox.config_flow.lr.async_get", return_value=labels),
+        ):
+            result = await flow.async_step_user()
+        defaults = result["data_schema"]({})
+        for key, value in MONITORING_DELAY_DEFAULTS.items():
+            self.assertEqual(defaults[key], value)
+        for key, value in MONITORING_LABEL_DEFAULTS.items():
+            self.assertEqual(defaults[key], [value])
+
+    async def test_creates_monitor_and_rejects_second_monitor(self):
+        flow = MonitoringSubentryFlow()
+        flow.handler = ("test-entry", MONITORING_SUBENTRY_TYPE)
+        flow.context = {"source": config_entries.SOURCE_USER}
+        flow.hass = SimpleNamespace()
+        with patch.object(flow, "_get_entry", return_value=SimpleNamespace(subentries={})):
+            result = await flow.async_step_user(MONITORING_DELAY_DEFAULTS)
+        self.assertEqual(result["type"], FlowResultType.CREATE_ENTRY)
+        self.assertEqual(result["data"], MONITORING_DELAY_DEFAULTS)
+        existing = SimpleNamespace(subentry_type=MONITORING_SUBENTRY_TYPE)
+        with patch.object(flow, "_get_entry", return_value=SimpleNamespace(subentries={"existing": existing})):
+            duplicate = await flow.async_step_user()
+        self.assertEqual(duplicate["type"], FlowResultType.ABORT)
+        self.assertEqual(duplicate["reason"], "already_configured")
+
+    async def test_reconfigure_preserves_subentry_and_storage_identity(self):
+        current = config_entries.ConfigSubentry(
+            data=MappingProxyType(dict(MONITORING_DELAY_DEFAULTS)),
+            subentry_id="monitor", subentry_type=MONITORING_SUBENTRY_TYPE,
+            title="Problem monitoring", unique_id=None,
+        )
+        entry = SimpleNamespace(subentries={"monitor": current})
+        flow = MonitoringSubentryFlow()
+        flow.handler = ("test-entry", MONITORING_SUBENTRY_TYPE)
+        flow.context = {"source": config_entries.SOURCE_RECONFIGURE, "subentry_id": "monitor"}
+        update = Mock(return_value=True)
+        flow.hass = SimpleNamespace(config_entries=SimpleNamespace(async_update_subentry=update))
+        with patch.object(flow, "_get_entry", return_value=entry), patch.object(flow, "_get_reconfigure_subentry", return_value=current):
+            result = await flow.async_step_reconfigure({**MONITORING_DELAY_DEFAULTS, "alarm_unavailable_delay_minutes": 7})
+        self.assertEqual(result["type"], FlowResultType.ABORT)
+        self.assertEqual(update.call_args.kwargs["subentry"].subentry_id, "monitor")
+        self.assertEqual(update.call_args.kwargs["data"]["alarm_unavailable_delay_minutes"], 7)
 
 
 if __name__ == "__main__":

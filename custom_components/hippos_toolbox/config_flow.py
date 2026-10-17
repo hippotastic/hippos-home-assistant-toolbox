@@ -9,7 +9,7 @@ from homeassistant.components.camera import DOMAIN as CAMERA_DOMAIN
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers import entity_registry as er, selector
+from homeassistant.helpers import entity_registry as er, label_registry as lr, selector
 
 from .const import (
     CAMERA_FRONTEND_OPTIONS,
@@ -18,6 +18,9 @@ from .const import (
     DEFAULT_UPDATE_CHANNEL,
     DOMAIN,
     NAME,
+    MONITORING_DELAY_DEFAULTS,
+    MONITORING_LABEL_DEFAULTS,
+    MONITORING_SUBENTRY_TYPE,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
     UPDATE_CHANNEL_DEVELOPMENT,
     UPDATE_CHANNEL_STABLE,
@@ -38,7 +41,8 @@ class ToolboxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Return the helper types that can be added to the toolbox entry."""
 
         return {
-            PROGRESSIVE_CAMERA_SUBENTRY_TYPE: ProgressiveCameraSubentryFlow
+            PROGRESSIVE_CAMERA_SUBENTRY_TYPE: ProgressiveCameraSubentryFlow,
+            MONITORING_SUBENTRY_TYPE: MonitoringSubentryFlow,
         }
 
     @staticmethod
@@ -197,3 +201,39 @@ class ProgressiveCameraSubentryFlow(config_entries.ConfigSubentryFlow):
         if registry_entry.platform == DOMAIN:
             return "source_is_progressive_camera"
         return None
+
+
+class MonitoringSubentryFlow(config_entries.ConfigSubentryFlow):
+    """Configure one optional problem monitor using the existing HA labels."""
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        return self._async_handle_form("user", user_input)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        return self._async_handle_form("reconfigure", user_input)
+
+    @callback
+    def _async_handle_form(self, step_id: str, user_input: dict[str, Any] | None) -> FlowResult:
+        entry = self._get_entry()
+        current = self._get_reconfigure_subentry() if step_id == "reconfigure" else None
+        if current is None and any(item.subentry_type == MONITORING_SUBENTRY_TYPE for item in entry.subentries.values()):
+            return self.async_abort(reason="already_configured")
+        if user_input is not None:
+            if current is not None:
+                return self.async_update_and_abort(entry, current, title="Problem monitoring", data=user_input)
+            return self.async_create_entry(title="Problem monitoring", data=user_input)
+
+        options = current.data if current else {}
+        labels = lr.async_get(self.hass)
+        fields = {}
+        for key, default in MONITORING_DELAY_DEFAULTS.items():
+            fields[vol.Required(key, default=options.get(key, default))] = selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=10080, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
+            )
+        for key, legacy_name in MONITORING_LABEL_DEFAULTS.items():
+            existing = labels.async_get_label_by_name(legacy_name)
+            default = [existing.label_id] if existing else []
+            fields[vol.Optional(key, default=options.get(key, default))] = selector.LabelSelector(
+                selector.LabelSelectorConfig(multiple=True)
+            )
+        return self.async_show_form(step_id=step_id, data_schema=vol.Schema(fields))

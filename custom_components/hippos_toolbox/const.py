@@ -8,7 +8,7 @@ DOMAIN = "hippos_toolbox"
 NAME = "Hippo's Home Assistant Toolbox"
 MANAGED_DIRECTORY = "hippotastic"
 ADOPTABLE_BLUEPRINT_DIRECTORIES = ("hippo",)
-PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.CAMERA, Platform.UPDATE]
+PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.CAMERA, Platform.EVENT, Platform.SENSOR, Platform.UPDATE]
 UPDATE_INTERVAL = timedelta(days=1)
 DEVELOPMENT_UPDATE_INTERVAL = timedelta(hours=2)
 
@@ -39,6 +39,36 @@ UPDATE_CHANNELS = frozenset((UPDATE_CHANNEL_STABLE, UPDATE_CHANNEL_DEVELOPMENT))
 DEVELOPMENT_BRANCH = "main"
 
 PROGRESSIVE_CAMERA_SUBENTRY_TYPE = "progressive_camera"
+MONITORING_SUBENTRY_TYPE = "monitoring"
+PROBLEMS_UNIQUE_ID = f"{DOMAIN}_problems"
+ALARMS_UNIQUE_ID = f"{DOMAIN}_alarms"
+PROBLEM_CHANGES_UNIQUE_ID = f"{DOMAIN}_problem_changes"
+
+CONF_TRIGGER_DELAY = "trigger_delay_minutes"
+CONF_SOLVED_DELAY = "solved_delay_minutes"
+CONF_ALARM_UNAVAILABLE_DELAY = "alarm_unavailable_delay_minutes"
+CONF_BATTERY_CRITICAL_DELAY = "battery_critical_delay_minutes"
+CONF_WARNING_LABELS = "warning_labels"
+CONF_ALARM_LABELS = "alarm_labels"
+CONF_IGNORED_LABELS = "ignored_labels"
+CONF_BELOW_30_LABELS = "below_30_labels"
+CONF_BELOW_20_LABELS = "below_20_labels"
+CONF_BELOW_10_LABELS = "below_10_labels"
+
+MONITORING_DELAY_DEFAULTS = {
+    CONF_TRIGGER_DELAY: 1,
+    CONF_SOLVED_DELAY: 10,
+    CONF_ALARM_UNAVAILABLE_DELAY: 5,
+    CONF_BATTERY_CRITICAL_DELAY: 30,
+}
+MONITORING_LABEL_DEFAULTS = {
+    CONF_WARNING_LABELS: "Warnung bei Status On",
+    CONF_ALARM_LABELS: "Alarm bei Status On",
+    CONF_IGNORED_LABELS: "Problem ignorieren",
+    CONF_BELOW_30_LABELS: "Warnung bei < 30",
+    CONF_BELOW_20_LABELS: "Warnung bei < 20",
+    CONF_BELOW_10_LABELS: "Warnung bei < 10",
+}
 
 BLUEPRINT_UPDATE_UNIQUE_ID = "hippos_toolbox_blueprints"
 CHECK_UPDATES_UNIQUE_ID = "hippos_toolbox_check_for_updates"
