@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.12.1
+
+### Patch Changes
+
+- a333b4b: Give monitoring its own device so adding the monitoring subentry preserves the toolbox update entities and registers all monitoring sensors and events.
+
 ## 0.12.0
 
 ### Minor Changes
