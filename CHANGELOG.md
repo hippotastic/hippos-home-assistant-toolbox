@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.12.4
+
+### Patch Changes
+
+- 97c1643: Document reusable monitoring dashboard cards with English status lines, known and resolved timestamps, and recovery countdowns based on the configured delay. Include a separate active-alarm list and explain retained incidents while source states are unknown or unavailable.
+
 ## 0.12.3
 
 ### Patch Changes
