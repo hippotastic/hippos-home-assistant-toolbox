@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.12.2
+
+### Patch Changes
+
+- 9be08fc: Preserve the legacy warning and alarm counters' total state class so their existing long-term statistics continue after migration without repair warnings.
+
 ## 0.12.1
 
 ### Patch Changes
