@@ -71,6 +71,11 @@ Each record contains its source `entity_id`, display `name`, classification
 - `triggered_since`: confirmation time, retained through temporary disappearance.
 - `solved_delay_since`: start of a pending reliable recovery.
 
+Sensor records also include the derived `solved_delay_until` deadline for dashboard
+countdowns. It uses the configured solution delay and is `null` outside a pending
+recovery. Countdowns disappear if the problem returns or its source becomes unknown
+or unavailable; a restarted recovery receives a fresh deadline.
+
 The **Active alarms** sensor counts ongoing alarms and exposes their records in
 its `alarms` attribute. An alarm which becomes unreachable stays open until a
 reliable non-alarm state is observed. An availability warning can therefore coexist

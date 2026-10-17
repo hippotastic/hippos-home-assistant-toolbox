@@ -98,7 +98,17 @@ class _ProblemMonitor:
 
     @property
     def problems(self) -> dict[str, dict[str, Any]]:
-        return {key: value.as_dict() for key, value in sorted(self._problems.items())}
+        problems = {}
+        for key, value in sorted(self._problems.items()):
+            problem = value.as_dict()
+            # Derive the display deadline from the same configured delay used
+            # for resolution; restored incidents never retain a stale countdown.
+            problem["solved_delay_until"] = (
+                (value.solved_delay_since + self._delay(CONF_SOLVED_DELAY)).isoformat()
+                if value.solved_delay_since else None
+            )
+            problems[key] = problem
+        return problems
 
     @property
     def alarms(self) -> dict[str, dict[str, Any]]:

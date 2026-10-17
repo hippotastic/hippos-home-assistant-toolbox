@@ -131,6 +131,29 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         await self.observe(810)
         self.assertEqual([kind for kind, _ in self.events], ["triggered", "solved", "triggered"])
 
+    async def test_solution_display_deadline_follows_the_configured_delay(self):
+        self.options[CONF_SOLVED_DELAY] = 2.5
+        await self.observe(0)
+        self.assertIsNone(self.monitor.problems["binary_sensor.problem"]["solved_delay_until"])
+        await self.observe(60)
+        await self.observe(90, "off")
+        self.assertEqual(
+            self.monitor.problems["binary_sensor.problem"]["solved_delay_until"],
+            (self.clock + timedelta(minutes=2.5)).isoformat(),
+        )
+
+        await self.observe(100)
+        self.assertIsNone(self.monitor.problems["binary_sensor.problem"]["solved_delay_until"])
+        await self.observe(110, "off")
+        await self.observe(120, "unavailable")
+        self.assertIsNone(self.monitor.problems["binary_sensor.problem"]["solved_delay_until"])
+        await self.observe(130, "off")
+        await self.observe(279, "off")
+        self.assertIn("binary_sensor.problem", self.monitor.problems)
+        await self.observe(280, "off")
+        self.assertEqual(self.monitor.problems, {})
+        self.assertEqual([kind for kind, _ in self.events], ["triggered", "solved"])
+
     async def test_individual_solution_while_another_problem_remains(self):
         for entity_id in ("binary_sensor.a", "binary_sensor.b"):
             await self.observe(0, entity_id=entity_id)
@@ -317,6 +340,7 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(restored["triggered_since"], stored["problems"]["binary_sensor.problem"]["triggered_since"])
         self.assertIsNone(restored["trigger_delay_since"])
         self.assertIsNone(restored["solved_delay_since"])
+        self.assertIsNone(restored["solved_delay_until"])
         self.assertEqual(restored_events, [])
         await reloaded.async_stop()
 
