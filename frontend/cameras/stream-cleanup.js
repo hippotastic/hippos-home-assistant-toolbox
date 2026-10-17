@@ -5,7 +5,6 @@ function stopReservation(stream, streamId, camera) {
 		.then(() => stream._api.callWS({ type: 'hippos_toolbox/camera_stream/stop', stream_id: streamId }))
 		.then((result) => {
 			if (typeof result?.stopped !== 'boolean') throw new Error('Invalid camera stream stop response')
-			if (result.stopped) console.info('[Hippo Camera Recovery] MJPEG stream stopped on server', { camera })
 		})
 		.catch(() => console.warn('[Hippo Camera Recovery] Could not confirm MJPEG stream stop', { camera }))
 }

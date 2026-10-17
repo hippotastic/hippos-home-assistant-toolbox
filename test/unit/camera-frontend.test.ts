@@ -338,15 +338,58 @@ describe('camera frontend', () => {
 		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] MJPEG stream recovery', { camera: 'camera.front_door', reason: 'Image error', attempt: 1 }])
 		f.camera.remove()
 		await f.tick()
-		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] MJPEG stream stopped on server', { camera: 'camera.front_door' }])
+		expect(f.calls.filter((c) => c.type.endsWith('/stop'))).toHaveLength(2)
+		expect(f.logs).toHaveLength(1)
 		f.dispose()
 	})
 
-	test.each([false, true])('opens a normal MJPEG view silently with recovery=%s', async (recovery) => {
+	test.each([false, true])('opens and closes a normal MJPEG view silently with recovery=%s', async (recovery) => {
 		const f = await fixture()
 		await f.settings(false, recovery, true)
 		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(1)
 		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/hippos_toolbox/camera_stream/')
+		expect(f.logs).toHaveLength(0)
+		f.camera.remove()
+		await f.tick()
+		expect(f.calls.filter((c) => c.type.endsWith('/stop'))).toHaveLength(1)
+		expect(f.logs).toHaveLength(0)
+		f.dispose()
+	})
+
+	test('releases a detached native MJPEG image silently when controlled rendering is unavailable', async () => {
+		const f = await fixture()
+		Object.assign(f.camera, { _api: undefined })
+		await f.settings(false, false, true)
+		const image = f.camera.shadowRoot!.querySelector('img')!
+		expect(image.src).toContain('/api/camera_proxy_stream/')
+		f.camera.remove()
+		await f.tick()
+		expect(image.getAttribute('src')).toBeNull()
+		expect(f.logs).toHaveLength(0)
+		f.dispose()
+	})
+
+	test.each([false, true])('silently stops and resumes controlled views on backgrounding with recovery=%s', async (recovery) => {
+		const f = await fixture()
+		await f.settings(false, recovery, true)
+		Object.defineProperty(f.w.document, 'hidden', { configurable: true, value: true })
+		f.w.document.dispatchEvent(new f.w.Event('visibilitychange'))
+		await flush()
+		expect(f.calls.filter((c) => c.type.endsWith('/stop'))).toHaveLength(1)
+		Object.defineProperty(f.w.document, 'hidden', { configurable: true, value: false })
+		f.w.document.dispatchEvent(new f.w.Event('visibilitychange'))
+		await flush()
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(2)
+		expect(f.logs).toHaveLength(0)
+		f.dispose()
+	})
+
+	test('resumes controlled views silently when the network returns', async () => {
+		const f = await fixture()
+		await f.settings(false, true, true)
+		f.w.dispatchEvent(new f.w.Event('online'))
+		await flush()
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(2)
 		expect(f.logs).toHaveLength(0)
 		f.dispose()
 	})
@@ -606,6 +649,7 @@ describe('camera frontend', () => {
 		expect(f.w.HTMLElement.prototype.attachShadow).toBe(f.originalAttach)
 		expect((Object.getPrototypeOf(f.camera) as typeof f.camera)._renderStream).toBe(f.originalRender)
 		expect(f.camera.shadowRoot!.querySelector('img')!.src).toContain('/api/camera_proxy_stream/')
+		expect(f.logs).toContainEqual(['[Hippo Camera Recovery] Could not confirm MJPEG stream stop', { camera: 'camera.front_door' }])
 		f.dispose()
 	})
 

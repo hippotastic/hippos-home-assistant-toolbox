@@ -22,7 +22,7 @@ The integration registers one content-versioned JavaScript bundle through HA's f
 
 The watchdog checks local elements every two seconds; it does not poll the server. Opening a controlled MJPEG view adds one WebSocket request to reserve its signed URL, and closing it adds one stop request. Image bytes still use HA's native camera implementation. Each signed URL is single-use, expires after 30 seconds if unused, and belongs to the reserving WebSocket user. A client can stop only its own connection's views.
 
-Console messages use the `[Hippo Camera Recovery]` prefix and identify the camera and reason without logging signed URLs or session IDs. Normal MJPEG view setup is silent and does not count as a recovery attempt. Actual recovery and confirmed stream cleanup remain visible in the console; failed initial setup produces a warning.
+Console messages use the `[Hippo Camera Recovery]` prefix and identify the camera and reason without logging signed URLs or session IDs. Normal MJPEG opening, closing, and resuming after backgrounding or reconnection are silent and do not count as recovery attempts. Actual error recovery remains visible in the console; failed setup, renewal, or stream-stop confirmation produces a warning.
 
 ## When settings communication fails
 

@@ -78,7 +78,6 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 		if (state?.managedEntity) {
 			stopControlledStream(stream, state)
 			if (image?.getAttribute('src')?.includes(STREAM_PATH)) image.removeAttribute('src')
-			// The asynchronous server confirmation is the one authoritative log.
 			return
 		}
 		if (!cleanup) return
@@ -89,10 +88,6 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 		// A detached <img> can still own an endless multipart request. Remove its
 		// source explicitly; src="" would instead request the current HTML page.
 		image.removeAttribute('src')
-		console.info('[Hippo Camera Recovery] MJPEG connection released', {
-			camera: stream.stateObj.entity_id,
-			reason: 'Camera view closed',
-		})
 	}
 
 	async function recover(stream, state, reason) {
@@ -241,7 +236,8 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 		for (const [stream, state] of streams) {
 			const image = stream.shadowRoot?.querySelector('img')
 			if (image && (state.managedEntity || (recovery && longPause) || (recovery && (image.naturalWidth === 0 || hlsFallback(stream, image))))) {
-				recover(stream, state, 'Tab visible again')
+				// Reopening our deliberately closed response is normal lifecycle work.
+				recover(stream, state, state.managedEntity ? undefined : 'Tab visible again')
 			}
 		}
 	}
@@ -250,7 +246,7 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 		for (const [stream, state] of streams) {
 			const image = stream.shadowRoot?.querySelector('img')
 			if (image && (state.managedEntity || (recovery && (image.naturalWidth === 0 || hlsFallback(stream, image))))) {
-				recover(stream, state, 'Network online again')
+				recover(stream, state, state.managedEntity ? undefined : 'Network online again')
 			}
 		}
 	}
