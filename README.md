@@ -95,7 +95,8 @@ Disconnected alarm entities, including smoke detectors, produce availability
 warnings after a separate configurable delay. Actual alarms trigger immediately;
 unknown or unavailable sources do not end an ongoing alarm.
 
-Rules, configuration defaults and migration from existing warning templates are
+Rules, configuration defaults, dashboard examples with per-problem status lines
+and recovery countdowns, and migration from existing warning templates are
 documented in [Problem Monitoring](MONITORING.md).
 
 ## Irrigation Blueprints

@@ -99,6 +99,86 @@ downtime is not observed continuous activity or recovery. Event generation is
 persisted before publication; phone delivery acknowledgement is outside this
 feature's scope.
 
+## Dashboard
+
+The built-in entity names are **Open problems**, **Active alarms**, and
+**Problem changes**. Home Assistant generates their entity IDs; replace
+`sensor.open_problems` and `sensor.active_alarms` below with the IDs from your
+installation. Existing custom names and entity IDs are retained during migration.
+
+The following card requires [Auto-entities](https://github.com/thomasloven/lovelace-auto-entities)
+and [Template Entity Row](https://github.com/thomasloven/lovelace-template-entity-row),
+available through HACS. Add it through the dashboard's card YAML editor.
+
+Each confirmed problem has a status line:
+
+- **Known since 15:52 · Waiting for resolution** while it remains open, including
+  unknown or unavailable source states. The time is its `triggered_since` value.
+- **Resolved since 17:52 · All-clear in 4m** during reliable recovery. The countdown
+  uses `solved_delay_until` and updates every minute. Less than a minute is shown
+  as **All-clear in <1m**.
+
+Only confirmed problems are listed. Source values keep their units and native
+state colors. The display uses the monitor's timestamps for every problem category.
+
+```yaml
+type: custom:auto-entities
+card:
+  type: entities
+  title: Open problems
+show_empty: false
+filter:
+  template: |-
+    {% set problems = state_attr('sensor.open_problems', 'problems') or {} %}
+    {% set current_time = as_timestamp(now()) %}
+    {% set rows = namespace(items=[]) %}
+    {% for problem in problems.values() if problem.triggered_since is not none %}
+      {% if problem.solved_delay_since is not none %}
+        {% set remaining = as_timestamp(problem.solved_delay_until) - current_time %}
+        {% if remaining >= 60 %}
+          {% set recovery = 'All-clear in ' ~ ((remaining / 60) | round(0, 'ceil') | int) ~ 'm' %}
+        {% elif remaining > 0 %}
+          {% set recovery = 'All-clear in <1m' %}
+        {% else %}
+          {% set recovery = 'Confirming all-clear' %}
+        {% endif %}
+        {% set row = {
+          'type': 'custom:template-entity-row',
+          'entity': problem.entity_id,
+          'icon': 'mdi:timer-sand',
+          'color': 'state',
+          'state': '',
+          'secondary': 'Resolved since ' ~ (as_timestamp(problem.solved_delay_since) | timestamp_custom('%H:%M')) ~ ' · ' ~ recovery
+        } %}
+      {% else %}
+        {% set value = states(problem.entity_id, with_unit=true) if has_value(problem.entity_id) and state_attr(problem.entity_id, 'unit_of_measurement') else state_translated(problem.entity_id) %}
+        {% set row = {
+          'type': 'custom:template-entity-row',
+          'entity': problem.entity_id,
+          'color': 'state',
+          'state': value,
+          'secondary': 'Known since ' ~ (as_timestamp(problem.triggered_since) | timestamp_custom('%H:%M')) ~ ' · Waiting for resolution'
+        } %}
+      {% endif %}
+      {% set rows.items = rows.items + [row] %}
+    {% endfor %}
+    {{ rows.items | to_json }}
+```
+
+Actual alarms have their own list and clear immediately after a reliable
+non-alarm state. Use the **Active alarms** sensor for that card:
+
+```yaml
+type: custom:auto-entities
+card:
+  type: entities
+  title: Active alarms
+show_empty: false
+filter:
+  template: >-
+    {{ ((state_attr('sensor.active_alarms', 'alarms') or {}).keys() | list) | to_json }}
+```
+
 ## Migrating the existing warning setup
 
 1. Make source validity explicit first, including the pool helper's `unavailable`
