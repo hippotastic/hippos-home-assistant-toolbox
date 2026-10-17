@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from homeassistant.core import CoreState, Event, HomeAssistant
 from homeassistant.helpers.storage import Store
+from homeassistant import loader
+from homeassistant.config_entries import ConfigEntry, ConfigEntries
+from homeassistant.helpers import device_registry as dr
 
 from custom_components.hippos_toolbox import monitoring
 from custom_components.hippos_toolbox.const import (
@@ -412,6 +415,62 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
             add = Mock()
             await platform.async_setup_entry(self.hass, entry, add)
             add.assert_not_called()
+
+    async def test_monitor_registration_preserves_main_device_and_existing_entities(self):
+        from custom_components.hippos_toolbox.button import ToolboxCheckUpdatesButton
+        from custom_components.hippos_toolbox.update import ToolboxBlueprintUpdate
+        from custom_components.hippos_toolbox.sensor import ToolboxProblemsSensor, ToolboxAlarmsSensor
+        from custom_components.hippos_toolbox.event import ToolboxProblemEvent
+
+        self.registry_patch.stop()
+        loader.async_setup(self.hass)
+        self.hass.config_entries = ConfigEntries(self.hass, {})
+        entry = ConfigEntry(
+            domain="hippos_toolbox", entry_id="toolbox", data={}, options={},
+            source="user", title="Toolbox", unique_id=None, version=1,
+            minor_version=1, discovery_keys={}, subentries_data=[{
+                "subentry_id": "monitor", "subentry_type": "monitoring",
+                "title": "Monitoring", "data": self.options, "unique_id": None,
+            }],
+        )
+        # Register the fixture without running the integration's GitHub setup.
+        self.hass.config_entries._entries[entry.entry_id] = entry
+        devices = self.hass.data[dr.DATA_REGISTRY] = dr.DeviceRegistry(self.hass)
+        if hasattr(devices, "async_setup"):
+            devices.async_setup()
+        await devices.async_load(load_empty=True)
+        entities = monitoring.er.async_get(self.hass)
+        await entities.async_load(load_empty=True)
+        coordinator = Mock()
+        root_entities = []
+        root_device = None
+        for domain, entity in (("button", ToolboxCheckUpdatesButton(coordinator)), ("update", ToolboxBlueprintUpdate(coordinator))):
+            root_device = devices.async_get_or_create(
+                config_entry_id=entry.entry_id, config_subentry_id=None, **entity.device_info,
+            )
+            root_entities.append(entities.async_get_or_create(
+                domain, "hippos_toolbox", entity.unique_id, config_entry=entry,
+                device_id=root_device.id,
+            ).entity_id)
+        monitor_devices = set()
+        for domain, entity in (("sensor", ToolboxProblemsSensor(self.monitor)), ("sensor", ToolboxAlarmsSensor(self.monitor)), ("event", ToolboxProblemEvent(self.monitor))):
+            device = devices.async_get_or_create(
+                config_entry_id=entry.entry_id, config_subentry_id="monitor", **entity.device_info,
+            )
+            monitor_devices.add(device.id)
+            entities.async_get_or_create(
+                domain, "hippos_toolbox", entity.unique_id, config_entry=entry,
+                config_subentry_id="monitor", device_id=device.id,
+            )
+        await self.hass.async_block_till_done()
+        self.assertEqual(len(monitor_devices), 1)
+        self.assertNotIn(root_device.id, monitor_devices)
+        for entity_id in root_entities:
+            self.assertIsNotNone(entities.async_get(entity_id))
+        registered = [item for item in entities.entities.values() if item.platform == "hippos_toolbox"]
+        self.assertEqual(len(registered), 5)
+        self.assertEqual(sum(item.config_subentry_id == "monitor" for item in registered), 3)
+        await self.hass.async_stop()
 
     async def test_real_source_listener_starts_after_ha_and_is_removed_on_unload(self):
         self.source(value="off")

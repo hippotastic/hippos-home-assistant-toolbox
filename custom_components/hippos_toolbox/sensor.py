@@ -5,7 +5,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import ALARMS_UNIQUE_ID, DOMAIN, NAME, PROBLEMS_UNIQUE_ID
+from .const import ALARMS_UNIQUE_ID, DOMAIN, MONITORING_SUBENTRY_TYPE, PROBLEMS_UNIQUE_ID
 from .monitoring import _ProblemMonitor
 
 
@@ -30,8 +30,10 @@ class ToolboxProblemsSensor(SensorEntity):
     def __init__(self, monitor: _ProblemMonitor) -> None:
         self._monitor = monitor
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, DOMAIN)}, entry_type=DeviceEntryType.SERVICE,
-            name=NAME, manufacturer="Hippo",
+            # A device belongs to one subentry. Sharing the main toolbox device
+            # moves it between owners and HA removes the other owner's entities.
+            identifiers={(DOMAIN, MONITORING_SUBENTRY_TYPE)}, entry_type=DeviceEntryType.SERVICE,
+            name="Problem monitoring", manufacturer="Hippo",
         )
 
     async def async_added_to_hass(self) -> None:
@@ -60,8 +62,8 @@ class ToolboxAlarmsSensor(SensorEntity):
     def __init__(self, monitor: _ProblemMonitor) -> None:
         self._monitor = monitor
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, DOMAIN)}, entry_type=DeviceEntryType.SERVICE,
-            name=NAME, manufacturer="Hippo",
+            identifiers={(DOMAIN, MONITORING_SUBENTRY_TYPE)}, entry_type=DeviceEntryType.SERVICE,
+            name="Problem monitoring", manufacturer="Hippo",
         )
 
     async def async_added_to_hass(self) -> None:

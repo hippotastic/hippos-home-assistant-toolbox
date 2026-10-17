@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import DOMAIN, NAME, PROBLEM_CHANGES_UNIQUE_ID
+from .const import DOMAIN, MONITORING_SUBENTRY_TYPE, PROBLEM_CHANGES_UNIQUE_ID
 from .monitoring import _ProblemMonitor
 
 
@@ -32,8 +32,8 @@ class ToolboxProblemEvent(EventEntity):
     def __init__(self, monitor: _ProblemMonitor) -> None:
         self._monitor = monitor
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, DOMAIN)}, entry_type=DeviceEntryType.SERVICE,
-            name=NAME, manufacturer="Hippo",
+            identifiers={(DOMAIN, MONITORING_SUBENTRY_TYPE)}, entry_type=DeviceEntryType.SERVICE,
+            name="Problem monitoring", manufacturer="Hippo",
         )
 
     async def async_added_to_hass(self) -> None:
