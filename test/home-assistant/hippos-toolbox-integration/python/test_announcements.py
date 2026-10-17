@@ -11,12 +11,14 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 import wave
 
+# HA selects its validation backend at import time, before the fixture uses it.
+from homeassistant import loader
+
 import voluptuous as vol
 import yaml
 from packaging.requirements import Requirement
 from packaging.version import Version
 
-from homeassistant import loader
 from homeassistant.components import ffmpeg, tts
 from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.components.media_source.models import PlayMedia
@@ -203,11 +205,15 @@ class AnnouncementServiceTests(unittest.IsolatedAsyncioTestCase):
         self.loaded = SimpleNamespace(state=ConfigEntryState.LOADED)
         self.entries_patch = patch.object(self.hass.config_entries, "async_entries", return_value=[self.loaded])
         self.entries_patch.start()
+        await ar.async_get(self.hass).async_load(load_empty=True)
+        # Modern HA creates the device registry during bootstrap; entity loading
+        # depends on it. This isolated fixture must initialize it explicitly first.
+        self.hass.data[dr.DATA_REGISTRY] = dr.DeviceRegistry(self.hass)
+        if hasattr(dr.async_get(self.hass), "async_setup"):
+            dr.async_get(self.hass).async_setup()
+        await dr.async_get(self.hass).async_load(load_empty=True)
         self.registry = er.async_get(self.hass)
         await self.registry.async_load(load_empty=True)
-        await ar.async_get(self.hass).async_load(load_empty=True)
-        dr.async_get(self.hass).async_setup()
-        await dr.async_get(self.hass).async_load(load_empty=True)
         self.sonos = self.registry.async_get_or_create(
             "media_player", "sonos", "sonos", suggested_object_id="sonos", config_entry=None,
         ).entity_id
