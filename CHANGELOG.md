@@ -1,5 +1,12 @@
 # hippos-home-assistant-toolbox
 
+## 0.11.1
+
+### Patch Changes
+
+- bd2093a: Keep routine camera stream cleanup and controlled-stream resumption silent in the browser console. Continue reporting genuine recovery attempts and failures.
+- dca5697: Wait for Home Assistant's application and connection before initializing camera enhancements, including when its component registry changes during startup. This prevents early bundle loading from leaving enhancements inactive until another browser refresh.
+
 ## 0.11.0
 
 ### Minor Changes
