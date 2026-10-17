@@ -15,6 +15,7 @@ let settings
 let connection
 let generation = 0
 let settingsTimer
+let startupTimer
 
 function useNativeViewer(warn = false) {
 	// Invalidate callbacks before restoring hooks: late replies from an old
@@ -102,6 +103,7 @@ async function subscribe() {
 function dispose() {
 	if (disposed) return
 	disposed = true
+	clearTimeout(startupTimer)
 	useNativeViewer()
 	connection?.removeEventListener('disconnected', disconnected)
 	connection?.removeEventListener('ready', subscribe)
@@ -111,17 +113,24 @@ function dispose() {
 globalThis[INSTALL_KEY] = { dispose }
 
 async function connect() {
-	// Extra modules can run before the app entrypoint. HA initializes this
-	// promise before defining home-assistant; no auth token or new socket is needed.
-	if (!window.hassConnection) await customElements.whenDefined('home-assistant')
-	const { conn } = await window.hassConnection
-	if (disposed) return
-	connection = conn
-	connection.addEventListener('disconnected', disconnected)
-	connection.addEventListener('ready', subscribe)
-	if (connection.connected !== false) await subscribe()
+	try {
+		if (disposed) return
+		// HA loads extra modules in parallel with its app and replaces customElements
+		// during boot. whenDefined() on the earlier registry can wait forever. Check
+		// the current registry and connection locally; this makes no server requests.
+		if (!customElements.get('home-assistant') || !window.hassConnection) {
+			startupTimer = setTimeout(connect, 100)
+			return
+		}
+		const { conn } = await window.hassConnection
+		if (disposed) return
+		connection = conn
+		connection.addEventListener('disconnected', disconnected)
+		connection.addEventListener('ready', subscribe)
+		if (connection.connected !== false) await subscribe()
+	} catch {
+		if (!disposed) useNativeViewer(true)
+	}
 }
 
-connect().catch(() => {
-	if (!disposed) useNativeViewer(true)
-})
+connect()

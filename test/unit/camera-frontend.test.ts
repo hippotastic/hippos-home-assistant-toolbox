@@ -15,7 +15,7 @@ afterEach(() => {
 	for (const dom of windows.splice(0)) dom.window.close()
 })
 
-async function fixture({ deferOpen = false, deferSubscription = false, rejectSubscription = false, ios = false } = {}) {
+async function fixture({ deferOpen = false, deferSubscription = false, rejectSubscription = false, deferApp = false, deferConnection = false, ios = false } = {}) {
 	const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://ha.example/', runScripts: 'outside-only', pretendToBeVisual: true })
 	windows.push(dom)
 	const w = dom.window
@@ -82,7 +82,8 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 	}
 	const conn = new w.EventTarget()
 	Object.assign(conn, { subscribeMessage })
-	Object.assign(w, { hassConnection: Promise.resolve({ conn }) })
+	const finishConnection = () => Object.assign(w, { hassConnection: Promise.resolve({ conn }) })
+	if (!deferConnection) finishConnection()
 	class CameraStream extends w.HTMLElement {
 		stateObj = { entity_id: 'camera.front_door' }
 		_capabilities = { frontend_stream_types: [] as string[] }
@@ -141,6 +142,22 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 	const originalDialog = Dialog.prototype.showDialog
 	const originalAttach = w.HTMLElement.prototype.attachShadow
 	const originalDefine = w.customElements.define
+	const registry = w.customElements
+	const finishApp = () => {
+		Object.defineProperty(w, 'customElements', { configurable: true, value: registry })
+		registry.define('home-assistant', class extends w.HTMLElement {})
+	}
+	if (deferApp) {
+		// HA replaces the native registry during boot. A whenDefined promise on
+		// that old registry never resolves when the app uses its replacement.
+		Object.defineProperty(w, 'customElements', {
+			configurable: true,
+			value: {
+				get: registry.get.bind(registry),
+				whenDefined: (name: string) => (name === 'home-assistant' ? new Promise(() => undefined) : registry.whenDefined(name)),
+			},
+		})
+	} else finishApp()
 	const dispose = () => w.eval("globalThis[Symbol.for('hippo.toolbox.cameras')]?.dispose()") as void
 	const install = async () => {
 		w.eval(source)
@@ -183,6 +200,9 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 		},
 		finishOpen: () => finishOpen!(),
 		finishSubscription: () => finishSubscription!(),
+		finishApp,
+		finishConnection,
+		pendingTimeouts: () => timeouts.size,
 		install,
 		dispose,
 		counts: () => ({ subscriptions, unsubscribed }),
@@ -193,6 +213,38 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 }
 
 describe('camera frontend', () => {
+	test.each(['app', 'connection', 'both'] as const)('starts without another reload when %s becomes ready after the bundle', async (delayed) => {
+		const f = await fixture({ deferApp: delayed !== 'connection', deferConnection: delayed !== 'app' })
+		await f.tick(30000)
+		expect(f.counts().subscriptions).toBe(0)
+		expect(f.intervals.size).toBe(0)
+		expect(f.logs).toHaveLength(0)
+		if (delayed !== 'connection') f.finishApp()
+		if (delayed !== 'app') f.finishConnection()
+		await f.tick(100)
+		expect(f.counts().subscriptions).toBe(1)
+		await f.settings(true, true, true)
+		expect(f.intervals.size).toBe(1)
+		expect(f.w.HTMLElement.prototype.attachShadow).not.toBe(f.originalAttach)
+		expect(f.calls.filter((c) => c.type.endsWith('/open'))).toHaveLength(1)
+		expect(f.logs).toHaveLength(0)
+		f.dispose()
+	})
+
+	test('cancels pending startup when a newer bundle replaces it', async () => {
+		const f = await fixture({ deferApp: true, deferConnection: true })
+		f.dispose()
+		expect(f.pendingTimeouts()).toBe(0)
+		await f.install()
+		f.finishApp()
+		f.finishConnection()
+		await f.tick(100)
+		await f.settings(true, true, true)
+		expect(f.counts().subscriptions).toBe(1)
+		expect(f.intervals.size).toBe(1)
+		f.dispose()
+	})
+
 	test('ships one current bundle with no external module imports or CSS indentation', async () => {
 		expect(source).toBe(await buildCameraFrontend())
 		expect(source).not.toMatch(/\bimport\s*\(/)
