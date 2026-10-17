@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.12.3
+
+### Patch Changes
+
+- b1d4697: Expose each pending solution's confirmation deadline so dashboards can show a countdown using the configured recovery delay.
+
 ## 0.12.2
 
 ### Patch Changes
