@@ -1,6 +1,6 @@
 """Open problems maintained by the toolbox monitor."""
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -25,6 +25,7 @@ class ToolboxProblemsSensor(SensorEntity):
     _attr_translation_key = "problems"
     _attr_unique_id = PROBLEMS_UNIQUE_ID
     _attr_icon = "mdi:alert-circle-outline"
+    _attr_state_class = SensorStateClass.TOTAL
     _unrecorded_attributes = frozenset({"problems"})
 
     def __init__(self, monitor: _ProblemMonitor) -> None:
@@ -57,6 +58,7 @@ class ToolboxAlarmsSensor(SensorEntity):
     _attr_translation_key = "alarms"
     _attr_unique_id = ALARMS_UNIQUE_ID
     _attr_icon = "mdi:alarm-light-outline"
+    _attr_state_class = SensorStateClass.TOTAL
     _unrecorded_attributes = frozenset({"alarms"})
 
     def __init__(self, monitor: _ProblemMonitor) -> None:

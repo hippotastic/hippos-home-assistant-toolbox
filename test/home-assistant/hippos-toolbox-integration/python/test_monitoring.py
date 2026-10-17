@@ -402,6 +402,21 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sensor.native_value, 0)
             self.assertEqual(event.state_attributes["event_type"], "solved")
 
+    async def test_monitoring_counters_preserve_legacy_statistics_metadata(self):
+        from custom_components.hippos_toolbox.sensor import ToolboxProblemsSensor, ToolboxAlarmsSensor
+
+        # The replaced helpers recorded unitless totals; changing their metadata
+        # interrupts the existing statistics series and creates a repair issue
+        for sensor, entity_id in (
+            (ToolboxProblemsSensor(self.monitor), "sensor.aktuelle_warnungen"),
+            (ToolboxAlarmsSensor(self.monitor), "sensor.aktuelle_alarme"),
+        ):
+            with self.subTest(entity_id=entity_id):
+                self.assertEqual(sensor.native_value, 0)
+                self.assertEqual(sensor.capability_attributes["state_class"], "total")
+                self.assertIsNone(sensor.native_unit_of_measurement)
+                self.assertIsNone(sensor.last_reset)
+
     async def test_platforms_attach_entities_to_monitor_subentry_and_are_optional(self):
         from custom_components.hippos_toolbox import sensor, event
         entry = SimpleNamespace(runtime_data=SimpleNamespace(monitor=self.monitor, monitoring_subentries={"monitor": {}}))
