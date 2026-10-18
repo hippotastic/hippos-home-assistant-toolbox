@@ -15,6 +15,8 @@ from homeassistant.helpers.template import Template
 
 from .const import (
     CONF_ALARM_NOTIFICATIONS,
+    CONF_RESOLVED_ALARM_NOTIFICATIONS,
+    CONF_RESOLVED_WARNING_NOTIFICATIONS,
     CONF_WARNING_NOTIFICATIONS,
     MONITORING_NOTIFICATION_DEFAULTS,
 )
@@ -22,6 +24,19 @@ from .monitoring import _ProblemMonitor
 
 _LOGGER = logging.getLogger(__name__)
 _SEND_TIMEOUT = 15.0
+
+
+def _notification_settings(options: dict[str, Any], channel: str) -> dict[str, Any]:
+    """Resolve event templates for delivery and the configuration editors."""
+
+    saved = options.get(channel, {})
+    # Published shared templates must keep their resolved/event_type behavior until
+    # separate all-clear settings are saved. An explicit empty value still wins.
+    if channel == CONF_RESOLVED_WARNING_NOTIFICATIONS:
+        saved = {**options.get(CONF_WARNING_NOTIFICATIONS, {}), **saved}
+    elif channel == CONF_RESOLVED_ALARM_NOTIFICATIONS:
+        saved = {**options.get(CONF_ALARM_NOTIFICATIONS, {}), **saved}
+    return {field: saved.get(field, default) for field, default in MONITORING_NOTIFICATION_DEFAULTS[channel].items()}
 
 
 class _MonitoringNotifications:
@@ -41,19 +56,23 @@ class _MonitoringNotifications:
         if self._stopped:
             return
         channel = CONF_ALARM_NOTIFICATIONS if event_type.startswith("alarm_") else CONF_WARNING_NOTIFICATIONS
-        settings = self._options.get(channel, {})
+        settings = _notification_settings(self._options, channel)
         if not settings.get("recipients"):
             return
+        recipients = settings["recipients"]
         variables = {
             "problem": deepcopy(problem),
             "event_type": event_type,
             "resolved": event_type in {"solved", "alarm_solved"},
         }
+        if variables["resolved"]:
+            channel = CONF_RESOLVED_ALARM_NOTIFICATIONS if event_type == "alarm_solved" else CONF_RESOLVED_WARNING_NOTIFICATIONS
+            settings = _notification_settings(self._options, channel)
         rendered = {}
         for field in ("title", "message"):
             default = MONITORING_NOTIFICATION_DEFAULTS[channel][field]
             try:
-                rendered[field] = Template(settings.get(field, default), self._hass).async_render(
+                rendered[field] = Template(settings[field], self._hass).async_render(
                     variables, parse_result=False, strict=True,
                 ).strip()
                 if field == "message" and not rendered[field]:
@@ -63,7 +82,7 @@ class _MonitoringNotifications:
                 rendered[field] = Template(default, self._hass).async_render(variables, parse_result=False).strip()
 
         try:
-            data_template = settings.get("data", MONITORING_NOTIFICATION_DEFAULTS[channel]["data"])
+            data_template = settings["data"]
             notification_data = Template(data_template, self._hass).async_render(variables, strict=True) if data_template.strip() else {}
             if not isinstance(notification_data, dict):
                 raise ValueError("notification data must be a mapping")
@@ -73,13 +92,13 @@ class _MonitoringNotifications:
             return
 
         # Use HA's native group expansion and deduplicate across overlapping groups.
-        recipients: set[str] = set()
-        for selected in settings["recipients"]:
+        targets: set[str] = set()
+        for selected in recipients:
             try:
-                recipients.update(entity_id for entity_id in expand_entity_ids(self._hass, [selected]) if entity_id.startswith("notify."))
+                targets.update(entity_id for entity_id in expand_entity_ids(self._hass, [selected]) if entity_id.startswith("notify."))
             except RecursionError:
                 _LOGGER.warning("Cannot expand cyclic monitoring notification group %s", selected)
-        for entity_id in sorted(recipients):
+        for entity_id in sorted(targets):
             task = self._entry.async_create_background_task(
                 self._hass,
                 self._async_send(entity_id, rendered["title"], rendered["message"], notification_data),

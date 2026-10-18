@@ -76,24 +76,35 @@ MONITORING_LABEL_OPTIONS = (
     CONF_BELOW_10_LABELS,
 )
 CONF_WARNING_NOTIFICATIONS = "warning_notifications"
+CONF_RESOLVED_WARNING_NOTIFICATIONS = "resolved_warning_notifications"
 CONF_ALARM_NOTIFICATIONS = "alarm_notifications"
+CONF_RESOLVED_ALARM_NOTIFICATIONS = "resolved_alarm_notifications"
 MONITORING_NOTIFICATION_DEFAULTS = {
     CONF_WARNING_NOTIFICATIONS: {
         "recipients": [],
-        "title": "{{ 'Problem resolved' if resolved else 'Warning' }}",
+        "title": "Warning",
         "message": (
-            "{{ problem.name }}: {% if resolved %}problem resolved."
-            "{% elif problem.reason == 'unavailable' %}unavailable."
+            "{{ problem.name }}: {% if problem.reason == 'unavailable' %}unavailable."
             "{% elif problem.reason == 'battery_critical' %}critical battery."
             "{% elif problem.reason == 'below_threshold' %}below the configured threshold."
             "{% else %}problem detected.{% endif %}"
         ),
         "data": "{{ {} }}",
     },
+    CONF_RESOLVED_WARNING_NOTIFICATIONS: {
+        "title": "Problem resolved",
+        "message": "{{ problem.name }}: problem resolved.",
+        "data": "{{ {} }}",
+    },
     CONF_ALARM_NOTIFICATIONS: {
         "recipients": [],
-        "title": "{{ 'Alarm ended' if resolved else 'Alarm' }}",
-        "message": "{{ problem.name }}: {{ 'alarm ended.' if resolved else 'alarm detected.' }}",
+        "title": "Alarm",
+        "message": "{{ problem.name }}: alarm detected.",
+        "data": "{{ {} }}",
+    },
+    CONF_RESOLVED_ALARM_NOTIFICATIONS: {
+        "title": "Alarm ended",
+        "message": "{{ problem.name }}: alarm ended.",
         "data": "{{ {} }}",
     },
 }

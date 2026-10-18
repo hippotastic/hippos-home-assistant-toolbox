@@ -78,13 +78,13 @@ Alarm-label behavior takes precedence over **Ignored problems**. A selected alar
 
 ### 6. Choose recipients and messages
 
-In **Warnings**, select recipients for confirmed problems and their all-clears. In **Alarms**, select recipients for actual alarms and their endings. Either section accepts individual notification targets, multiple targets, or native notification groups; both sections may use the same targets.
+In **New warning**, select recipients for confirmed problems and their all-clears. In **New alarm**, select recipients for actual alarms and their endings. Either section accepts individual notification targets, multiple targets, or native notification groups; both sections may use the same targets.
 
 A recipient list left empty means **no delivery for that category**. Monitoring and dashboard entities still work. The integration does not choose a user or a phone automatically. The selector lists `notify` entities; older `notify.mobile_app_*` actions and YAML notification action groups are not shown.
 
-Both sections have a prefilled **Title template** and **Message template**. The defaults are English and distinguish a new issue from an all-clear. Leave them unchanged for a first setup, or translate and customize them locally. Saved recipients and templates are retained across updates. See [Customize messages](#customize-messages) for the available variables.
+Four collapsible sections group the templates by event: **New warning**, **Warning resolved**, **New alarm**, and **Alarm ended**. Each contains its own prefilled **Title template**, **Message template**, and optional **Companion app data template**. The all-clear sections use the recipients selected in their corresponding new-event section. The defaults are English; leave them unchanged for a first setup, or translate and customize them locally. See [Customize messages](#customize-messages) for the available variables.
 
-Alarm messages use normal notification delivery by default. For Companion app recipients, the optional **Companion app data template** can add platform-specific settings such as a dashboard URL or a critical notification sound. Use `resolved` to give an all-clear different settings from the original alarm. See [Companion app notification data](#companion-app-notification-data).
+Alarm messages use normal notification delivery by default. For Companion app recipients, the optional **Companion app data template** can add platform-specific settings such as a dashboard URL or a critical notification sound. Configure new alarms and their all-clears independently. See [Companion app notification data](#companion-app-notification-data).
 
 ### 7. Save and check the created entities
 
@@ -116,7 +116,9 @@ Adding recipients does not replay already confirmed problems. An unchanged open 
 
 ## Customize messages
 
-The title and message editors accept plain text or Home Assistant Jinja templates. You can translate the text, change displayed names, or choose wording based on the reason and whether the issue has been resolved. These edits stay in the local monitor configuration.
+The title and message editors accept plain text or Home Assistant Jinja templates. Each event has its own editors, so you can translate or customize its wording without testing `resolved` in every template. These edits stay in the local monitor configuration.
+
+Saved recipients and templates are retained across updates. When upgrading from shared templates, the existing title, message, and data templates also fill the corresponding all-clear editors until you save separate settings. Existing `resolved` conditions keep working; you can simplify each editor independently without losing custom wording or notification data.
 
 Available variables:
 
@@ -130,25 +132,37 @@ Available variables:
 | `event_type`                 | `triggered`, `solved`, `alarm_triggered`, or `alarm_solved`                 |
 | `resolved`                   | `true` for `solved` and `alarm_solved`; otherwise `false`                   |
 
-Standard HA template functions such as `states()` and `state_attr()` are available. Event variables use the incident snapshot; those functions read current state. For example, a custom warning message can be:
+Standard HA template functions such as `states()` and `state_attr()` are available. Event variables use the incident snapshot; those functions read current state. For example, the **New warning** message can be:
 
 ```jinja
-{{ problem.name }}: {{ 'Everything is clear.' if resolved else 'Please check this device.' }}
+{{ problem.name }}: Please check this device.
+```
+
+Its **Warning resolved** message can simply be:
+
+```jinja
+{{ problem.name }}: Everything is clear.
 ```
 
 Invalid template syntax and blank message text are rejected when saving. If a title or message template fails at runtime or renders an empty message, the affected field uses its default text and the error is logged. An empty title is allowed. Targets without title support still receive the message.
 
 ### Companion app notification data
 
-The optional **Companion app data template** accepts the same variables as the title and message. It must produce a mapping of [Companion app notification options](https://companion.home-assistant.io/docs/notifications/notifications-basic), such as `url` or `push`. Leave it empty or return `{{ {} }}` to use normal notification delivery. Existing configurations keep that default.
+Each optional **Companion app data template** accepts the same variables as the title and message. It must produce a mapping of [Companion app notification options](https://companion.home-assistant.io/docs/notifications/notifications-basic), such as `url` or `push`. Leave it empty or return `{{ {} }}` to use normal notification delivery.
 
-For example, this template opens a dashboard when tapped and requests an iOS critical sound for a new alarm, while sending its all-clear normally:
+For example, the **New alarm** data template can open a dashboard when tapped and request an iOS critical sound:
 
 ```jinja
-{{ {'url': '/lovelace/alerts'} if resolved else {
+{{ {
   'url': '/lovelace/alerts',
   'push': {'sound': {'name': 'default', 'critical': 1, 'volume': 1}}
 } }}
+```
+
+The **Alarm ended** data template can link to the same dashboard without a critical sound:
+
+```jinja
+{{ {'url': '/lovelace/alerts'} }}
 ```
 
 Replace the URL with a view from your installation. Critical sounds also require the corresponding permission in the phone's notification settings. Non-empty data requires Companion app recipients, including the members of any selected group. Other notification targets are logged and skipped for that event. If the data template fails or produces something other than a mapping, the event is not sent and an error is logged; it does not fall back to an ordinary push that might silently lose critical settings.
@@ -252,7 +266,7 @@ If another system already sends problem or alarm notifications:
 1. Check that source sensors use `unavailable` whenever they cannot reliably evaluate a problem. Keep existing notifications active during preparation.
 2. Add the monitor and select the appropriate labels. Leave its notification recipients empty while the new monitor builds its initial baseline.
 3. Wait until the currently active problems have `triggered_since` in the new sensor. This can take the battery or alarm availability delay. The new monitor's initial events do not notify anyone on their own.
-4. Reconfigure the monitor to select **Warnings** and **Alarms** recipients and adjust their local templates. Disable the previous notification automations when enabling built-in delivery to avoid duplicate messages. Past events are not replayed. Verify one new problem and one individual solution.
+4. Reconfigure the monitor to select **New warning** and **New alarm** recipients and adjust the templates for new and resolved events. Disable the previous notification automations when enabling built-in delivery to avoid duplicate messages. Past events are not replayed. Verify one new problem and one individual solution.
 5. Update dashboard references to **Open problems** and **Active alarms**. If custom automations are still required, use **Problem changes** and leave the corresponding built-in recipient list empty.
 6. Check all references to the previous system before removing components that are no longer needed. Avoid leaving both notification systems active.
 

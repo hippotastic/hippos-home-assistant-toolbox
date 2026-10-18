@@ -84,8 +84,7 @@
           },
           "sections": {
             "warning_notifications": {
-              "name": "Warnings",
-              "description": "Notifications and all-clears use these recipients. Leave recipients empty to disable delivery.",
+              "name": "New warning",
               "data": {
                 "recipients": "Recipients",
                 "title": "Title template",
@@ -93,15 +92,28 @@
                 "data": "Companion app data template"
               },
               "data_description": {
-                "recipients": "Select notification targets or notification groups.",
-                "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+                "recipients": "Recipients for new warnings and their all-clears. Leave empty to disable delivery.",
+                "title": "Plain text or a template. Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+              }
+            },
+            "resolved_warning_notifications": {
+              "name": "Warning resolved",
+              "description": "Uses the recipients selected under New warning.",
+              "data": {
+                "title": "Title template",
+                "message": "Message template",
+                "data": "Companion app data template"
+              },
+              "data_description": {
+                "title": "Plain text or a template. Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             },
             "alarm_notifications": {
-              "name": "Alarms",
-              "description": "Notifications and all-clears use these recipients. Leave recipients empty to disable delivery.",
+              "name": "New alarm",
               "data": {
                 "recipients": "Recipients",
                 "title": "Title template",
@@ -109,10 +121,24 @@
                 "data": "Companion app data template"
               },
               "data_description": {
-                "recipients": "Select notification targets or notification groups.",
-                "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+                "recipients": "Recipients for new alarms and their all-clears. Leave empty to disable delivery.",
+                "title": "Plain text or a template. Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+              }
+            },
+            "resolved_alarm_notifications": {
+              "name": "Alarm ended",
+              "description": "Uses the recipients selected under New alarm.",
+              "data": {
+                "title": "Title template",
+                "message": "Message template",
+                "data": "Companion app data template"
+              },
+              "data_description": {
+                "title": "Plain text or a template. Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             }
           }
@@ -146,8 +172,7 @@
           },
           "sections": {
             "warning_notifications": {
-              "name": "Warnings",
-              "description": "Notifications and all-clears use these recipients. Leave recipients empty to disable delivery.",
+              "name": "New warning",
               "data": {
                 "recipients": "Recipients",
                 "title": "Title template",
@@ -155,15 +180,28 @@
                 "data": "Companion app data template"
               },
               "data_description": {
-                "recipients": "Select notification targets or notification groups.",
-                "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+                "recipients": "Recipients for new warnings and their all-clears. Leave empty to disable delivery.",
+                "title": "Plain text or a template. Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+              }
+            },
+            "resolved_warning_notifications": {
+              "name": "Warning resolved",
+              "description": "Uses the recipients selected under New warning.",
+              "data": {
+                "title": "Title template",
+                "message": "Message template",
+                "data": "Companion app data template"
+              },
+              "data_description": {
+                "title": "Plain text or a template. Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             },
             "alarm_notifications": {
-              "name": "Alarms",
-              "description": "Notifications and all-clears use these recipients. Leave recipients empty to disable delivery.",
+              "name": "New alarm",
               "data": {
                 "recipients": "Recipients",
                 "title": "Title template",
@@ -171,10 +209,24 @@
                 "data": "Companion app data template"
               },
               "data_description": {
-                "recipients": "Select notification targets or notification groups.",
-                "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+                "recipients": "Recipients for new alarms and their all-clears. Leave empty to disable delivery.",
+                "title": "Plain text or a template. Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+              }
+            },
+            "resolved_alarm_notifications": {
+              "name": "Alarm ended",
+              "description": "Uses the recipients selected under New alarm.",
+              "data": {
+                "title": "Title template",
+                "message": "Message template",
+                "data": "Companion app data template"
+              },
+              "data_description": {
+                "title": "Plain text or a template. Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             }
           }

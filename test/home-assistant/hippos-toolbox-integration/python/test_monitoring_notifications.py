@@ -18,6 +18,7 @@ from custom_components.hippos_toolbox import monitoring_notifications
 import custom_components.hippos_toolbox as toolbox
 from custom_components.hippos_toolbox.const import (
     CONF_ALARM_NOTIFICATIONS, CONF_WARNING_NOTIFICATIONS,
+    CONF_RESOLVED_ALARM_NOTIFICATIONS, CONF_RESOLVED_WARNING_NOTIFICATIONS,
     MONITORING_NOTIFICATION_DEFAULTS,
 )
 from custom_components.hippos_toolbox.monitoring import _Observation, _ProblemMonitor
@@ -103,6 +104,50 @@ class MonitoringNotificationTests(unittest.IsolatedAsyncioTestCase):
             "Fixture sensor: below the configured threshold.",
         ])
 
+    async def test_four_events_use_independent_templates_without_resolved_conditions(self):
+        self.options[CONF_WARNING_NOTIFICATIONS]["recipients"] = ["notify.fixture_a"]
+        self.options[CONF_ALARM_NOTIFICATIONS]["recipients"] = ["notify.fixture_a"]
+        for event, channel in (
+            ("triggered", CONF_WARNING_NOTIFICATIONS), ("solved", CONF_RESOLVED_WARNING_NOTIFICATIONS),
+            ("alarm_triggered", CONF_ALARM_NOTIFICATIONS), ("alarm_solved", CONF_RESOLVED_ALARM_NOTIFICATIONS),
+        ):
+            self.options[channel].update({"title": event, "message": f"{event}: {{{{ problem.name }}}}"})
+            self.emit(event, self.problem)
+        await self._drain()
+        self.assertEqual([(call["title"], call["message"]) for call in self.delivered], [
+            (event, f"{event}: Fixture sensor") for event in ("triggered", "solved", "alarm_triggered", "alarm_solved")
+        ])
+
+    async def test_published_shared_templates_keep_text_variables_and_data_for_all_events(self):
+        self.options.clear()
+        for channel in (CONF_WARNING_NOTIFICATIONS, CONF_ALARM_NOTIFICATIONS):
+            self.options[channel] = {
+                "recipients": ["notify.fixture_a"],
+                "title": "{{ 'Done' if resolved else 'Check' }}",
+                "message": "{{ problem.name }} / {{ event_type }}",
+                "data": "{{ {'url': '/lovelace/alerts'} if resolved else {'push': {'sound': {'critical': 1}}} }}",
+            }
+        saved = deepcopy(self.options)
+        platform = SimpleNamespace(async_call_action_from_config=AsyncMock())
+        registry = SimpleNamespace(async_get=Mock(return_value=SimpleNamespace(platform="mobile_app", device_id="fixture_device")))
+        with (
+            patch.object(monitoring_notifications.er, "async_get", return_value=registry),
+            patch.object(monitoring_notifications, "async_get_device_automation_platform", new_callable=AsyncMock, return_value=platform),
+        ):
+            for event in ("triggered", "solved", "alarm_triggered", "alarm_solved"):
+                self.emit(event, self.problem)
+            await self._drain()
+        calls = [call.args[1] for call in platform.async_call_action_from_config.call_args_list]
+        self.assertEqual([call["title"] for call in calls], ["Check", "Done", "Check", "Done"])
+        self.assertEqual([call["message"] for call in calls], [
+            f"Fixture sensor / {event}" for event in ("triggered", "solved", "alarm_triggered", "alarm_solved")
+        ])
+        self.assertEqual([call["data"] for call in calls], [
+            {"push": {"sound": {"critical": 1}}}, {"url": "/lovelace/alerts"},
+            {"push": {"sound": {"critical": 1}}}, {"url": "/lovelace/alerts"},
+        ])
+        self.assertEqual(self.options, saved)
+
     async def test_nested_native_groups_are_expanded_and_overlapping_recipients_deduplicated(self):
         groups = get_group_entities(self.hass)
         for entity_id, members in (
@@ -176,10 +221,10 @@ class MonitoringNotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call["title"] for call in self.delivered if call["entity_id"] == "notify.fixture_a"], ["Warning", "Problem resolved"])
 
     async def test_custom_templates_use_event_snapshot_and_remain_local(self):
-        settings = self.options[CONF_WARNING_NOTIFICATIONS]
+        self.options[CONF_WARNING_NOTIFICATIONS]["recipients"] = ["notify.fixture_a"]
+        settings = self.options[CONF_RESOLVED_WARNING_NOTIFICATIONS]
         settings.update({
-            "recipients": ["notify.fixture_a"],
-            "title": "{{ 'Resolved' if resolved else 'Check' }}: {{ problem.name | replace('Fixture', 'Example') }}",
+            "title": "Resolved: {{ problem.name | replace('Fixture', 'Example') }}",
             "message": "{{ event_type }} / {{ problem.entity_id }} / {{ problem.reason }} / {{ states('sensor.fixture_value') }}",
         })
         saved = deepcopy(settings)
@@ -192,19 +237,28 @@ class MonitoringNotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(settings, saved)
 
     async def test_runtime_template_errors_and_empty_messages_use_default_text(self):
-        settings = self.options[CONF_WARNING_NOTIFICATIONS]
-        settings.update({"recipients": ["notify.fixture_a"], "title": "{{ missing.attribute }}", "message": "{{ 1 / 0 }}"})
-        with self.assertLogs(monitoring_notifications._LOGGER, level="WARNING"):
-            self.emit("triggered", self.problem)
-        await self._drain()
-        self.assertEqual(self.delivered[0]["title"], "Warning")
-        self.assertEqual(self.delivered[0]["message"], "Fixture sensor: problem detected.")
-        settings.update({"title": "", "message": "{{ '' }}"})
-        with self.assertLogs(monitoring_notifications._LOGGER, level="WARNING"):
-            self.emit("solved", self.problem)
-        await self._drain()
-        self.assertNotIn("title", self.delivered[1])
-        self.assertEqual(self.delivered[1]["message"], "Fixture sensor: problem resolved.")
+        self.options[CONF_WARNING_NOTIFICATIONS]["recipients"] = ["notify.fixture_a"]
+        self.options[CONF_ALARM_NOTIFICATIONS]["recipients"] = ["notify.fixture_a"]
+        for event, channel, title, message in (
+            ("triggered", CONF_WARNING_NOTIFICATIONS, "Warning", "Fixture sensor: problem detected."),
+            ("solved", CONF_RESOLVED_WARNING_NOTIFICATIONS, "Problem resolved", "Fixture sensor: problem resolved."),
+            ("alarm_triggered", CONF_ALARM_NOTIFICATIONS, "Alarm", "Fixture sensor: alarm detected."),
+            ("alarm_solved", CONF_RESOLVED_ALARM_NOTIFICATIONS, "Alarm ended", "Fixture sensor: alarm ended."),
+        ):
+            with self.subTest(event=event):
+                settings = self.options[channel]
+                settings.update({"title": "{{ missing.attribute }}", "message": "{{ 1 / 0 }}"})
+                with self.assertLogs(monitoring_notifications._LOGGER, level="WARNING"):
+                    self.emit(event, self.problem)
+                await self._drain()
+                self.assertEqual(self.delivered[-1]["title"], title)
+                self.assertEqual(self.delivered[-1]["message"], message)
+                settings.update({"title": "", "message": "{{ '' }}"})
+                with self.assertLogs(monitoring_notifications._LOGGER, level="WARNING"):
+                    self.emit(event, self.problem)
+                await self._drain()
+                self.assertNotIn("title", self.delivered[-1])
+                self.assertEqual(self.delivered[-1]["message"], message)
 
     async def test_targets_without_title_support_receive_the_message(self):
         self.options[CONF_ALARM_NOTIFICATIONS]["recipients"] = ["notify.fixture_a"]
@@ -218,12 +272,14 @@ class MonitoringNotificationTests(unittest.IsolatedAsyncioTestCase):
         settings = self.options[CONF_ALARM_NOTIFICATIONS]
         settings.update({
             "recipients": ["notify.fixture_a"],
-            "title": "{{ 'Ended' if resolved else 'Alarm {{ literal }}' }}",
+            "title": "{{ 'Alarm {{ literal }}' }}",
             "message": "{{ problem.name }} / {{ event_type }}",
-            "data": (
-                "{{ {'url': '/lovelace/alerts', 'entity_id': problem.entity_id} if resolved else "
-                "{'url': '/lovelace/alerts', 'push': {'sound': {'name': 'default', 'critical': 1, 'volume': 1}}} }}"
-            ),
+            "data": "{{ {'url': '/lovelace/alerts', 'push': {'sound': {'name': 'default', 'critical': 1, 'volume': 1}}} }}",
+        })
+        self.options[CONF_RESOLVED_ALARM_NOTIFICATIONS].update({
+            "title": "Ended",
+            "message": "{{ problem.name }} / {{ event_type }}",
+            "data": "{{ {'url': '/lovelace/alerts', 'entity_id': problem.entity_id} }}",
         })
         registry = SimpleNamespace(async_get=Mock(return_value=SimpleNamespace(platform="mobile_app", device_id="fixture_device")))
         calls = []
@@ -251,14 +307,15 @@ class MonitoringNotificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_data_does_not_silently_fall_back_to_ordinary_delivery(self):
         settings = self.options[CONF_ALARM_NOTIFICATIONS]
         settings["recipients"] = ["notify.fixture_a"]
-        for template in ("{{ missing.attribute }}", "{{ 1 / 0 }}", "{{ [] }}", "{{ none }}", "{{ 12 }}", "plain text"):
-            with self.subTest(template=template), self.assertLogs(monitoring_notifications._LOGGER, level="ERROR"):
-                settings["data"] = template
-                self.emit("alarm_triggered", self.problem)
-                await self._drain()
-            self.assertEqual(self.attempts, [])
+        for event, channel in (("alarm_triggered", CONF_ALARM_NOTIFICATIONS), ("alarm_solved", CONF_RESOLVED_ALARM_NOTIFICATIONS)):
+            for template in ("{{ missing.attribute }}", "{{ 1 / 0 }}", "{{ [] }}", "{{ none }}", "{{ 12 }}", "plain text"):
+                with self.subTest(event=event, template=template), self.assertLogs(monitoring_notifications._LOGGER, level="ERROR"):
+                    self.options[channel]["data"] = template
+                    self.emit(event, self.problem)
+                    await self._drain()
+                self.assertEqual(self.attempts, [])
         for template in ("", "  ", "{{ {} }}"):
-            settings["data"] = template
+            self.options[CONF_RESOLVED_ALARM_NOTIFICATIONS]["data"] = template
             self.emit("alarm_solved", self.problem)
             await self._drain()
         self.assertEqual(len(self.delivered), 3)
@@ -301,6 +358,7 @@ class MonitoringNotificationTests(unittest.IsolatedAsyncioTestCase):
             "recipients": ["notify.fixture_a", "notify.fixture_b"],
             "data": "{{ {'url': '/lovelace/alerts', 'resolved': resolved} }}",
         })
+        self.options[CONF_RESOLVED_ALARM_NOTIFICATIONS]["data"] = "{{ {'url': '/lovelace/alerts', 'resolved': resolved} }}"
         registrations = {f"notify.fixture_{name}": SimpleNamespace(platform="mobile_app", device_id=f"fixture_device_{name}") for name in ("a", "b")}
         gate = asyncio.Event()
         finished_b = asyncio.Event()
@@ -335,6 +393,7 @@ class MonitoringNotificationTests(unittest.IsolatedAsyncioTestCase):
             "recipients": ["notify.fixture_group", "notify.fixture_a"],
             "data": "{{ {'url': '/lovelace/alerts'} }}",
         })
+        self.options[CONF_RESOLVED_WARNING_NOTIFICATIONS]["data"] = "{{ {'url': '/lovelace/alerts'} }}"
         registrations = {f"notify.fixture_{name}": SimpleNamespace(platform="mobile_app", device_id=f"fixture_device_{name}") for name in ("a", "b")}
         platform = SimpleNamespace(async_call_action_from_config=AsyncMock())
         with (

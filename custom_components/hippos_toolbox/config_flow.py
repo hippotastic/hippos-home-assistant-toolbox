@@ -30,6 +30,7 @@ from .const import (
     UPDATE_CHANNEL_STABLE,
     normalize_update_channel,
 )
+from .monitoring_notifications import _notification_settings
 
 
 class ToolboxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -224,10 +225,10 @@ class MonitoringSubentryFlow(config_entries.ConfigSubentryFlow):
             return self.async_abort(reason="already_configured")
         errors = {}
         if user_input is not None:
-            for key, defaults in MONITORING_NOTIFICATION_DEFAULTS.items():
-                settings = user_input.get(key, {})
+            for key in MONITORING_NOTIFICATION_DEFAULTS:
+                settings = _notification_settings(user_input, key)
                 for field in ("title", "message", "data"):
-                    text = settings.get(field, defaults[field])
+                    text = settings[field]
                     try:
                         Template(text, self.hass).ensure_valid()
                         if field == "message" and not text.strip():
@@ -252,15 +253,16 @@ class MonitoringSubentryFlow(config_entries.ConfigSubentryFlow):
             fields[vol.Optional(key, default=options.get(key, []))] = selector.LabelSelector(
                 selector.LabelSelectorConfig(multiple=True)
             )
-        for key, defaults in MONITORING_NOTIFICATION_DEFAULTS.items():
-            settings = options.get(key, {})
-            # HA uses a section default directly, without initializing its child fields.
-            fields[vol.Required(key, default={**defaults, **settings})] = section(vol.Schema({
-                vol.Optional("recipients", default=settings.get("recipients", [])): selector.EntitySelector(
+        for key in MONITORING_NOTIFICATION_DEFAULTS:
+            settings = _notification_settings(options, key)
+            notification_fields = {}
+            if "recipients" in settings:
+                notification_fields[vol.Optional("recipients", default=settings["recipients"])] = selector.EntitySelector(
                     selector.EntitySelectorConfig(filter={"domain": "notify"}, multiple=True)
-                ),
-                vol.Required("title", default=settings.get("title", defaults["title"])): selector.TemplateSelector(),
-                vol.Required("message", default=settings.get("message", defaults["message"])): selector.TemplateSelector(),
-                vol.Optional("data", default=settings.get("data", defaults["data"])): selector.TemplateSelector(),
-            }))
+                )
+            notification_fields[vol.Required("title", default=settings["title"])] = selector.TemplateSelector()
+            notification_fields[vol.Required("message", default=settings["message"])] = selector.TemplateSelector()
+            notification_fields[vol.Optional("data", default=settings["data"])] = selector.TemplateSelector()
+            # HA uses a section default directly, without initializing its child fields.
+            fields[vol.Required(key, default=settings)] = section(vol.Schema(notification_fields), {"collapsed": True})
         return self.async_show_form(step_id=step_id, data_schema=vol.Schema(fields), errors=errors)

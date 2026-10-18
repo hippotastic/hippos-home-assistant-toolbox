@@ -31,6 +31,8 @@ from custom_components.hippos_toolbox.const import (
     MONITORING_NOTIFICATION_DEFAULTS,
     CONF_WARNING_NOTIFICATIONS,
     CONF_ALARM_NOTIFICATIONS,
+    CONF_RESOLVED_WARNING_NOTIFICATIONS,
+    CONF_RESOLVED_ALARM_NOTIFICATIONS,
     MONITORING_SUBENTRY_TYPE,
     CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
@@ -304,23 +306,28 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
         }
         self.assertEqual(section_defaults, MONITORING_NOTIFICATION_DEFAULTS)
         sections = {key.schema: value for key, value in result["data_schema"].schema.items()}
-        for channel in (CONF_WARNING_NOTIFICATIONS, CONF_ALARM_NOTIFICATIONS):
+        for channel in MONITORING_NOTIFICATION_DEFAULTS:
             fields = {key.schema: value for key, value in sections[channel].schema.schema.items()}
-            self.assertIsInstance(fields["recipients"], selector.EntitySelector)
-            self.assertTrue(fields["recipients"].config["multiple"])
-            self.assertEqual(fields["recipients"].config["filter"], [{"domain": ["notify"]}])
+            if channel in (CONF_WARNING_NOTIFICATIONS, CONF_ALARM_NOTIFICATIONS):
+                self.assertIsInstance(fields["recipients"], selector.EntitySelector)
+                self.assertTrue(fields["recipients"].config["multiple"])
+                self.assertEqual(fields["recipients"].config["filter"], [{"domain": ["notify"]}])
+            else:
+                self.assertNotIn("recipients", fields)
             self.assertIsInstance(fields["title"], selector.TemplateSelector)
             self.assertIsInstance(fields["message"], selector.TemplateSelector)
             self.assertIsInstance(fields["data"], selector.TemplateSelector)
 
     async def test_rejects_invalid_templates_and_empty_messages_without_losing_edits(self):
-        for channel in (CONF_WARNING_NOTIFICATIONS, CONF_ALARM_NOTIFICATIONS):
+        for channel in MONITORING_NOTIFICATION_DEFAULTS:
             for field, text, error in (("title", "{%", "invalid_template"), ("message", "{{", "invalid_template"), ("data", "{{", "invalid_template"), ("message", "  ", "empty_message")):
                 with self.subTest(channel=channel, field=field, error=error):
                     flow = MonitoringSubentryFlow()
                     flow.handler = ("test-entry", MONITORING_SUBENTRY_TYPE)
                     flow.hass = self.hass
-                    submitted = {channel: {"recipients": ["notify.fixture_target"], field: text}}
+                    submitted = {channel: {field: text}}
+                    if "recipients" in MONITORING_NOTIFICATION_DEFAULTS[channel]:
+                        submitted[channel]["recipients"] = ["notify.fixture_target"]
                     with patch.object(flow, "_get_entry", return_value=SimpleNamespace(subentries={})):
                         result = await flow.async_step_user(submitted)
                     self.assertEqual(result["type"], FlowResultType.FORM)
@@ -335,7 +342,8 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
                     sections = {key.schema: value for key, value in result["data_schema"].schema.items()}
                     defaults = {key.schema: key.default() for key in sections[channel].schema.schema}
                     self.assertEqual(defaults[field], text)
-                    self.assertEqual(defaults["recipients"], ["notify.fixture_target"])
+                    if "recipients" in submitted[channel]:
+                        self.assertEqual(defaults["recipients"], ["notify.fixture_target"])
 
     async def test_reconfigure_keeps_local_notification_templates_and_recipients(self):
         saved = {
@@ -368,9 +376,48 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             for channel in (CONF_WARNING_NOTIFICATIONS, CONF_ALARM_NOTIFICATIONS):
                 self.assertEqual(defaults[channel], {"data": "{{ {} }}", **saved[channel]})
                 self.assertEqual(section_defaults[channel], defaults[channel])
+            for channel, source in (
+                (CONF_RESOLVED_WARNING_NOTIFICATIONS, CONF_WARNING_NOTIFICATIONS),
+                (CONF_RESOLVED_ALARM_NOTIFICATIONS, CONF_ALARM_NOTIFICATIONS),
+            ):
+                self.assertEqual(defaults[channel], {
+                    "title": saved[source]["title"], "message": saved[source]["message"],
+                    "data": saved[source].get("data", "{{ {} }}"),
+                })
+                self.assertEqual(section_defaults[channel], defaults[channel])
             result = await flow.async_step_reconfigure(defaults)
         self.assertEqual(result["type"], FlowResultType.ABORT)
         self.assertEqual(update.call_args.kwargs["data"], defaults)
+        self.assertEqual(dict(current.data), saved)
+
+    async def test_reconfigure_keeps_four_independent_sections_and_explicit_empty_values(self):
+        saved = {
+            channel: {
+                **defaults, "title": "", "message": f"Local {channel}: {{{{ problem.name }}}}", "data": "",
+            }
+            for channel, defaults in MONITORING_NOTIFICATION_DEFAULTS.items()
+        }
+        saved[CONF_WARNING_NOTIFICATIONS]["recipients"] = ["notify.fixture_a"]
+        saved[CONF_ALARM_NOTIFICATIONS]["recipients"] = ["notify.fixture_b"]
+        saved[CONF_WARNING_NOTIFICATIONS]["data"] = "{{ {'url': '/lovelace/warnings'} }}"
+        saved[CONF_ALARM_NOTIFICATIONS]["title"] = "New alarm"
+        current = config_entries.ConfigSubentry(
+            data=MappingProxyType(saved), subentry_id="monitor", subentry_type=MONITORING_SUBENTRY_TYPE,
+            title="Problem monitoring", unique_id=None,
+        )
+        flow = MonitoringSubentryFlow()
+        flow.handler = ("test-entry", MONITORING_SUBENTRY_TYPE)
+        flow.hass = self.hass
+        with (
+            patch.object(flow, "_get_entry", return_value=SimpleNamespace(subentries={"monitor": current})),
+            patch.object(flow, "_get_reconfigure_subentry", return_value=current),
+        ):
+            result = await flow.async_step_reconfigure()
+        section_defaults = {
+            key.schema: key.default() for key in result["data_schema"].schema
+            if key.schema in MONITORING_NOTIFICATION_DEFAULTS
+        }
+        self.assertEqual(section_defaults, saved)
         self.assertEqual(dict(current.data), saved)
 
     async def test_reconfigure_preserves_subentry_and_storage_identity(self):
