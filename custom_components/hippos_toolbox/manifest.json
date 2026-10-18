@@ -17,6 +17,7 @@
     "http",
     "media_player",
     "media_source",
+    "notify",
     "tts"
   ],
   "documentation": "https://github.com/hippotastic/hippos-home-assistant-toolbox",

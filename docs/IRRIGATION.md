@@ -1,18 +1,32 @@
 # Irrigation Blueprints
 
+**What is this?** Two cooperating automation blueprints for watering several garden zones according to temperature, rain, and optional soil moisture. They calculate a watering duration per zone and run the valves one at a time at your chosen start times. Longer watering requirements can be split across several runs, with an optional master pump controlled alongside the valves.
+
+**When should you use this?** When you want the garden to get enough water without having to keep changing timers after hot days or rain.
+
+**Why is this included in the toolbox?** A fixed schedule cannot account for changing watering needs, and independent zone automations still need a shared plan so valves do not run together. Building that plan yourself means tracking watering already completed, fitting remaining demand into later start times, responding to new rain, and coordinating the pump and valves. Those decisions need to stay consistent when a run is already in progress.
+
+## Before you start
+
+Install the [toolbox integration](../README.md#installation) to make both blueprints available, or import them manually. You need valve switches, a sensor for rain duration over the last 24 hours, and a sensor for the maximum temperature over that period. Rain must be a percentage of time with detected rain, not precipitation in millimetres. Temperature must be in degrees Celsius. Soil moisture and a master pump are optional.
+
+## How the two blueprints work together
+
 The irrigation system consists of two cooperating Home Assistant blueprints:
 
-- [Irrigation Zone Calculation](blueprints/automation/irrigation_zone_calculation.yaml) calculates one zone's total watering demand.
-- [Irrigation Scheduler](blueprints/automation/irrigation_scheduler.yaml) turns the demands of all zones into sequential valve runs.
+- [Irrigation Zone Calculation](../blueprints/automation/irrigation_zone_calculation.yaml) calculates one zone's total watering demand.
+- [Irrigation Scheduler](../blueprints/automation/irrigation_scheduler.yaml) turns the demands of all zones into sequential valve runs.
 
 ## Setup
 
 1. Under **Settings > Devices & services > Helpers**, create one dedicated **Text** helper per zone and set its maximum length to **255** characters.
-2. Create one **Irrigation Zone Calculation** automation per valve. Assign a different helper to every zone; do not edit or reuse these helpers manually.
+2. Under **Settings > Automations & scenes**, create an automation from **Hippo's Irrigation Zone Calculation** for each valve. Assign a different helper to every zone; do not edit or reuse these helpers manually.
 3. Select a History Statistics sensor for rain duration and a sensor reporting the maximum temperature of the last 24 hours. The rain sensor must report the percentage of the last 24 hours during which rain was detected, not precipitation in millimetres. Temperature must be in degrees Celsius.
 4. Optionally select a soil-moisture sensor reporting 0–100% and configure its target value.
-5. Create one **Irrigation Scheduler** automation. Select every zone helper exactly once and arrange them in the desired watering order. Zones run one at a time.
+5. Create one automation from **Hippo's Irrigation Scheduler**. Select every zone helper exactly once and arrange them in the desired watering order. Zones run one at a time.
 6. Configure the primary daily start time and, if limited runs may need another opportunity, an additional daily start time. A time earlier than the primary time means the following morning.
+
+The toolbox installs the blueprint files but does not create these automation instances. After saving them, review each valve's Activity for calculated demand and scheduling messages, then check the first scheduled run. The Text helpers are shared state between calculation and scheduling; leave their contents to the blueprints.
 
 ## How Zones are Scheduled
 
@@ -35,12 +49,12 @@ Each zone calculates its total watering demand like this:
 
 The maximum temperature of the last 24 hours produces this factor:
 
-| Maximum temperature | Factor applied to reference runtime |
-| ---: | ---: |
-| Below 12 °C | 0% |
-| 12–25 °C | 70% |
-| Above 25 °C and below 35 °C | Linear increase from 70% to 200% |
-| 35 °C or higher | 200% |
+|         Maximum temperature | Factor applied to reference runtime |
+| --------------------------: | ----------------------------------: |
+|                 Below 12 °C |                                  0% |
+|                    12–25 °C |                                 70% |
+| Above 25 °C and below 35 °C |    Linear increase from 70% to 200% |
+|             35 °C or higher |                                200% |
 
 The factor is rounded to two decimal places. An unavailable temperature sensor falls back to 20 °C and therefore 70%.
 

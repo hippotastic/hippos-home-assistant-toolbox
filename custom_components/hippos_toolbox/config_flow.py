@@ -8,8 +8,10 @@ from homeassistant import config_entries
 from homeassistant.components.camera import DOMAIN as CAMERA_DOMAIN
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
-from homeassistant.helpers import entity_registry as er, label_registry as lr, selector
+from homeassistant.data_entry_flow import FlowResult, section
+from homeassistant.exceptions import TemplateError
+from homeassistant.helpers import entity_registry as er, selector
+from homeassistant.helpers.template import Template
 
 from .const import (
     CAMERA_FRONTEND_OPTIONS,
@@ -18,8 +20,10 @@ from .const import (
     DEFAULT_UPDATE_CHANNEL,
     DOMAIN,
     NAME,
+    MONITORING_AUTOMATIC_OPTIONS,
     MONITORING_DELAY_DEFAULTS,
-    MONITORING_LABEL_DEFAULTS,
+    MONITORING_LABEL_OPTIONS,
+    MONITORING_NOTIFICATION_DEFAULTS,
     MONITORING_SUBENTRY_TYPE,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
     UPDATE_CHANNEL_DEVELOPMENT,
@@ -218,22 +222,43 @@ class MonitoringSubentryFlow(config_entries.ConfigSubentryFlow):
         current = self._get_reconfigure_subentry() if step_id == "reconfigure" else None
         if current is None and any(item.subentry_type == MONITORING_SUBENTRY_TYPE for item in entry.subentries.values()):
             return self.async_abort(reason="already_configured")
+        errors = {}
         if user_input is not None:
-            if current is not None:
-                return self.async_update_and_abort(entry, current, title="Problem monitoring", data=user_input)
-            return self.async_create_entry(title="Problem monitoring", data=user_input)
+            for key, defaults in MONITORING_NOTIFICATION_DEFAULTS.items():
+                settings = user_input.get(key, {})
+                for field in ("title", "message"):
+                    text = settings.get(field, defaults[field])
+                    try:
+                        Template(text, self.hass).ensure_valid()
+                        if field == "message" and not text.strip():
+                            errors["base"] = "empty_message"
+                    except TemplateError:
+                        errors["base"] = "invalid_template"
+            if not errors:
+                if current is not None:
+                    return self.async_update_and_abort(entry, current, title="Problem monitoring", data=user_input)
+                return self.async_create_entry(title="Problem monitoring", data=user_input)
 
-        options = current.data if current else {}
-        labels = lr.async_get(self.hass)
+        options = user_input if user_input is not None else current.data if current else {}
         fields = {}
+        for key in MONITORING_AUTOMATIC_OPTIONS:
+            fields[vol.Required(key, default=options.get(key, True))] = selector.BooleanSelector()
         for key, default in MONITORING_DELAY_DEFAULTS.items():
             fields[vol.Required(key, default=options.get(key, default))] = selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=10080, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX)
             )
-        for key, legacy_name in MONITORING_LABEL_DEFAULTS.items():
-            existing = labels.async_get_label_by_name(legacy_name)
-            default = [existing.label_id] if existing else []
-            fields[vol.Optional(key, default=options.get(key, default))] = selector.LabelSelector(
+        for key in MONITORING_LABEL_OPTIONS:
+            # Preserve saved label IDs, including explicit empty selections.
+            fields[vol.Optional(key, default=options.get(key, []))] = selector.LabelSelector(
                 selector.LabelSelectorConfig(multiple=True)
             )
-        return self.async_show_form(step_id=step_id, data_schema=vol.Schema(fields))
+        for key, defaults in MONITORING_NOTIFICATION_DEFAULTS.items():
+            settings = options.get(key, {})
+            fields[vol.Required(key, default=dict)] = section(vol.Schema({
+                vol.Optional("recipients", default=settings.get("recipients", [])): selector.EntitySelector(
+                    selector.EntitySelectorConfig(filter={"domain": "notify"}, multiple=True)
+                ),
+                vol.Required("title", default=settings.get("title", defaults["title"])): selector.TemplateSelector(),
+                vol.Required("message", default=settings.get("message", defaults["message"])): selector.TemplateSelector(),
+            }))
+        return self.async_show_form(step_id=step_id, data_schema=vol.Schema(fields), errors=errors)

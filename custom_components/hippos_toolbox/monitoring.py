@@ -32,6 +32,8 @@ from .const import (
     CONF_BELOW_20_LABELS,
     CONF_BELOW_30_LABELS,
     CONF_IGNORED_LABELS,
+    CONF_MONITOR_PROBLEM_SENSORS,
+    CONF_MONITOR_CRITICAL_BATTERIES,
     CONF_SOLVED_DELAY,
     CONF_TRIGGER_DELAY,
     CONF_WARNING_LABELS,
@@ -262,14 +264,19 @@ class _ProblemMonitor:
 
         rules: list[tuple[bool | None, str, timedelta]] = []
         delay = self._delay(CONF_TRIGGER_DELAY)
+        # Older monitors have no saved switches and retain automatic detection.
+        monitor_problems = self._options.get(CONF_MONITOR_PROBLEM_SENSORS, True)
+        monitor_batteries = self._options.get(CONF_MONITOR_CRITICAL_BATTERIES, True)
         device_class = attributes.get("device_class")
         if device_class is None and registration is not None:
             device_class = registration.device_class or registration.original_device_class
-        if entity_id.startswith("binary_sensor.") and device_class == "problem":
+        if monitor_problems and entity_id.startswith("binary_sensor.") and device_class == "problem":
             rules.append((value == "on" if value in {"on", "off"} else None, "problem", delay))
         if labels & set(self._options.get(CONF_WARNING_LABELS, [])):
             rules.append((value == "on" if known else None, "problem", delay))
-        if "battery_state" in attributes or (not known and previous is not None and previous.reason == "battery_critical"):
+        if monitor_batteries and (
+            "battery_state" in attributes or (not known and previous is not None and previous.reason == "battery_critical")
+        ):
             rules.append((
                 attributes.get("battery_state") == "critical" if known and "battery_state" in attributes else None,
                 "battery_critical", self._delay(CONF_BATTERY_CRITICAL_DELAY),
@@ -290,6 +297,11 @@ class _ProblemMonitor:
             reason = previous.reason if previous else rules[0][1]
             return _Observation(None if any(rule[0] is None for rule in rules) else False, name, reason, delay)
         if state is None and previous is not None:
+            # Disabling a rule also retires its restored incidents for missing sources.
+            if previous.reason == "problem" and not monitor_problems:
+                return None
+            if previous.reason == "battery_critical" and not monitor_batteries:
+                return None
             return _Observation(None, name, previous.reason, delay)
         return None
 

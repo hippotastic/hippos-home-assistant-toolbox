@@ -22,7 +22,7 @@ Reserve full validation for commits, rather than every reply or handoff. During 
 
 Docker and network access are required. HACS uses `GH_TOKEN`, `GITHUB_TOKEN`, or the existing `gh auth login` session to read GitHub metadata. The validators read local files, including untracked additions and deletions, so a push is not required to validate a change. See `test/README.md` for the container and authentication details.
 
-GitHub Actions runs lint, catalog checks, TypeScript, unit tests, hassfest, and HACS. The full Home Assistant-backed suite remains local. Before deploying a pushed commit to the user's Home Assistant, verify that the GitHub Validate workflow for that exact commit passed.
+GitHub Actions runs lint, catalog checks, TypeScript, unit tests, hassfest, and HACS. The full Home Assistant-backed suite remains local. Before deploying a pushed commit to a Home Assistant installation, verify that the GitHub Validate workflow for that exact commit passed.
 
 The shared validation and runtime container uses Docker networking mode `none`. No Python installation is required on the host; Python regression tests execute inside the Home Assistant container and are orchestrated by Vitest. See `test/README.md` for details.
 

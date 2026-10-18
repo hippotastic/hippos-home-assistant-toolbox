@@ -13,6 +13,12 @@
         "useTabs": false,
         "tabWidth": 2
       }
+    },
+    {
+      "files": ["docs/**/*.md"],
+      "options": {
+        "proseWrap": "never"
+      }
     }
   ]
 }

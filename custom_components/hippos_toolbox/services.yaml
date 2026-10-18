@@ -46,7 +46,7 @@ announce_tts:
           multiline: true
     language:
       name: Language
-      example: de-de
+      example: en-us
       selector:
         text:
     options:

@@ -1,4 +1,4 @@
-"""Problem lifecycles, legacy warning rules and alarm availability regressions."""
+"""Problem lifecycles, warning rules and alarm availability regressions."""
 
 import asyncio
 from copy import deepcopy
@@ -19,6 +19,7 @@ from custom_components.hippos_toolbox.const import (
     CONF_ALARM_LABELS, CONF_ALARM_UNAVAILABLE_DELAY, CONF_BATTERY_CRITICAL_DELAY,
     CONF_BELOW_10_LABELS, CONF_BELOW_20_LABELS, CONF_BELOW_30_LABELS,
     CONF_IGNORED_LABELS, CONF_SOLVED_DELAY, CONF_TRIGGER_DELAY, CONF_WARNING_LABELS,
+    CONF_MONITOR_PROBLEM_SENSORS, CONF_MONITOR_CRITICAL_BATTERIES,
 )
 from custom_components.hippos_toolbox.monitoring import _ProblemMonitor
 
@@ -95,6 +96,60 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         await self.observe(30, "off")
         self.assertEqual(self.monitor.problems, {})
         self.assertEqual(self.events, [])
+
+    async def test_automatic_problem_and_battery_rules_are_independently_configurable(self):
+        for problems, batteries in ((False, True), (True, False), (False, False), (True, True)):
+            with self.subTest(problems=problems, batteries=batteries):
+                self.options[CONF_MONITOR_PROBLEM_SENSORS] = problems
+                self.options[CONF_MONITOR_CRITICAL_BATTERIES] = batteries
+                problem = self.source()
+                battery = self.source("sensor.fixture_battery", "5", attributes={"battery_state": "critical"})
+                for state, enabled, reason in ((problem, problems, "problem"), (battery, batteries, "battery_critical")):
+                    observation = self.monitor._classify(state.entity_id, state)
+                    if enabled:
+                        self.assertTrue(observation.active)
+                        self.assertEqual(observation.reason, reason)
+                    else:
+                        self.assertIsNone(observation)
+
+    async def test_label_rules_remain_active_with_both_automatic_rules_disabled(self):
+        self.options[CONF_MONITOR_PROBLEM_SENSORS] = False
+        self.options[CONF_MONITOR_CRITICAL_BATTERIES] = False
+
+        await self.observe(0, labels=("warnings",))
+        await self.observe(60, labels=("warnings",))
+        self.assertEqual([kind for kind, _ in self.events], ["triggered"])
+
+        await self.observe(60, "5", entity_id="sensor.fixture_battery", labels=("below20",), attributes={"battery_state": "critical"})
+        await self.observe(120, "5", entity_id="sensor.fixture_battery", labels=("below20",), attributes={"battery_state": "critical"})
+        self.assertEqual(self.events[-1][1]["reason"], "below_threshold")
+        self.assertEqual(len(self.events), 2)
+
+        await self.observe(120, entity_id="binary_sensor.fixture_alarm", labels=("alarms",))
+        self.assertEqual(self.events[-1][0], "alarm_triggered")
+        self.assertEqual(len(self.events), 3)
+
+    async def test_disabling_an_automatic_rule_removes_its_problem_without_all_clear(self):
+        for option, entity_id, active, attributes in (
+            (CONF_MONITOR_PROBLEM_SENSORS, "binary_sensor.fixture_problem", "on", {"device_class": "problem"}),
+            (CONF_MONITOR_CRITICAL_BATTERIES, "sensor.fixture_battery", "5", {"battery_state": "critical"}),
+        ):
+            for confirmed in (False, True):
+                for value in (active, "unknown", "unavailable", None):
+                    with self.subTest(option=option, confirmed=confirmed, value=value):
+                        self.monitor._problems.clear()
+                        self.events.clear()
+                        self.options[option] = True
+                        await self.observe(0, active, entity_id=entity_id, attributes=attributes)
+                        if confirmed:
+                            await self.observe(1800, active, entity_id=entity_id, attributes=attributes)
+                        self.assertIn(entity_id, self.monitor.problems)
+
+                        self.options[option] = False
+                        state = None if value is None else self.source(entity_id, value, attributes=attributes)
+                        await self.monitor._async_observe(entity_id, self.monitor._classify(entity_id, state), self.clock)
+                        self.assertNotIn(entity_id, self.monitor.problems)
+                        self.assertEqual([kind for kind, _ in self.events], ["triggered"] if confirmed else [])
 
     async def test_returning_unreported_problem_gets_a_new_full_minute(self):
         await self.observe(0)
@@ -180,8 +235,8 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
                 await self.observe(1300, "off")
                 self.assertEqual(self.events[-1][0], "solved")
 
-    async def test_pool_warmup_unavailable_needs_no_pool_specific_monitor_rule(self):
-        source = "binary_sensor.pool_dosing_problem"
+    async def test_unavailable_source_retains_problem_until_evaluation_resumes(self):
+        source = "binary_sensor.fixture_problem"
         await self.observe(0, entity_id=source)
         await self.observe(60, entity_id=source)
         await self.observe(100, "unavailable", entity_id=source)
@@ -426,14 +481,14 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sensor.native_value, 0)
             self.assertEqual(event.state_attributes["event_type"], "solved")
 
-    async def test_monitoring_counters_preserve_legacy_statistics_metadata(self):
+    async def test_monitoring_counters_preserve_statistics_metadata(self):
         from custom_components.hippos_toolbox.sensor import ToolboxProblemsSensor, ToolboxAlarmsSensor
 
-        # The replaced helpers recorded unitless totals; changing their metadata
-        # interrupts the existing statistics series and creates a repair issue
+        # Changing metadata interrupts existing statistics series and creates
+        # a repair issue
         for sensor, entity_id in (
-            (ToolboxProblemsSensor(self.monitor), "sensor.aktuelle_warnungen"),
-            (ToolboxAlarmsSensor(self.monitor), "sensor.aktuelle_alarme"),
+            (ToolboxProblemsSensor(self.monitor), "sensor.fixture_problems"),
+            (ToolboxAlarmsSensor(self.monitor), "sensor.fixture_alarms"),
         ):
             with self.subTest(entity_id=entity_id):
                 self.assertEqual(sensor.native_value, 0)

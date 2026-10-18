@@ -1,15 +1,21 @@
-# Camera frontend features
+# Camera Frontend Features
 
-Home Assistant's native camera viewer can resume an expired stream after a browser tab returns to the foreground. On iOS, abandoned MJPEG responses can also remain open after navigating away and block later images and page loads. The toolbox keeps HA's native image/video rendering while renewing interrupted streams and giving individual MJPEG responses an explicit server-side lifetime. Camera zoom adds an enlarged viewer with zoom, pan, and aspect-ratio corrections.
+**What is this?** A set of enhancements for Home Assistant's standard camera viewer. You can zoom and pan in camera dialogs, interrupted streams are automatically retried when you return to a tab, and unused MJPEG connections close when you leave a view. Your existing camera cards use these features without a separate dashboard resource.
 
-## Configuration
+**When should you use this?** When you want a closer look at a camera image, or return to a camera view and have to reload the page before it works again.
 
-Open **Settings > Devices & services > Hippo's Home Assistant Toolbox > Configure**. All three camera options are enabled by default, including on existing installations that have never saved these options.
+**Why is this included in the toolbox?** HA's standard camera viewer can leave streams stuck after backgrounding or keep unused MJPEG connections open after navigation. Working around those cases yourself requires browser-side recovery and cleanup, and adding zoom requires viewer changes as well. You would need to maintain frontend extensions that work across tab changes and multiple views of the same camera.
 
-| Option                                  | Behavior                                                                                                                                                                         |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Camera zoom                             | Enlarges camera dialogs and enables mouse-wheel zoom, pinch zoom, and dragging. Includes the existing iOS aspect-ratio and video-display corrections.                            |
-| Automatically restore camera streams    | Renews expired HLS URLs after background cleanup and retries failed or initially blank MJPEG views with fresh signed URLs and retry backoff.                                     |
+## Setup
+
+Install and configure the [toolbox integration](../README.md#installation). All three frontend features are enabled automatically. No separate camera helper, dashboard resource, or YAML configuration is needed for these features.
+
+Open **Settings > Devices & services > Hippo's Home Assistant Toolbox > Configure** to review or disable individual features. Existing installations without saved camera options also use the enabled defaults.
+
+| Option | Behavior |
+| --- | --- |
+| Camera zoom | Enlarges camera dialogs and enables mouse-wheel zoom, pinch zoom, and dragging. Includes the existing iOS aspect-ratio and video-display corrections. |
+| Automatically restore camera streams | Renews expired HLS URLs after background cleanup and retries failed or initially blank MJPEG views with fresh signed URLs and retry backoff. |
 | Reliably close abandoned camera streams | Gives each native MJPEG view its own controllable response and closes it on navigation, backgrounding, or WebSocket disconnect. Two views of the same camera remain independent. |
 
 Changes apply to connected clients without reloading the integration or clearing the progressive-camera cache. Disabling a feature removes its frontend hooks. Stream cleanup can operate without error recovery; its own responses resume when the frontend becomes visible again. A client reload after upgrading the integration loads the new frontend bundle.
@@ -36,13 +42,13 @@ An old bundle left open in a browser can continue across compatible integration 
 
 Failed, malformed, or timed-out controlled-stream reservations restore HA's native source for that view. A late reservation is released without opening its HTTP stream. A missing frontend bundle does not prevent the integration's backend from starting.
 
-## Migrating local prototypes
+## Other camera extensions
 
-Remove manually registered camera-zoom, camera-recovery, and temporary diagnostic resources before reloading the frontend with the integration-managed bundle. Keep the original files as a backup if desired. Running both copies can install overlapping hooks; the toolbox does not delete unrelated dashboard resources automatically.
+If another dashboard resource modifies the same camera viewer behavior, disable the overlapping resource before enabling the corresponding toolbox feature. Multiple extensions can install conflicting hooks. The toolbox does not remove dashboard resources automatically.
 
 ## Development
 
-Frontend sources are in `frontend/cameras/`: the entrypoint handles the shared subscription, `zoom.js` owns viewer interaction, `recovery.js` owns recovery and the shared camera render hook, and `stream-cleanup.js` owns controlled MJPEG reservations. Recovery and cleanup share one HA render hook so they cannot overwrite each other's patches.
+Frontend sources are in [`frontend/cameras/`](../frontend/cameras/): the entrypoint handles the shared subscription, `zoom.js` owns viewer interaction, `recovery.js` owns recovery and the shared camera render hook, and `stream-cleanup.js` owns controlled MJPEG reservations. Recovery and cleanup share one HA render hook so they cannot overwrite each other's patches.
 
 Keep `CAMERA_FRONTEND_PROTOCOL` in `const.py` and `PROTOCOL` in `index.js` in sync. Bump both for incompatible changes to settings, stream commands, or their responses. Keep the version unchanged for compatible releases so open browser tabs can reconnect safely.
 

@@ -48,6 +48,8 @@ CONF_TRIGGER_DELAY = "trigger_delay_minutes"
 CONF_SOLVED_DELAY = "solved_delay_minutes"
 CONF_ALARM_UNAVAILABLE_DELAY = "alarm_unavailable_delay_minutes"
 CONF_BATTERY_CRITICAL_DELAY = "battery_critical_delay_minutes"
+CONF_MONITOR_PROBLEM_SENSORS = "monitor_problem_sensors"
+CONF_MONITOR_CRITICAL_BATTERIES = "monitor_critical_batteries"
 CONF_WARNING_LABELS = "warning_labels"
 CONF_ALARM_LABELS = "alarm_labels"
 CONF_IGNORED_LABELS = "ignored_labels"
@@ -55,19 +57,43 @@ CONF_BELOW_30_LABELS = "below_30_labels"
 CONF_BELOW_20_LABELS = "below_20_labels"
 CONF_BELOW_10_LABELS = "below_10_labels"
 
+MONITORING_AUTOMATIC_OPTIONS = (
+    CONF_MONITOR_PROBLEM_SENSORS,
+    CONF_MONITOR_CRITICAL_BATTERIES,
+)
 MONITORING_DELAY_DEFAULTS = {
     CONF_TRIGGER_DELAY: 1,
     CONF_SOLVED_DELAY: 10,
     CONF_ALARM_UNAVAILABLE_DELAY: 5,
     CONF_BATTERY_CRITICAL_DELAY: 30,
 }
-MONITORING_LABEL_DEFAULTS = {
-    CONF_WARNING_LABELS: "Warnung bei Status On",
-    CONF_ALARM_LABELS: "Alarm bei Status On",
-    CONF_IGNORED_LABELS: "Problem ignorieren",
-    CONF_BELOW_30_LABELS: "Warnung bei < 30",
-    CONF_BELOW_20_LABELS: "Warnung bei < 20",
-    CONF_BELOW_10_LABELS: "Warnung bei < 10",
+MONITORING_LABEL_OPTIONS = (
+    CONF_WARNING_LABELS,
+    CONF_ALARM_LABELS,
+    CONF_IGNORED_LABELS,
+    CONF_BELOW_30_LABELS,
+    CONF_BELOW_20_LABELS,
+    CONF_BELOW_10_LABELS,
+)
+CONF_WARNING_NOTIFICATIONS = "warning_notifications"
+CONF_ALARM_NOTIFICATIONS = "alarm_notifications"
+MONITORING_NOTIFICATION_DEFAULTS = {
+    CONF_WARNING_NOTIFICATIONS: {
+        "recipients": [],
+        "title": "{{ 'Problem resolved' if resolved else 'Warning' }}",
+        "message": (
+            "{{ problem.name }}: {% if resolved %}problem resolved."
+            "{% elif problem.reason == 'unavailable' %}unavailable."
+            "{% elif problem.reason == 'battery_critical' %}critical battery."
+            "{% elif problem.reason == 'below_threshold' %}below the configured threshold."
+            "{% else %}problem detected.{% endif %}"
+        ),
+    },
+    CONF_ALARM_NOTIFICATIONS: {
+        "recipients": [],
+        "title": "{{ 'Alarm ended' if resolved else 'Alarm' }}",
+        "message": "{{ problem.name }}: {{ 'alarm ended.' if resolved else 'alarm detected.' }}",
+    },
 }
 
 BLUEPRINT_UPDATE_UNIQUE_ID = "hippos_toolbox_blueprints"

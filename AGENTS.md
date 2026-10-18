@@ -1,10 +1,26 @@
 # Repository rules
 
+## Public repository content
+
+- Keep code, tests, documentation, examples, and release notes free of concrete details from any local installation. Do not copy personal entity IDs, label names, network addresses, paths, device identifiers, or installation-specific migration instructions into the repository.
+- Use synthetic fixtures and neutral examples. Express installation choices through configuration or selectors, and preserve existing saved configuration when removing installation-specific defaults.
+
+## Documentation
+
+- Keep user-facing feature guides in `docs/` and link them from the root README. Write introductions from the user's everyday experience toward the feature's technical purpose.
+- Keep each prose paragraph and the prose of each list item on a single source line in feature guides; let the viewer wrap text to its available width. Do not manually wrap prose at a fixed column. Preserve meaningful Markdown structure, code-block line breaks, and intentional hard breaks. The Prettier override for `docs/**/*.md` uses `proseWrap: "never"`.
+- Begin each feature guide with three distinct paragraphs prefixed `**What is this?**`, `**When should you use this?**`, and `**Why is this included in the toolbox?**`, in that order. Use inline bold prefixes, not headings. Each paragraph must answer its own question rather than repeat the same feature summary.
+- **What is this?** Start with a noun phrase that directly identifies what the feature is, such as "An automation blueprint..." or "A pair of Home Assistant actions...". A subjectless capability statement such as "Provides two actions..." does not answer this question. Then describe its main capabilities through the behavior the reader will experience, including the sequence of events where useful. Explain how it fits existing devices, cards, or automations and what remains useful when something fails. Establish what the reader gets before explaining how it works.
+- **When should you use this?** Describe a recognizable everyday situation and what the reader is trying to achieve. Make the friction concrete: for example, wanting a quick glance at a camera but waiting for a blank card to load. One short, specific scenario can be enough; do not expand it into an exhaustive list of use cases or repeat the feature's capabilities. Address the reader directly where useful, without requiring knowledge of the implementation.
+- **Why is this included in the toolbox?** Explain why a reader would choose this solution over Home Assistant's built-in capabilities or their own automations. First identify the concrete gap in the built-in behavior, or the coordination that separate automations would leave to the user. Then explain why solving that gap independently would require substantial work or ongoing maintenance. Do not make the reader infer the reason for the feature's existence from a list of technical difficulties. Do not repeat when to use the feature or start another capability summary. Make the comparison specific and factual; do not imply that built-in capabilities or simpler automations are inadequate for every use case. Where relevant, explain how the feature cooperates with manual control and makes its decisions understandable through feedback or logs.
+- Keep introductions natural, specific, and factual. Explain why the feature deserves to exist beyond a basic configuration, rather than relying on generic convenience claims or a list of implementation details. Describe only behavior supported by the implementation; the three questions are a reasoning structure, not a requirement to make the same promises for every feature. Let paragraph lengths follow their content. Stop once the question is answered; omit closing sales pitches, repeated benefit summaries, and tangential cross-references. Treat examples as demonstrations of reasoning, not wording templates to copy mechanically.
+- Explain prerequisites, explicit setup steps, automatic behavior, and how to verify the result before implementation details or reference material. Distinguish installing a feature from creating or enabling the entries and automations it needs.
+
 ## Validation and commits
 
 - Before creating any commit, run `pnpm validate` against the final working tree and require every stage to pass. This includes catalog synchronization and compatibility, lint, types, unit tests, hassfest, HACS, and the Home Assistant suite. Individual checks are not a substitute.
 - Reserve full validation for commits. Do not run it before every reply or handoff. During ongoing work, run only focused checks needed to verify the changes; editing the validation pipeline itself requires exercising that pipeline.
 - After a successful validation, do not repeat checks unless the working tree changed or new evidence calls the result into question. Include generated catalog changes in the commit.
 - When asked to commit, also push to the currently checked-out branch unless explicitly told otherwise. Do not switch branches for this.
-- Before deploying a pushed commit to the user's Home Assistant, verify that the GitHub Validate workflow for that exact commit passed.
+- Before deploying a pushed commit to a Home Assistant installation, verify that the GitHub Validate workflow for that exact commit passed.
 - Run authenticated `gh` commands outside the sandbox so they use the host's valid GitHub login. Local HACS validation also needs Docker and network access.

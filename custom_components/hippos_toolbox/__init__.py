@@ -31,6 +31,7 @@ from .frontend import (
 )
 from .manager import BlueprintManager
 from .monitoring import _ProblemMonitor
+from .monitoring_notifications import _MonitoringNotifications
 from .progressive_camera import _ProgressiveCameraManager
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -46,6 +47,7 @@ class ToolboxRuntimeData:
     update_channel: str
     camera_subentries: dict[str, tuple[str, str]]
     monitor: _ProblemMonitor | None
+    monitor_notifications: _MonitoringNotifications | None
     monitoring_subentries: dict[str, dict]
 
 
@@ -106,6 +108,7 @@ async def async_setup_entry(
         update_channel=update_channel,
         camera_subentries=camera_subentries,
         monitor=monitor,
+        monitor_notifications=None,
         monitoring_subentries=monitoring_subentries,
     )
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
@@ -113,6 +116,7 @@ async def async_setup_entry(
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         await async_setup_entry_frontend(hass, entry)
         if monitor is not None:
+            entry.runtime_data.monitor_notifications = _MonitoringNotifications(hass, entry, monitoring_subentry, monitor)
             monitor.async_start()
     except Exception:
         async_unload_frontend(hass)
@@ -121,6 +125,8 @@ async def async_setup_entry(
         await progressive_camera_manager.async_stop()
         if monitor is not None:
             await monitor.async_stop()
+        if entry.runtime_data.monitor_notifications is not None:
+            await entry.runtime_data.monitor_notifications.async_stop()
         raise
     return True
 
@@ -138,6 +144,8 @@ async def async_unload_entry(
         await entry.runtime_data.progressive_camera_manager.async_stop()
         if entry.runtime_data.monitor is not None:
             await entry.runtime_data.monitor.async_stop()
+        if entry.runtime_data.monitor_notifications is not None:
+            await entry.runtime_data.monitor_notifications.async_stop()
     return unloaded
 
 

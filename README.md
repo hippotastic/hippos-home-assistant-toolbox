@@ -43,69 +43,27 @@ To allow testing unreleased changes, open **Settings > Devices & services > Hipp
 
 The Development channel only affects blueprint content. HACS continues to update the integration itself from published releases.
 
-## Camera Frontend Features
+## Features
 
-The toolbox adds camera zoom, automatic stream recovery, and reliable cleanup of abandoned MJPEG connections. These address expired streams after returning to a tab and camera connections that can block the iOS frontend after navigating between views.
+Choose a guide for setup, examples, and detailed behavior:
 
-All three features are enabled by default and can be switched independently under **Settings > Devices & services > Hippo's Home Assistant Toolbox > Configure**. The integration loads one shared frontend bundle automatically.
+| Feature                                                              | What it does                                                                                  |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [Problem Monitoring](docs/MONITORING.md)                             | Keeps track of open problems and alarms and sends notifications to separate recipient groups. |
+| [Announcements](docs/ANNOUNCEMENTS.md)                               | Plays audio or generated speech with coordinated volume and duration-based waits.             |
+| [Camera Frontend Features](docs/CAMERAS.md)                          | Adds zoom and restores interrupted camera views.                                              |
+| [Progressive Snapshot Cameras](docs/PROGRESSIVE_CAMERAS.md)          | Shows a cached image immediately while fetching a fresh frame.                                |
+| [Cover Automation](docs/COVER_AUTOMATION.md)                         | Coordinates sun protection, privacy, night mode, and lockout prevention.                      |
+| [Sensor-based State Machine](docs/SENSOR_STATE_MACHINE.md)           | Controls one output from several sensors, with conditions and delayed turn-off.               |
+| [Exponential Moving Average](docs/EXPONENTIAL_MOVING_AVERAGE.md)     | Smooths numeric measurements through regular time-based sampling.                             |
+| [Irrigation](docs/IRRIGATION.md)                                     | Adjusts watering demand for weather and soil and schedules zones sequentially.                |
+| [Push-Button Music Controller](docs/PUSH_BUTTON_MUSIC_CONTROLLER.md) | Controls playback, favorites, and volume from one or two wall buttons.                        |
 
-Configuration, behavior, limitations, and migration from local dashboard scripts are documented in [Camera Frontend Features](CAMERAS.md).
-
-## Progressive Snapshot Cameras
-
-The integration can expose an existing JPEG snapshot camera through a RAM-only cache. Dashboard cards receive the previous full-resolution frame immediately while the source is refreshed in the background. With a live camera card, a newly fetched frame replaces the cached image without reloading the dashboard.
-
-To add one, open **Settings > Devices & services > Hippo's Home Assistant Toolbox**, open the integration entry's three-dot menu, and select **Add progressive snapshot camera**. Add one helper for each source camera. YAML configuration is not required.
-
-Configure Area, Picture Glance, or Picture Entity cards with the new camera entity and set `camera_view: live` for immediate cache-to-fresh transitions. With `camera_view: auto`, Home Assistant still shows the cache immediately, but its standard still-image polling controls when the refreshed frame appears. Area Cards automatically select a camera from the area; hide the original snapshot entity—but do not disable it—if the Area Card should select the progressive camera linked to the same source device.
-
-Frames are intentionally kept only in RAM and are rebuilt after every Home Assistant restart or integration reload. Automatic warmup begins after 30 seconds. Idle cameras refresh every 30 seconds through a staggered background queue with at most two source snapshots in flight. A live view shows the cached frame immediately and then follows its source. Native MJPEG sources use one shared upstream connection per progressive camera; their JPEG payloads are remuxed without decoding or recompression and distributed to every live card. Still-only sources follow the source camera's snapshot interval instead. A failed source keeps its last frame and adds a connection-problem marker until the next successful refresh. Version 1 accepts JPEG snapshots and MJPEG streams containing complete JPEG frames only.
-
-### Rebuilding the connection marker
-
-The runtime uses [`custom_components/hippos_toolbox/assets/connection_problem.png`](custom_components/hippos_toolbox/assets/connection_problem.png). Its editable source is [`assets/camera-overlay/connection_problem.svg`](assets/camera-overlay/connection_problem.svg). After changing that SVG, regenerate the PNG with:
-
-```sh
-pnpm camera-overlay:render
-```
-
-The renderer is generic. Optional positional arguments select another SVG, output path, and square pixel size:
-
-```sh
-pnpm camera-overlay:render -- path/to/icon.svg path/to/icon.png 512
-```
-
-## Announcements
-
-Use **Announce media** to play a local WAV or MP3 file, or **Announce text** to
-generate and cache speech through a configured TTS engine. Both actions determine
-the audio duration and wait for any time the player did not already wait, with
-shared queues and optional announcement volume.
-
-Action examples, supported media, TTS options, and playback behavior are
-documented in [Announcements](ANNOUNCEMENTS.md).
-
-## Problem Monitoring
-
-Add **Problem monitoring** from the toolbox integration entry's three-dot menu to
-track problem-class binary sensors, critical battery flags and label-based
-warnings. Confirmed problems survive restarts and reloads. The integration exposes
-open-problem and active-alarm sensors, plus events for notification automations.
-Disconnected alarm entities, including smoke detectors, produce availability
-warnings after a separate configurable delay. Actual alarms trigger immediately;
-unknown or unavailable sources do not end an ongoing alarm.
-
-Rules, configuration defaults, dashboard examples with per-problem status lines
-and recovery countdowns, and migration from existing warning templates are
-documented in [Problem Monitoring](MONITORING.md).
-
-## Irrigation Blueprints
-
-Setup, behavior, formulas, triggers, scheduling rules, and log examples are documented in [Irrigation Blueprints](IRRIGATION.md).
-
-## Push-Button Music Controller
-
-Setup, gestures, session behavior, failover, player compatibility, and LED feedback are documented in [Push-Button Music Controller](PUSH_BUTTON_MUSIC_CONTROLLER.md).
+Camera frontend features are enabled by default and can be switched off in the
+toolbox options. Add monitoring and progressive cameras separately when needed.
+Installing blueprints makes them available; create an automation from a blueprint
+to use it. The [documentation index](docs/README.md) separates integration features
+from blueprint automations.
 
 ## Manual Installation
 

@@ -57,8 +57,10 @@
       "step": {
         "user": {
           "title": "Add problem monitoring",
-          "description": "Monitor problem-class binary sensors, critical battery flags and the selected labels.",
+          "description": "Choose monitoring rules, delays and notification recipients.",
           "data": {
+            "monitor_problem_sensors": "Automatically monitor problem sensors",
+            "monitor_critical_batteries": "Automatically monitor critical battery flags",
             "trigger_delay_minutes": "Warning delay",
             "solved_delay_minutes": "Solution confirmation delay",
             "alarm_unavailable_delay_minutes": "Alarm entity unavailable delay",
@@ -71,18 +73,52 @@
             "below_10_labels": "Warning below 10"
           },
           "data_description": {
+            "monitor_problem_sensors": "Warn when any binary sensor with device class problem is on, even without a selected label.",
+            "monitor_critical_batteries": "Warn when an entity reports battery_state: critical, even without a selected label. Uses the critical battery delay.",
             "trigger_delay_minutes": "Continuous time before a new problem triggers a warning.",
             "solved_delay_minutes": "Continuous confirmed solution before an open problem is removed and a solution event is emitted.",
             "alarm_unavailable_delay_minutes": "Total continuous unavailable time before warning about a disconnected alarm entity.",
             "battery_critical_delay_minutes": "Total continuous critical battery status before warning; protects against temporary incorrect battery flags.",
             "alarm_labels": "Entities with these labels trigger immediate alarm events while on and availability warnings after the disconnected delay.",
             "ignored_labels": "Exclude these entities from ordinary warning rules."
+          },
+          "sections": {
+            "warning_notifications": {
+              "name": "Warnings",
+              "description": "Notifications and all-clears use these recipients. Leave recipients empty to disable delivery.",
+              "data": {
+                "recipients": "Recipients",
+                "title": "Title template",
+                "message": "Message template"
+              },
+              "data_description": {
+                "recipients": "Select notification targets or notification groups.",
+                "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved."
+              }
+            },
+            "alarm_notifications": {
+              "name": "Alarms",
+              "description": "Notifications and all-clears use these recipients. Leave recipients empty to disable delivery.",
+              "data": {
+                "recipients": "Recipients",
+                "title": "Title template",
+                "message": "Message template"
+              },
+              "data_description": {
+                "recipients": "Select notification targets or notification groups.",
+                "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved."
+              }
+            }
           }
         },
         "reconfigure": {
           "title": "Configure problem monitoring",
-          "description": "Monitor problem-class binary sensors, critical battery flags and the selected labels.",
+          "description": "Choose monitoring rules, delays and notification recipients.",
           "data": {
+            "monitor_problem_sensors": "Automatically monitor problem sensors",
+            "monitor_critical_batteries": "Automatically monitor critical battery flags",
             "trigger_delay_minutes": "Warning delay",
             "solved_delay_minutes": "Solution confirmation delay",
             "alarm_unavailable_delay_minutes": "Alarm entity unavailable delay",
@@ -95,14 +131,50 @@
             "below_10_labels": "Warning below 10"
           },
           "data_description": {
+            "monitor_problem_sensors": "Warn when any binary sensor with device class problem is on, even without a selected label.",
+            "monitor_critical_batteries": "Warn when an entity reports battery_state: critical, even without a selected label. Uses the critical battery delay.",
             "trigger_delay_minutes": "Continuous time before a new problem triggers a warning.",
             "solved_delay_minutes": "Continuous confirmed solution before an open problem is removed and a solution event is emitted.",
             "alarm_unavailable_delay_minutes": "Total continuous unavailable time before warning about a disconnected alarm entity.",
             "battery_critical_delay_minutes": "Total continuous critical battery status before warning; protects against temporary incorrect battery flags.",
             "alarm_labels": "Entities with these labels trigger immediate alarm events while on and availability warnings after the disconnected delay.",
             "ignored_labels": "Exclude these entities from ordinary warning rules."
+          },
+          "sections": {
+            "warning_notifications": {
+              "name": "Warnings",
+              "description": "Notifications and all-clears use these recipients. Leave recipients empty to disable delivery.",
+              "data": {
+                "recipients": "Recipients",
+                "title": "Title template",
+                "message": "Message template"
+              },
+              "data_description": {
+                "recipients": "Select notification targets or notification groups.",
+                "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved."
+              }
+            },
+            "alarm_notifications": {
+              "name": "Alarms",
+              "description": "Notifications and all-clears use these recipients. Leave recipients empty to disable delivery.",
+              "data": {
+                "recipients": "Recipients",
+                "title": "Title template",
+                "message": "Message template"
+              },
+              "data_description": {
+                "recipients": "Select notification targets or notification groups.",
+                "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved."
+              }
+            }
           }
         }
+      },
+      "error": {
+        "invalid_template": "Enter valid notification templates for the title and message.",
+        "empty_message": "Enter a notification message or a template that produces a message."
       }
     }
   },

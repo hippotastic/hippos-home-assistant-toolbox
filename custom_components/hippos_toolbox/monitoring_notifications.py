@@ -1,0 +1,108 @@
+"""Local monitoring notification templates and isolated delivery to notify entities."""
+
+import asyncio
+from copy import deepcopy
+import logging
+from typing import Any
+
+from homeassistant.components.notify import NotifyEntityFeature
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import TemplateError
+from homeassistant.helpers.group import expand_entity_ids
+from homeassistant.helpers.template import Template
+
+from .const import (
+    CONF_ALARM_NOTIFICATIONS,
+    CONF_WARNING_NOTIFICATIONS,
+    MONITORING_NOTIFICATION_DEFAULTS,
+)
+from .monitoring import _ProblemMonitor
+
+_LOGGER = logging.getLogger(__name__)
+_SEND_TIMEOUT = 15.0
+
+
+class _MonitoringNotifications:
+    """Subscribe to persisted transitions without blocking monitoring on delivery."""
+
+    def __init__(self, hass: HomeAssistant, entry, subentry, monitor: _ProblemMonitor) -> None:
+        self._hass = hass
+        self._entry = entry
+        self._options = subentry.data
+        self._tasks: set[asyncio.Task] = set()
+        self._target_locks: dict[str, asyncio.Lock] = {}
+        self._stopped = False
+        self._unsubscribe = monitor.async_subscribe_events(self._async_problem_changed)
+
+    @callback
+    def _async_problem_changed(self, event_type: str, problem: dict[str, Any]) -> None:
+        if self._stopped:
+            return
+        channel = CONF_ALARM_NOTIFICATIONS if event_type.startswith("alarm_") else CONF_WARNING_NOTIFICATIONS
+        settings = self._options.get(channel, {})
+        if not settings.get("recipients"):
+            return
+        variables = {
+            "problem": deepcopy(problem),
+            "event_type": event_type,
+            "resolved": event_type in {"solved", "alarm_solved"},
+        }
+        rendered = {}
+        for field in ("title", "message"):
+            default = MONITORING_NOTIFICATION_DEFAULTS[channel][field]
+            try:
+                rendered[field] = Template(settings.get(field, default), self._hass).async_render(
+                    variables, parse_result=False, strict=True,
+                ).strip()
+                if field == "message" and not rendered[field]:
+                    raise ValueError("empty notification message")
+            except (TemplateError, ValueError):
+                _LOGGER.warning("Invalid monitoring %s %s template; using the default", channel, field)
+                rendered[field] = Template(default, self._hass).async_render(variables, parse_result=False).strip()
+
+        # Use HA's native group expansion and deduplicate across overlapping groups.
+        recipients: set[str] = set()
+        for selected in settings["recipients"]:
+            try:
+                recipients.update(entity_id for entity_id in expand_entity_ids(self._hass, [selected]) if entity_id.startswith("notify."))
+            except RecursionError:
+                _LOGGER.warning("Cannot expand cyclic monitoring notification group %s", selected)
+        for entity_id in sorted(recipients):
+            task = self._entry.async_create_background_task(
+                self._hass,
+                self._async_send(entity_id, rendered["title"], rendered["message"]),
+                f"monitor notification {entity_id}", eager_start=False,
+            )
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+
+    async def _async_send(self, entity_id: str, title: str, message: str) -> None:
+        # Preserve onset/all-clear order per recipient; another recipient never waits.
+        async with self._target_locks.setdefault(entity_id, asyncio.Lock()):
+            if self._stopped:
+                return
+            try:
+                state = self._hass.states.get(entity_id)
+                if state is None or state.state == "unavailable":
+                    _LOGGER.warning("Monitoring notification target %s is unavailable", entity_id)
+                    return
+                data = {"entity_id": entity_id, "message": message}
+                if title and state.attributes.get("supported_features", 0) & NotifyEntityFeature.TITLE:
+                    data["title"] = title
+                async with asyncio.timeout(_SEND_TIMEOUT):
+                    await self._hass.services.async_call("notify", "send_message", data, blocking=True)
+            except Exception:
+                # Provider failures and timeouts are isolated to this one recipient.
+                _LOGGER.exception("Could not send monitoring notification to %s", entity_id)
+
+    async def async_stop(self) -> None:
+        self._stopped = True
+        self._unsubscribe()
+        # Reloads must not leave queued deliveries using the previous configuration.
+        tasks = tuple(self._tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks.clear()
+        self._target_locks.clear()
