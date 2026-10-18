@@ -1,5 +1,17 @@
 # hippos-home-assistant-toolbox
 
+## 0.13.0
+
+### Minor Changes
+
+- 5abb1c8: Add built-in monitoring notifications with separate warning and alarm recipients, native notification groups, and locally editable title/message templates. Deliver independently to each recipient with timeouts and per-recipient ordering, deduplicate overlapping groups, and fall back to default text after runtime template errors. Existing monitors keep delivery disabled until recipients are selected.
+
+### Patch Changes
+
+- 5abb1c8: Show independent switches for automatic problem-sensor and critical-battery monitoring during setup and reconfiguration. Both default to enabled, preserving existing monitors; label rules remain independent.
+- 5abb1c8: Organize feature guides under docs with benefits, motivation, and setup instructions before detailed reference material. Rewrite monitoring setup as a complete path from selecting rules and recipients to verifying notifications, and add dedicated guides for progressive cameras, covers, sensor state machines, and numeric smoothing.
+- 5abb1c8: Start new problem monitors with empty label selections instead of inferring rules from label names. Preserve saved label selections and delays when reconfiguring existing monitors.
+
 ## 0.12.4
 
 ### Patch Changes
