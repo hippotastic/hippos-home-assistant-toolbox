@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.14.2
+
+### Patch Changes
+
+- 987ec36: Fix the Companion app data template help text in monitoring setup, which Home Assistant previously displayed as a translation error.
+
 ## 0.14.1
 
 ### Patch Changes
