@@ -226,7 +226,7 @@ class MonitoringSubentryFlow(config_entries.ConfigSubentryFlow):
         if user_input is not None:
             for key, defaults in MONITORING_NOTIFICATION_DEFAULTS.items():
                 settings = user_input.get(key, {})
-                for field in ("title", "message"):
+                for field in ("title", "message", "data"):
                     text = settings.get(field, defaults[field])
                     try:
                         Template(text, self.hass).ensure_valid()
@@ -260,5 +260,6 @@ class MonitoringSubentryFlow(config_entries.ConfigSubentryFlow):
                 ),
                 vol.Required("title", default=settings.get("title", defaults["title"])): selector.TemplateSelector(),
                 vol.Required("message", default=settings.get("message", defaults["message"])): selector.TemplateSelector(),
+                vol.Optional("data", default=settings.get("data", defaults["data"])): selector.TemplateSelector(),
             }))
         return self.async_show_form(step_id=step_id, data_schema=vol.Schema(fields), errors=errors)

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from homeassistant.components.mobile_app import device_action as mobile_app_action
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.group import GenericGroup, get_group_entities
@@ -212,6 +213,142 @@ class MonitoringNotificationTests(unittest.IsolatedAsyncioTestCase):
         await self._drain()
         self.assertNotIn("title", self.delivered[0])
         self.assertEqual(self.delivered[0]["message"], "Fixture sensor: alarm detected.")
+
+    async def test_companion_data_uses_native_action_and_preserves_critical_and_recovery_payloads(self):
+        settings = self.options[CONF_ALARM_NOTIFICATIONS]
+        settings.update({
+            "recipients": ["notify.fixture_a"],
+            "title": "{{ 'Ended' if resolved else 'Alarm {{ literal }}' }}",
+            "message": "{{ problem.name }} / {{ event_type }}",
+            "data": (
+                "{{ {'url': '/lovelace/alerts', 'entity_id': problem.entity_id} if resolved else "
+                "{'url': '/lovelace/alerts', 'push': {'sound': {'name': 'default', 'critical': 1, 'volume': 1}}} }}"
+            ),
+        })
+        registry = SimpleNamespace(async_get=Mock(return_value=SimpleNamespace(platform="mobile_app", device_id="fixture_device")))
+        calls = []
+        async def receive(call):
+            calls.append(dict(call.data))
+        self.hass.services.async_register("notify", "fixture_mobile", receive)
+        with (
+            patch.object(monitoring_notifications.er, "async_get", return_value=registry),
+            patch.object(monitoring_notifications, "async_get_device_automation_platform", new_callable=AsyncMock, return_value=mobile_app_action),
+            patch.object(mobile_app_action, "webhook_id_from_device_id", return_value="fixture_webhook") as resolve,
+            patch.object(mobile_app_action, "get_notify_service", return_value="fixture_mobile"),
+        ):
+            self.emit("alarm_triggered", self.problem)
+            self.emit("alarm_solved", self.problem)
+            await self._drain()
+        self.assertEqual([call.args[1] for call in resolve.call_args_list], ["fixture_device", "fixture_device"])
+        self.assertEqual(calls, [
+            {"target": "fixture_webhook", "title": "Alarm {{ literal }}", "message": "Fixture sensor / alarm_triggered",
+             "data": {"url": "/lovelace/alerts", "push": {"sound": {"name": "default", "critical": 1, "volume": 1}}}},
+            {"target": "fixture_webhook", "title": "Ended", "message": "Fixture sensor / alarm_solved",
+             "data": {"url": "/lovelace/alerts", "entity_id": "binary_sensor.fixture_problem"}},
+        ])
+        self.assertEqual(self.attempts, [])
+
+    async def test_invalid_data_does_not_silently_fall_back_to_ordinary_delivery(self):
+        settings = self.options[CONF_ALARM_NOTIFICATIONS]
+        settings["recipients"] = ["notify.fixture_a"]
+        for template in ("{{ missing.attribute }}", "{{ 1 / 0 }}", "{{ [] }}", "{{ none }}", "{{ 12 }}", "plain text"):
+            with self.subTest(template=template), self.assertLogs(monitoring_notifications._LOGGER, level="ERROR"):
+                settings["data"] = template
+                self.emit("alarm_triggered", self.problem)
+                await self._drain()
+            self.assertEqual(self.attempts, [])
+        for template in ("", "  ", "{{ {} }}"):
+            settings["data"] = template
+            self.emit("alarm_solved", self.problem)
+            await self._drain()
+        self.assertEqual(len(self.delivered), 3)
+
+    async def test_companion_failures_and_unsupported_targets_do_not_block_other_phones(self):
+        self.options[CONF_ALARM_NOTIFICATIONS].update({
+            "recipients": ["notify.fixture_a", "notify.fixture_b", "notify.fixture_c", "notify.fixture_unregistered", "notify.fixture_no_device"],
+            "data": "{{ {'url': '/lovelace/alerts'} }}",
+        })
+        for entity_id in ("notify.fixture_unregistered", "notify.fixture_no_device"):
+            self.hass.states.async_set(entity_id, "unknown")
+        registrations = {
+            "notify.fixture_a": SimpleNamespace(platform="mobile_app", device_id="fixture_device_a"),
+            "notify.fixture_b": SimpleNamespace(platform="mobile_app", device_id="fixture_device_b"),
+            "notify.fixture_c": SimpleNamespace(platform="other", device_id="fixture_device_c"),
+            "notify.fixture_no_device": SimpleNamespace(platform="mobile_app", device_id=None),
+        }
+        delivered = []
+        async def send(hass, config, variables, context):
+            if config["device_id"] == "fixture_device_a":
+                config["data"]["url"] = "/fixture-mutated"
+                raise HomeAssistantError("fixture phone failed")
+            delivered.append(config)
+        platform = SimpleNamespace(async_call_action_from_config=AsyncMock(side_effect=send))
+        with (
+            patch.object(monitoring_notifications.er, "async_get", return_value=SimpleNamespace(async_get=registrations.get)),
+            patch.object(monitoring_notifications, "async_get_device_automation_platform", new_callable=AsyncMock, return_value=platform),
+            self.assertLogs(monitoring_notifications._LOGGER, level="ERROR") as logs,
+        ):
+            self.emit("alarm_triggered", self.problem)
+            await self._drain()
+        self.assertEqual(len(logs.output), 4)
+        self.assertEqual(len(delivered), 1)
+        self.assertEqual(delivered[0]["device_id"], "fixture_device_b")
+        self.assertEqual(delivered[0]["data"], {"url": "/lovelace/alerts"})
+        self.assertEqual(self.attempts, [])
+
+    async def test_companion_timeout_keeps_other_phone_independent_and_all_clears_ordered(self):
+        self.options[CONF_ALARM_NOTIFICATIONS].update({
+            "recipients": ["notify.fixture_a", "notify.fixture_b"],
+            "data": "{{ {'url': '/lovelace/alerts', 'resolved': resolved} }}",
+        })
+        registrations = {f"notify.fixture_{name}": SimpleNamespace(platform="mobile_app", device_id=f"fixture_device_{name}") for name in ("a", "b")}
+        gate = asyncio.Event()
+        finished_b = asyncio.Event()
+        delivered = []
+        async def send(hass, config, variables, context):
+            if config["device_id"] == "fixture_device_a":
+                await gate.wait()
+            delivered.append(config)
+            if config["title"] == "Alarm ended":
+                finished_b.set()
+        platform = SimpleNamespace(async_call_action_from_config=AsyncMock(side_effect=send))
+        with (
+            patch.object(monitoring_notifications.er, "async_get", return_value=SimpleNamespace(async_get=registrations.get)),
+            patch.object(monitoring_notifications, "async_get_device_automation_platform", new_callable=AsyncMock, return_value=platform),
+            patch.object(monitoring_notifications, "_SEND_TIMEOUT", 0.05),
+            self.assertLogs(monitoring_notifications._LOGGER, level="ERROR"),
+        ):
+            self.emit("alarm_triggered", self.problem)
+            self.emit("alarm_solved", self.problem)
+            await asyncio.wait_for(finished_b.wait(), 1)
+            self.assertEqual([config["title"] for config in delivered], ["Alarm", "Alarm ended"])
+            await self._drain()
+        self.assertEqual([config["data"]["resolved"] for config in delivered], [False, True])
+        self.assertEqual(self.attempts, [])
+
+    async def test_native_groups_expand_before_companion_delivery_and_device_resolution_is_fresh(self):
+        groups = get_group_entities(self.hass)
+        group = SimpleNamespace(entity_id="notify.fixture_group")
+        group.group = GenericGroup(group, ["notify.fixture_a", "notify.fixture_b"])
+        groups[group.entity_id] = group
+        self.options[CONF_WARNING_NOTIFICATIONS].update({
+            "recipients": ["notify.fixture_group", "notify.fixture_a"],
+            "data": "{{ {'url': '/lovelace/alerts'} }}",
+        })
+        registrations = {f"notify.fixture_{name}": SimpleNamespace(platform="mobile_app", device_id=f"fixture_device_{name}") for name in ("a", "b")}
+        platform = SimpleNamespace(async_call_action_from_config=AsyncMock())
+        with (
+            patch.object(monitoring_notifications.er, "async_get", return_value=SimpleNamespace(async_get=registrations.get)),
+            patch.object(monitoring_notifications, "async_get_device_automation_platform", new_callable=AsyncMock, return_value=platform),
+        ):
+            self.emit("triggered", self.problem)
+            await self._drain()
+            registrations["notify.fixture_a"].device_id = "fixture_replacement_device"
+            self.emit("solved", self.problem)
+            await self._drain()
+        self.assertEqual([call.args[1]["device_id"] for call in platform.async_call_action_from_config.call_args_list], [
+            "fixture_device_a", "fixture_device_b", "fixture_replacement_device", "fixture_device_b",
+        ])
 
     async def test_stop_unsubscribes_and_cancels_queued_delivery(self):
         self.options[CONF_WARNING_NOTIFICATIONS]["recipients"] = ["notify.fixture_a"]

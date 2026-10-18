@@ -89,12 +89,14 @@
               "data": {
                 "recipients": "Recipients",
                 "title": "Title template",
-                "message": "Message template"
+                "message": "Message template",
+                "data": "Companion app data template"
               },
               "data_description": {
                 "recipients": "Select notification targets or notification groups.",
                 "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved."
+                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return {} for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             },
             "alarm_notifications": {
@@ -103,12 +105,14 @@
               "data": {
                 "recipients": "Recipients",
                 "title": "Title template",
-                "message": "Message template"
+                "message": "Message template",
+                "data": "Companion app data template"
               },
               "data_description": {
                 "recipients": "Select notification targets or notification groups.",
                 "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved."
+                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return {} for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             }
           }
@@ -147,12 +151,14 @@
               "data": {
                 "recipients": "Recipients",
                 "title": "Title template",
-                "message": "Message template"
+                "message": "Message template",
+                "data": "Companion app data template"
               },
               "data_description": {
                 "recipients": "Select notification targets or notification groups.",
                 "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved."
+                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return {} for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             },
             "alarm_notifications": {
@@ -161,19 +167,21 @@
               "data": {
                 "recipients": "Recipients",
                 "title": "Title template",
-                "message": "Message template"
+                "message": "Message template",
+                "data": "Companion app data template"
               },
               "data_description": {
                 "recipients": "Select notification targets or notification groups.",
                 "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved."
+                "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return {} for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             }
           }
         }
       },
       "error": {
-        "invalid_template": "Enter valid notification templates for the title and message.",
+        "invalid_template": "Enter valid notification templates for the title, message and optional data.",
         "empty_message": "Enter a notification message or a template that produces a message."
       }
     }

@@ -305,10 +305,11 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(fields["recipients"].config["filter"], [{"domain": ["notify"]}])
             self.assertIsInstance(fields["title"], selector.TemplateSelector)
             self.assertIsInstance(fields["message"], selector.TemplateSelector)
+            self.assertIsInstance(fields["data"], selector.TemplateSelector)
 
     async def test_rejects_invalid_templates_and_empty_messages_without_losing_edits(self):
         for channel in (CONF_WARNING_NOTIFICATIONS, CONF_ALARM_NOTIFICATIONS):
-            for field, text, error in (("title", "{%", "invalid_template"), ("message", "{{", "invalid_template"), ("message", "  ", "empty_message")):
+            for field, text, error in (("title", "{%", "invalid_template"), ("message", "{{", "invalid_template"), ("data", "{{", "invalid_template"), ("message", "  ", "empty_message")):
                 with self.subTest(channel=channel, field=field, error=error):
                     flow = MonitoringSubentryFlow()
                     flow.handler = ("test-entry", MONITORING_SUBENTRY_TYPE)
@@ -329,6 +330,7 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             CONF_WARNING_NOTIFICATIONS: {
                 "recipients": ["notify.fixture_a", "notify.fixture_group"],
                 "title": "Custom warning", "message": "{{ problem.name | upper }} / {{ event_type }}",
+                "data": "{{ {'url': '/lovelace/alerts'} }}",
             },
             CONF_ALARM_NOTIFICATIONS: {"recipients": [], "title": "", "message": "Custom alarm"},
         }
@@ -347,7 +349,7 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             result = await flow.async_step_reconfigure()
             defaults = result["data_schema"]({})
             for channel in (CONF_WARNING_NOTIFICATIONS, CONF_ALARM_NOTIFICATIONS):
-                self.assertEqual(defaults[channel], saved[channel])
+                self.assertEqual(defaults[channel], {"data": "{{ {} }}", **saved[channel]})
             result = await flow.async_step_reconfigure(defaults)
         self.assertEqual(result["type"], FlowResultType.ABORT)
         self.assertEqual(update.call_args.kwargs["data"], defaults)

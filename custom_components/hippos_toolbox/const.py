@@ -88,11 +88,13 @@ MONITORING_NOTIFICATION_DEFAULTS = {
             "{% elif problem.reason == 'below_threshold' %}below the configured threshold."
             "{% else %}problem detected.{% endif %}"
         ),
+        "data": "{{ {} }}",
     },
     CONF_ALARM_NOTIFICATIONS: {
         "recipients": [],
         "title": "{{ 'Alarm ended' if resolved else 'Alarm' }}",
         "message": "{{ problem.name }}: {{ 'alarm ended.' if resolved else 'alarm detected.' }}",
+        "data": "{{ {} }}",
     },
 }
 

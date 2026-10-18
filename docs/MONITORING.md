@@ -84,7 +84,7 @@ A recipient list left empty means **no delivery for that category**. Monitoring 
 
 Both sections have a prefilled **Title template** and **Message template**. The defaults are English and distinguish a new issue from an all-clear. Leave them unchanged for a first setup, or translate and customize them locally. Saved recipients and templates are retained across updates. See [Customize messages](#customize-messages) for the available variables.
 
-Alarm messages use normal notification delivery. Platform-specific critical push options are not set automatically.
+Alarm messages use normal notification delivery by default. For Companion app recipients, the optional **Companion app data template** can add platform-specific settings such as a dashboard URL or a critical notification sound. Use `resolved` to give an all-clear different settings from the original alarm. See [Companion app notification data](#companion-app-notification-data).
 
 ### 7. Save and check the created entities
 
@@ -136,7 +136,22 @@ Standard HA template functions such as `states()` and `state_attr()` are availab
 {{ problem.name }}: {{ 'Everything is clear.' if resolved else 'Please check this device.' }}
 ```
 
-Invalid template syntax and blank message text are rejected when saving. If a template fails at runtime or renders an empty message, the affected field uses its default text and the error is logged. An empty title is allowed. Targets without title support still receive the message. Alarm notifications use normal notification delivery; platform-specific critical push options are not set.
+Invalid template syntax and blank message text are rejected when saving. If a title or message template fails at runtime or renders an empty message, the affected field uses its default text and the error is logged. An empty title is allowed. Targets without title support still receive the message.
+
+### Companion app notification data
+
+The optional **Companion app data template** accepts the same variables as the title and message. It must produce a mapping of [Companion app notification options](https://companion.home-assistant.io/docs/notifications/notifications-basic), such as `url` or `push`. Leave it empty or return `{{ {} }}` to use normal notification delivery. Existing configurations keep that default.
+
+For example, this template opens a dashboard when tapped and requests an iOS critical sound for a new alarm, while sending its all-clear normally:
+
+```jinja
+{{ {'url': '/lovelace/alerts'} if resolved else {
+  'url': '/lovelace/alerts',
+  'push': {'sound': {'name': 'default', 'critical': 1, 'volume': 1}}
+} }}
+```
+
+Replace the URL with a view from your installation. Critical sounds also require the corresponding permission in the phone's notification settings. Non-empty data requires Companion app recipients, including the members of any selected group. Other notification targets are logged and skipped for that event. If the data template fails or produces something other than a mapping, the event is not sent and an error is logged; it does not fall back to an ordinary push that might silently lose critical settings.
 
 ## Dashboard
 
@@ -212,7 +227,7 @@ filter:
 
 ## Notification delivery
 
-The integration sends through Home Assistant's `notify.send_message` action. Native groups, including nested groups, are expanded for each event. A recipient selected directly and through one or more groups receives that event once. Deliveries run independently with a 15-second timeout per recipient. A missing, unavailable, failing, or slow target does not block another recipient or further monitoring. Each recipient keeps new messages and all-clears in event order. Failures are logged and are not automatically retried. Pending deliveries are cancelled when the integration unloads or reloads.
+The integration uses Home Assistant's `notify.send_message` action for normal delivery. When a data template produces a non-empty mapping, it resolves each Companion app recipient's current device and uses HA's native mobile-app notification action to preserve those options. Native groups, including nested groups, are expanded for each event. A recipient selected directly and through one or more groups receives that event once. Deliveries run independently with a 15-second timeout per recipient. A missing, unavailable, failing, or slow target does not block another recipient or further monitoring. Each recipient keeps new messages and all-clears in event order. Failures are logged and are not automatically retried. Pending deliveries are cancelled when the integration unloads or reloads.
 
 ## State and event reference
 
