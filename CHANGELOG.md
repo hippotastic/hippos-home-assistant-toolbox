@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.14.0
+
+### Minor Changes
+
+- e0d9487: Add an optional Companion app data template to monitoring notifications so local configurations can retain dashboard links and platform-specific options such as critical iOS sounds. Resolve selected notification entities through HA's native mobile-app device action, keep recipient failures isolated, and allow all-clears to use different data from new alarms. Invalid data is logged without silently falling back to ordinary delivery.
+
 ## 0.13.0
 
 ### Minor Changes
