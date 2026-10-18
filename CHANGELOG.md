@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.14.1
+
+### Patch Changes
+
+- a121eed: Initialize monitoring notification sections with their saved recipients and templates so the setup form displays editable values instead of empty fields and concatenated recipient placeholders.
+
 ## 0.14.0
 
 ### Minor Changes
