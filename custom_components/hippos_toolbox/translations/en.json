@@ -96,7 +96,7 @@
                 "recipients": "Select notification targets or notification groups.",
                 "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
                 "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return {} for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             },
             "alarm_notifications": {
@@ -112,7 +112,7 @@
                 "recipients": "Select notification targets or notification groups.",
                 "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
                 "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return {} for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             }
           }
@@ -158,7 +158,7 @@
                 "recipients": "Select notification targets or notification groups.",
                 "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
                 "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return {} for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             },
             "alarm_notifications": {
@@ -174,7 +174,7 @@
                 "recipients": "Select notification targets or notification groups.",
                 "title": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
                 "message": "Available variables: problem.name, problem.entity_id, problem.reason, event_type and resolved.",
-                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return {} for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
+                "data": "Optional mapping for Companion app options such as a URL or critical sound. Use resolved to distinguish an alarm from its all-clear. Leave empty or return an empty mapping for normal delivery. Non-empty data requires Companion app recipients; unsupported targets are logged and skipped."
               }
             }
           }
