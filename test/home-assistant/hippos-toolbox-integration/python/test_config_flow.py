@@ -297,6 +297,12 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
         flow.hass = self.hass
         with patch.object(flow, "_get_entry", return_value=SimpleNamespace(subentries={})):
             result = await flow.async_step_user()
+        # The frontend uses the section's own default without applying child defaults.
+        section_defaults = {
+            key.schema: key.default() for key in result["data_schema"].schema
+            if key.schema in MONITORING_NOTIFICATION_DEFAULTS
+        }
+        self.assertEqual(section_defaults, MONITORING_NOTIFICATION_DEFAULTS)
         sections = {key.schema: value for key, value in result["data_schema"].schema.items()}
         for channel in (CONF_WARNING_NOTIFICATIONS, CONF_ALARM_NOTIFICATIONS):
             fields = {key.schema: value for key, value in sections[channel].schema.schema.items()}
@@ -319,6 +325,13 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
                         result = await flow.async_step_user(submitted)
                     self.assertEqual(result["type"], FlowResultType.FORM)
                     self.assertEqual(result["errors"], {"base": error})
+                    section_defaults = {
+                        key.schema: key.default() for key in result["data_schema"].schema
+                        if key.schema in MONITORING_NOTIFICATION_DEFAULTS
+                    }
+                    self.assertEqual(section_defaults[channel], {
+                        **MONITORING_NOTIFICATION_DEFAULTS[channel], **submitted[channel],
+                    })
                     sections = {key.schema: value for key, value in result["data_schema"].schema.items()}
                     defaults = {key.schema: key.default() for key in sections[channel].schema.schema}
                     self.assertEqual(defaults[field], text)
@@ -348,8 +361,13 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(flow, "_get_entry", return_value=entry), patch.object(flow, "_get_reconfigure_subentry", return_value=current):
             result = await flow.async_step_reconfigure()
             defaults = result["data_schema"]({})
+            section_defaults = {
+                key.schema: key.default() for key in result["data_schema"].schema
+                if key.schema in MONITORING_NOTIFICATION_DEFAULTS
+            }
             for channel in (CONF_WARNING_NOTIFICATIONS, CONF_ALARM_NOTIFICATIONS):
                 self.assertEqual(defaults[channel], {"data": "{{ {} }}", **saved[channel]})
+                self.assertEqual(section_defaults[channel], defaults[channel])
             result = await flow.async_step_reconfigure(defaults)
         self.assertEqual(result["type"], FlowResultType.ABORT)
         self.assertEqual(update.call_args.kwargs["data"], defaults)

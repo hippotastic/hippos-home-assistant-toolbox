@@ -254,7 +254,8 @@ class MonitoringSubentryFlow(config_entries.ConfigSubentryFlow):
             )
         for key, defaults in MONITORING_NOTIFICATION_DEFAULTS.items():
             settings = options.get(key, {})
-            fields[vol.Required(key, default=dict)] = section(vol.Schema({
+            # HA uses a section default directly, without initializing its child fields.
+            fields[vol.Required(key, default={**defaults, **settings})] = section(vol.Schema({
                 vol.Optional("recipients", default=settings.get("recipients", [])): selector.EntitySelector(
                     selector.EntitySelectorConfig(filter={"domain": "notify"}, multiple=True)
                 ),
