@@ -14,13 +14,19 @@ Open **Settings > Devices & services > Hippo's Home Assistant Toolbox > Configur
 
 | Option | Behavior |
 | --- | --- |
-| Camera zoom | Enlarges camera dialogs and enables mouse-wheel zoom, pinch zoom, and dragging. Includes the existing iOS aspect-ratio and video-display corrections. |
+| Camera zoom | Enlarges camera dialogs and enables double-tap zoom, mouse-wheel zoom, pinch zoom, and dragging. Includes the existing iOS aspect-ratio and video-display corrections. |
 | Automatically restore camera streams | Renews expired HLS URLs after background cleanup and retries failed or initially blank MJPEG views with fresh signed URLs and retry backoff. |
 | Reliably close abandoned camera streams | Gives each native MJPEG view its own controllable response and closes it on navigation, backgrounding, or WebSocket disconnect. Two views of the same camera remain independent. |
 
 Changes apply to connected clients without reloading the integration or clearing the progressive-camera cache. Disabling a feature removes its frontend hooks. Stream cleanup can operate without error recovery; its own responses resume when the frontend becomes visible again. A client reload after upgrading the integration loads the new frontend bundle.
 
 These features apply to Home Assistant's standard camera elements, including progressive cameras. Third-party camera cards that implement their own players are outside this scope. A stream that silently stops updating while retaining a valid decoded image cannot be reliably identified through a native MJPEG image element. Frontend extensions depend on HA internals; unsupported camera rendering falls back to HA's native path.
+
+## Zooming in a camera dialog
+
+Open a camera's standard more-info dialog and double-tap the detail you want to inspect. The view smoothly zooms to twice its initial size and centers that detail as far as the image edges allow. Double-tap again to return to the full image, including after zooming manually. A mouse double-click works the same way. Reduced-motion preferences skip the animation.
+
+Drag to move around an enlarged view, pinch to adjust magnification, or use the mouse wheel. Single taps, long presses, dragging, and pinch gestures do not trigger double-tap zoom. After updating the integration, reload the client and try two double-taps to verify that the view enlarges and returns to the full image. The existing **Camera zoom** option controls this behavior; no additional configuration is needed.
 
 ## Loading and communication
 

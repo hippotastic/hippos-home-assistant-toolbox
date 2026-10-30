@@ -53,6 +53,8 @@ class LocalHacsTests(unittest.IsolatedAsyncioTestCase):
         # An uncommitted edit must invalidate a previously valid manifest
         del self.manifest["version"]
         self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
+        # HACS caches loaded manifests; discard the previous read before revalidating.
+        self.repo.integration_manifest = {}
         with self.assertLogs(self.repo.logger, level="WARNING"), self.assertRaises(ValidationException):
             await ManifestValidator(self.repo).async_validate()
 

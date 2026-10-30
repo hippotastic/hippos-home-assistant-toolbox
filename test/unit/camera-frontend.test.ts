@@ -212,6 +212,233 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 	}
 }
 
+async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false } = {}) {
+	const f = await fixture({ ios })
+	let media: HTMLImageElement | HTMLVideoElement = f.camera.shadowRoot!.querySelector('img')!
+	if (playerTag) {
+		const player = f.w.document.createElement(playerTag)
+		media.remove()
+		media = f.w.document.createElement('video')
+		player.attachShadow({ mode: 'open' }).append(media)
+		f.camera.shadowRoot!.append(player)
+	}
+	let frameTime = 0
+	let frameId = 0
+	const frames = new Map<number, FrameRequestCallback>()
+	f.w.requestAnimationFrame = (callback) => {
+		frames.set(++frameId, callback)
+		return frameId
+	}
+	f.w.cancelAnimationFrame = (id) => frames.delete(id)
+	Object.defineProperty(f.w.performance, 'now', { value: () => frameTime })
+	f.w.matchMedia = () => ({ matches: reducedMotion }) as MediaQueryList
+	const view = () => {
+		const values = /translate(?:3d)?\(([-\d.]+)px, ([-\d.]+)px(?:, 0)?\) scale\(([-\d.]+)\)/.exec(media.style.transform)
+		return values ? { x: Number(values[1]), y: Number(values[2]), scale: Number(values[3]) } : { x: 0, y: 0, scale: 1 }
+	}
+	const Rect = f.w.DOMRect as typeof DOMRect
+	media.getBoundingClientRect = () => {
+		const { x, y, scale } = view()
+		return new Rect(100 + x - (400 * (scale - 1)) / 2, 200 + y - (200 * (scale - 1)) / 2, 400 * scale, 200 * scale)
+	}
+	f.camera.getBoundingClientRect = () => new Rect(100, 200, 400, 200)
+	const pointer = (type: string, { pointerId = 1, pointerType = 'touch', clientX = 300, clientY = 300, button = 0 } = {}) => {
+		// jsdom has no PointerEvent constructor; supply its fields on a mouse event.
+		const event = new f.w.MouseEvent(type, { clientX, clientY, button, bubbles: true, composed: true, cancelable: true })
+		Object.defineProperties(event, { pointerId: { value: pointerId }, pointerType: { value: pointerType }, timeStamp: { value: f.w.Date.now() } })
+		media.dispatchEvent(event)
+		return event
+	}
+	const frame = (elapsed = 220) => {
+		frameTime += elapsed
+		for (const [id, callback] of [...frames]) {
+			// A callback earlier in this frame may cancel a later callback.
+			if (!frames.delete(id)) continue
+			callback(frameTime)
+		}
+	}
+	await f.settings(true, false, false)
+	frame(0)
+	return {
+		...f,
+		media,
+		view,
+		pointer,
+		tap: (clientX = 300, clientY = 300, pointerType = 'touch') => {
+			pointer('pointerdown', { clientX, clientY, pointerType })
+			pointer('pointerup', { clientX, clientY, pointerType })
+		},
+		frame,
+	}
+}
+
+describe('camera double-tap zoom', () => {
+	test.each([
+		{ ios: false, playerTag: '' },
+		{ ios: true, playerTag: '' },
+		{ ios: false, playerTag: 'ha-hls-player' },
+		{ ios: true, playerTag: 'ha-hls-player' },
+		{ ios: false, playerTag: 'ha-web-rtc-player' },
+		{ ios: true, playerTag: 'ha-web-rtc-player' },
+	])('animates into the tapped detail and back to the overview (%j)', async (options) => {
+		const f = await zoomFixture(options)
+		let ancestorGestures = 0
+		f.dialog.addEventListener('pointerdown', () => ancestorGestures++)
+		f.dialog.addEventListener('pointerup', () => ancestorGestures++)
+		f.tap(350, 320)
+		f.frame()
+		expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+		await f.tick(100)
+		f.tap(350, 320)
+		f.frame(110)
+		expect(f.view()).toEqual({ scale: 1.875, x: -87.5, y: -35 })
+		f.frame(110)
+		expect(f.view()).toEqual({ scale: 2, x: -100, y: -40 })
+		// A browser's compatibility dblclick must not apply the gesture twice.
+		f.media.dispatchEvent(new f.w.MouseEvent('dblclick', { bubbles: true, clientX: 350, clientY: 320 }))
+		f.frame()
+		expect(f.view()).toEqual({ scale: 2, x: -100, y: -40 })
+		f.tap(300, 300)
+		await f.tick(100)
+		f.tap(300, 300)
+		f.frame()
+		expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+		expect(ancestorGestures).toBe(0)
+		f.dispose()
+	})
+
+	test.each(['touch', 'mouse', 'pen'])('clamps zoom near the image edges for %s', async (pointerType) => {
+		const f = await zoomFixture()
+		f.tap(490, 390, pointerType)
+		f.tap(490, 390, pointerType)
+		f.frame()
+		expect(f.view()).toEqual({ scale: 2, x: -200, y: -100 })
+		f.dispose()
+	})
+
+	test.each(['slow', 'far apart', 'long press', 'drag', 'drag back', 'moved release', 'pointercancel', 'lostpointercapture', 'different pointer types', 'secondary button'])(
+		'does not zoom for %s, and recognizes a fresh pair afterwards',
+		async (gesture) => {
+			const f = await zoomFixture()
+			f.tap()
+			if (gesture === 'slow') await f.tick(500)
+			const options = {
+				clientX: gesture === 'far apart' ? 400 : 300,
+				pointerType: gesture === 'different pointer types' ? 'mouse' : 'touch',
+				button: gesture === 'secondary button' ? 2 : 0,
+			}
+			f.pointer('pointerdown', options)
+			if (gesture === 'long press') await f.tick(500)
+			if (gesture === 'drag' || gesture === 'drag back') f.pointer('pointermove', { clientX: 340 })
+			if (gesture === 'drag back') f.pointer('pointermove')
+			f.pointer(gesture === 'pointercancel' || gesture === 'lostpointercapture' ? gesture : 'pointerup', {
+				...options,
+				clientX: gesture === 'drag' || gesture === 'moved release' ? 340 : options.clientX,
+			})
+			f.frame()
+			expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+			await f.tick(500)
+			f.tap()
+			f.tap()
+			f.frame()
+			expect(f.view().scale).toBe(2)
+			f.dispose()
+		}
+	)
+
+	test('preserves pan and pinch, and resets a manually zoomed view on double-tap', async () => {
+		const f = await zoomFixture()
+		f.tap(350, 320)
+		f.tap(350, 320)
+		f.frame()
+		f.pointer('pointerdown')
+		f.pointer('pointermove', { clientX: 330, clientY: 320 })
+		f.pointer('pointerup', { clientX: 330, clientY: 320 })
+		expect(f.view()).toEqual({ scale: 2, x: -70, y: -20 })
+		f.tap()
+		f.pointer('pointerdown', { clientX: 250 })
+		f.pointer('pointerdown', { pointerId: 2, clientX: 350 })
+		f.pointer('pointermove', { pointerId: 2, clientX: 450 })
+		f.pointer('pointerup', { pointerId: 2, clientX: 450 })
+		f.pointer('pointerup', { clientX: 250 })
+		f.tap()
+		f.frame()
+		expect(f.view().scale).toBe(4)
+		f.tap()
+		f.frame()
+		expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+		f.dispose()
+	})
+
+	test('wheel zoom invalidates a preceding tap and double-tap resets fractional zoom', async () => {
+		const f = await zoomFixture()
+		f.tap()
+		const event = new f.w.WheelEvent('wheel', { cancelable: true, deltaY: -100, clientX: 350, clientY: 320 })
+		f.media.dispatchEvent(event)
+		expect(event.defaultPrevented).toBe(true)
+		const scale = f.view().scale
+		expect(scale).toBeGreaterThan(1)
+		f.tap()
+		f.frame()
+		expect(f.view().scale).toBe(scale)
+		f.tap()
+		f.frame()
+		expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+		f.dispose()
+	})
+
+	test.each(['pointer', 'wheel', 'resize'])('interrupts animation at the current view on %s', async (interaction) => {
+		const f = await zoomFixture()
+		f.tap()
+		f.tap()
+		f.frame(110)
+		expect(f.view().scale).toBe(1.875)
+		if (interaction === 'pointer') {
+			f.pointer('pointerdown')
+			f.pointer('pointermove', { clientX: 320 })
+			expect(f.view()).toEqual({ scale: 1.875, x: 20, y: 0 })
+		} else if (interaction === 'wheel') {
+			f.media.dispatchEvent(new f.w.WheelEvent('wheel', { deltaY: -100, clientX: 300, clientY: 300 }))
+			expect(f.view().scale).toBeGreaterThan(2)
+		} else f.w.dispatchEvent(new f.w.Event('resize'))
+		const interrupted = f.view()
+		f.frame()
+		expect(f.view()).toEqual(interrupted)
+		f.dispose()
+	})
+
+	test('respects reduced motion without delaying zoom', async () => {
+		const f = await zoomFixture({ reducedMotion: true })
+		f.tap()
+		f.tap()
+		expect(f.view().scale).toBe(2)
+		f.tap()
+		f.tap()
+		expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+		f.dispose()
+	})
+
+	test.each(['disable', 'close', 'detach', 'dispose'])('cancels animation and removes gestures on %s', async (action) => {
+		const f = await zoomFixture({ ios: true })
+		f.tap()
+		f.tap()
+		f.frame(110)
+		expect(f.view().scale).toBe(1.875)
+		if (action === 'disable') await f.settings(false, false, false)
+		else if (action === 'close') f.dialog.dispatchEvent(new f.w.Event('closed'))
+		else if (action === 'detach') {
+			f.media.remove()
+			await flush()
+		} else f.dispose()
+		f.frame()
+		f.tap()
+		f.tap()
+		f.frame()
+		expect(f.media.getAttribute('style')).toBeNull()
+		f.dispose()
+	})
+})
+
 describe('camera frontend', () => {
 	test.each(['app', 'connection', 'both'] as const)('starts without another reload when %s becomes ready after the bundle', async (delayed) => {
 		const f = await fixture({ deferApp: delayed !== 'connection', deferConnection: delayed !== 'app' })

@@ -1,6 +1,6 @@
 /* Camera dialog zoom, pan and aspect-ratio corrections. */
 export function installCameraZoom() {
-	const VERSION = 26
+	const VERSION = 27
 	let disposed = false
 	const undoPatches = []
 	const cleanups = new Map()
@@ -34,6 +34,11 @@ export function installCameraZoom() {
 	}
 
 	const MIN_SCALE = 1
+	const DOUBLE_TAP_SCALE = 2
+	const DOUBLE_TAP_DELAY_MS = 300
+	const TAP_SLOP_PX = 10
+	const DOUBLE_TAP_DISTANCE_PX = 30
+	const ZOOM_ANIMATION_MS = 220
 	const VIDEO_MIN_REVEAL_DELAY_MS = 180
 	const VIDEO_REVEAL_WATCHDOG_MS = 5000
 	const IS_IOS_WEBKIT = /iP(?:ad|hone|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
@@ -839,6 +844,9 @@ export function installCameraZoom() {
 		let state = { scale: MIN_SCALE, x: 0, y: 0 }
 		let panOrigin = null
 		let pinchDistance = null
+		let tap = null
+		let lastTap = null
+		let zoomFrame = null
 		let revealCheckTimer = null
 		let revealWatchdogTimer = null
 		let revealFrame = null
@@ -868,8 +876,14 @@ export function installCameraZoom() {
 			})
 		}
 
+		const stopZoomAnimation = () => {
+			if (zoomFrame != null) cancelAnimationFrame(zoomFrame)
+			zoomFrame = null
+		}
+
 		const refit = () => {
 			if (disposed || !mediaActive) return null
+			stopZoomAnimation()
 			const viewport = fitMediaToViewport(media)
 			if (!viewport) return null
 			state = calculatePanState(state, media.getBoundingClientRect(), 0, 0)
@@ -950,13 +964,20 @@ export function installCameraZoom() {
 		}
 
 		listen(media, 'pointerdown', (event) => {
+			if (event.button !== 0) return
 			event.preventDefault()
 			event.stopPropagation()
+			stopZoomAnimation()
 			pointers.set(event.pointerId, event)
 			media.setPointerCapture?.(event.pointerId)
 
-			if (pointers.size === 1) beginPan(event)
-			else if (pointers.size === 2) beginPinch()
+			if (pointers.size === 1) {
+				tap = { pointerId: event.pointerId, pointerType: event.pointerType, clientX: event.clientX, clientY: event.clientY, timeStamp: event.timeStamp }
+				beginPan(event)
+			} else {
+				tap = lastTap = null
+				if (pointers.size === 2) beginPinch()
+			}
 		})
 
 		listen(media, 'pointermove', (event) => {
@@ -964,6 +985,7 @@ export function installCameraZoom() {
 			event.preventDefault()
 			event.stopPropagation()
 			pointers.set(event.pointerId, event)
+			if (tap && Math.hypot(event.clientX - tap.clientX, event.clientY - tap.clientY) > TAP_SLOP_PX) tap = lastTap = null
 
 			if (pointers.size >= 2) {
 				const [first, second] = [...pointers.values()]
@@ -986,6 +1008,49 @@ export function installCameraZoom() {
 		const endPointer = (event) => {
 			if (!pointers.has(event.pointerId)) return
 			event.stopPropagation()
+			// Only short, stationary, completed single-pointer gestures count as taps.
+			// Cancellation and a pinch's remaining finger must never complete a pair.
+			if (
+				event.type === 'pointerup' &&
+				tap?.pointerId === event.pointerId &&
+				event.timeStamp - tap.timeStamp <= DOUBLE_TAP_DELAY_MS &&
+				Math.hypot(event.clientX - tap.clientX, event.clientY - tap.clientY) <= TAP_SLOP_PX
+			) {
+				if (
+					lastTap &&
+					lastTap.pointerType === event.pointerType &&
+					tap.timeStamp - lastTap.timeStamp <= DOUBLE_TAP_DELAY_MS &&
+					Math.hypot(event.clientX - lastTap.clientX, event.clientY - lastTap.clientY) <= DOUBLE_TAP_DISTANCE_PX
+				) {
+					const from = { ...state }
+					const target = { scale: MIN_SCALE, x: 0, y: 0 }
+					if (state.scale === MIN_SCALE) {
+						const rect = media.getBoundingClientRect()
+						target.scale = DOUBLE_TAP_SCALE
+						// Center the tapped detail, keeping the image edges inside the pan bounds.
+						const maxX = (rect.width * (target.scale - MIN_SCALE)) / 2
+						const maxY = (rect.height * (target.scale - MIN_SCALE)) / 2
+						target.x = clamp((rect.left + rect.width / 2 - event.clientX) * target.scale, -maxX, maxX)
+						target.y = clamp((rect.top + rect.height / 2 - event.clientY) * target.scale, -maxY, maxY)
+					}
+					if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+						state = target
+						renderState()
+					} else {
+						const startedAt = performance.now()
+						const animate = (now) => {
+							const progress = clamp((now - startedAt) / ZOOM_ANIMATION_MS, 0, 1)
+							const eased = 1 - (1 - progress) ** 3
+							state = { scale: from.scale + (target.scale - from.scale) * eased, x: from.x + (target.x - from.x) * eased, y: from.y + (target.y - from.y) * eased }
+							renderState()
+							zoomFrame = progress < 1 ? requestAnimationFrame(animate) : null
+						}
+						zoomFrame = requestAnimationFrame(animate)
+					}
+					lastTap = null
+				} else lastTap = { pointerType: event.pointerType, clientX: event.clientX, clientY: event.clientY, timeStamp: event.timeStamp }
+			} else lastTap = null
+			tap = null
 			pointers.delete(event.pointerId)
 			pinchDistance = null
 
@@ -1006,6 +1071,8 @@ export function installCameraZoom() {
 			(event) => {
 				event.preventDefault()
 				event.stopPropagation()
+				stopZoomAnimation()
+				tap = lastTap = null
 
 				const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1
 				const factor = Math.exp(-event.deltaY * unit * 0.0015)
@@ -1049,6 +1116,7 @@ export function installCameraZoom() {
 		const cleanup = () => {
 			mediaActive = false
 			events.abort()
+			stopZoomAnimation()
 			revealPending = false
 			revealGeneration += 1
 			clearTimeout(revealCheckTimer)
