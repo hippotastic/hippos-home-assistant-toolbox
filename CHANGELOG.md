@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.16.0
+
+### Minor Changes
+
+- f4c8d7f: Add animated double-tap zoom to camera dialogs: zoom into a tapped detail, then double-tap again to return to the full image. Support mouse double-clicks and reduced-motion preferences while preserving pinch zoom and dragging.
+
 ## 0.15.0
 
 ### Minor Changes
