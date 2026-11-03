@@ -222,6 +222,15 @@ async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false 
 		player.attachShadow({ mode: 'open' }).append(media)
 		f.camera.shadowRoot!.append(player)
 	}
+	const viewport = f.w.document.createElement('more-info-camera')
+	viewport.append(f.camera)
+	f.dialog.append(viewport)
+	Object.defineProperties(
+		media,
+		media.tagName === 'VIDEO'
+			? { videoWidth: { value: 400, configurable: true }, videoHeight: { value: 200, configurable: true } }
+			: { naturalWidth: { value: 400, configurable: true }, naturalHeight: { value: 200, configurable: true } }
+	)
 	let frameTime = 0
 	let frameId = 0
 	const frames = new Map<number, FrameRequestCallback>()
@@ -239,8 +248,11 @@ async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false 
 	const Rect = f.w.DOMRect as typeof DOMRect
 	media.getBoundingClientRect = () => {
 		const { x, y, scale } = view()
-		return new Rect(100 + x - (400 * (scale - 1)) / 2, 200 + y - (200 * (scale - 1)) / 2, 400 * scale, 200 * scale)
+		const width = parseFloat(media.style.width) || 400
+		const height = parseFloat(media.style.height) || 200
+		return new Rect(300 + x - (width * scale) / 2, 300 + y - (height * scale) / 2, width * scale, height * scale)
 	}
+	viewport.getBoundingClientRect = () => new Rect(100, 200, 400, 200)
 	f.camera.getBoundingClientRect = () => new Rect(100, 200, 400, 200)
 	const pointer = (type: string, { pointerId = 1, pointerType = 'touch', clientX = 300, clientY = 300, button = 0 } = {}) => {
 		// jsdom has no PointerEvent constructor; supply its fields on a mouse event.
@@ -307,10 +319,62 @@ describe('camera double-tap zoom', () => {
 		f.dispose()
 	})
 
+	test.each([100, 400, 1000].flatMap((interval) => [false, true].map((reducedMotion) => ({ interval, reducedMotion }))))(
+		'uses the native mouse double-click interval exactly once per pair (%j)',
+		async ({ interval, reducedMotion }) => {
+			const f = await zoomFixture({ reducedMotion })
+			for (const target of [
+				{ scale: 2, x: -100, y: -40 },
+				{ scale: 1, x: 0, y: 0 },
+			]) {
+				f.tap(350, 320, 'mouse')
+				await f.tick(interval)
+				f.tap(350, 320, 'mouse')
+				const event = new f.w.MouseEvent('dblclick', { bubbles: true, composed: true, cancelable: true, button: 0, clientX: 350, clientY: 320 })
+				f.media.dispatchEvent(event)
+				f.frame()
+				expect(event.defaultPrevented).toBe(true)
+				expect(f.view()).toEqual(target)
+			}
+			f.dispose()
+		}
+	)
+
+	test.each(['load', 'loadedmetadata', 'loadeddata', 'canplay', 'playing', 'resize'])('finishes both zoom directions after %s with unchanged media geometry', async (type) => {
+		const f = await zoomFixture({ ios: true, playerTag: 'ha-hls-player' })
+		for (const target of [
+			{ scale: 2, x: -100, y: -40 },
+			{ scale: 1, x: 0, y: 0 },
+		]) {
+			f.tap(350, 320)
+			f.tap(350, 320)
+			f.frame(110)
+			f.media.dispatchEvent(new f.w.Event(type))
+			f.frame(220)
+			expect(f.view()).toEqual(target)
+		}
+		f.dispose()
+	})
+
+	test('interrupts zoom when new video dimensions change the fitted image size', async () => {
+		const f = await zoomFixture({ playerTag: 'ha-web-rtc-player' })
+		f.tap()
+		f.tap()
+		f.frame(110)
+		Object.defineProperty(f.media, 'videoHeight', { value: 400 })
+		f.media.dispatchEvent(new f.w.Event('resize'))
+		expect(f.media.style.width).toBe('200px')
+		expect(f.media.style.height).toBe('200px')
+		f.frame(220)
+		expect(f.view()).toEqual({ scale: 1.875, x: 0, y: 0 })
+		f.dispose()
+	})
+
 	test.each(['touch', 'mouse', 'pen'])('clamps zoom near the image edges for %s', async (pointerType) => {
 		const f = await zoomFixture()
 		f.tap(490, 390, pointerType)
 		f.tap(490, 390, pointerType)
+		if (pointerType === 'mouse') f.media.dispatchEvent(new f.w.MouseEvent('dblclick', { clientX: 490, clientY: 390, button: 0 }))
 		f.frame()
 		expect(f.view()).toEqual({ scale: 2, x: -200, y: -100 })
 		f.dispose()

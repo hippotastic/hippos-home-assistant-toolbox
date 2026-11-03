@@ -1,6 +1,6 @@
 /* Camera dialog zoom, pan and aspect-ratio corrections. */
 export function installCameraZoom() {
-	const VERSION = 27
+	const VERSION = 28
 	let disposed = false
 	const undoPatches = []
 	const cleanups = new Map()
@@ -846,6 +846,7 @@ export function installCameraZoom() {
 		let pinchDistance = null
 		let tap = null
 		let lastTap = null
+		let lastPointerType = null
 		let zoomFrame = null
 		let revealCheckTimer = null
 		let revealWatchdogTimer = null
@@ -883,8 +884,12 @@ export function installCameraZoom() {
 
 		const refit = () => {
 			if (disposed || !mediaActive) return null
-			stopZoomAnimation()
+			const previousWidth = media.style.width
+			const previousHeight = media.style.height
 			const viewport = fitMediaToViewport(media)
+			// Playback events also refit the media. Preserve an ongoing zoom unless
+			// fitting actually changes its untransformed size.
+			if (media.style.width !== previousWidth || media.style.height !== previousHeight) stopZoomAnimation()
 			if (!viewport) return null
 			state = calculatePanState(state, media.getBoundingClientRect(), 0, 0)
 			renderState()
@@ -963,11 +968,41 @@ export function installCameraZoom() {
 			panOrigin = null
 		}
 
+		const toggleZoom = (clientX, clientY) => {
+			stopZoomAnimation()
+			const from = { ...state }
+			const target = { scale: MIN_SCALE, x: 0, y: 0 }
+			if (state.scale === MIN_SCALE) {
+				const rect = media.getBoundingClientRect()
+				target.scale = DOUBLE_TAP_SCALE
+				// Center the tapped detail, keeping the image edges inside the pan bounds.
+				const maxX = (rect.width * (target.scale - MIN_SCALE)) / 2
+				const maxY = (rect.height * (target.scale - MIN_SCALE)) / 2
+				target.x = clamp((rect.left + rect.width / 2 - clientX) * target.scale, -maxX, maxX)
+				target.y = clamp((rect.top + rect.height / 2 - clientY) * target.scale, -maxY, maxY)
+			}
+			if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+				state = target
+				renderState()
+			} else {
+				const startedAt = performance.now()
+				const animate = (now) => {
+					const progress = clamp((now - startedAt) / ZOOM_ANIMATION_MS, 0, 1)
+					const eased = 1 - (1 - progress) ** 3
+					state = { scale: from.scale + (target.scale - from.scale) * eased, x: from.x + (target.x - from.x) * eased, y: from.y + (target.y - from.y) * eased }
+					renderState()
+					zoomFrame = progress < 1 ? requestAnimationFrame(animate) : null
+				}
+				zoomFrame = requestAnimationFrame(animate)
+			}
+		}
+
 		listen(media, 'pointerdown', (event) => {
 			if (event.button !== 0) return
 			event.preventDefault()
 			event.stopPropagation()
 			stopZoomAnimation()
+			lastPointerType = event.pointerType
 			pointers.set(event.pointerId, event)
 			media.setPointerCapture?.(event.pointerId)
 
@@ -1012,6 +1047,7 @@ export function installCameraZoom() {
 			// Cancellation and a pinch's remaining finger must never complete a pair.
 			if (
 				event.type === 'pointerup' &&
+				event.pointerType !== 'mouse' &&
 				tap?.pointerId === event.pointerId &&
 				event.timeStamp - tap.timeStamp <= DOUBLE_TAP_DELAY_MS &&
 				Math.hypot(event.clientX - tap.clientX, event.clientY - tap.clientY) <= TAP_SLOP_PX
@@ -1022,31 +1058,7 @@ export function installCameraZoom() {
 					tap.timeStamp - lastTap.timeStamp <= DOUBLE_TAP_DELAY_MS &&
 					Math.hypot(event.clientX - lastTap.clientX, event.clientY - lastTap.clientY) <= DOUBLE_TAP_DISTANCE_PX
 				) {
-					const from = { ...state }
-					const target = { scale: MIN_SCALE, x: 0, y: 0 }
-					if (state.scale === MIN_SCALE) {
-						const rect = media.getBoundingClientRect()
-						target.scale = DOUBLE_TAP_SCALE
-						// Center the tapped detail, keeping the image edges inside the pan bounds.
-						const maxX = (rect.width * (target.scale - MIN_SCALE)) / 2
-						const maxY = (rect.height * (target.scale - MIN_SCALE)) / 2
-						target.x = clamp((rect.left + rect.width / 2 - event.clientX) * target.scale, -maxX, maxX)
-						target.y = clamp((rect.top + rect.height / 2 - event.clientY) * target.scale, -maxY, maxY)
-					}
-					if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-						state = target
-						renderState()
-					} else {
-						const startedAt = performance.now()
-						const animate = (now) => {
-							const progress = clamp((now - startedAt) / ZOOM_ANIMATION_MS, 0, 1)
-							const eased = 1 - (1 - progress) ** 3
-							state = { scale: from.scale + (target.scale - from.scale) * eased, x: from.x + (target.x - from.x) * eased, y: from.y + (target.y - from.y) * eased }
-							renderState()
-							zoomFrame = progress < 1 ? requestAnimationFrame(animate) : null
-						}
-						zoomFrame = requestAnimationFrame(animate)
-					}
+					toggleZoom(event.clientX, event.clientY)
 					lastTap = null
 				} else lastTap = { pointerType: event.pointerType, clientX: event.clientX, clientY: event.clientY, timeStamp: event.timeStamp }
 			} else lastTap = null
@@ -1064,6 +1076,16 @@ export function installCameraZoom() {
 		listen(media, 'pointerup', endPointer)
 		listen(media, 'pointercancel', endPointer)
 		listen(media, 'lostpointercapture', endPointer)
+
+		listen(media, 'dblclick', (event) => {
+			// Native mouse timing follows the OS preference. Touch/pen pairs are
+			// handled above, so their compatibility events must not toggle again.
+			if (lastPointerType !== 'mouse' || event.button !== 0) return
+			event.preventDefault()
+			event.stopPropagation()
+			tap = lastTap = null
+			toggleZoom(event.clientX, event.clientY)
+		})
 
 		listen(
 			media,
@@ -1105,12 +1127,16 @@ export function installCameraZoom() {
 		}
 		listen(media, 'loadstart', scheduleVideoReveal)
 
-		const resizeObserver = viewport && typeof ResizeObserver === 'function' ? new ResizeObserver(refit) : null
+		const resize = () => {
+			stopZoomAnimation()
+			refit()
+		}
+		const resizeObserver = viewport && typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null
 		if (resizeObserver) resizeObserver.observe(viewport)
 
 		requestAnimationFrame(refit)
-		listen(window, 'resize', refit)
-		listen(window.visualViewport, 'resize', refit)
+		listen(window, 'resize', resize)
+		listen(window.visualViewport, 'resize', resize)
 
 		const dialog = findComposedAncestor(media, 'HA-MORE-INFO-DIALOG')
 		const cleanup = () => {
