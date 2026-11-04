@@ -1,5 +1,15 @@
 # hippos-home-assistant-toolbox
 
+## 0.17.0
+
+### Minor Changes
+
+- 301ac89: Add an opt-in "Warning when unavailable" label rule for media players, cameras, and other important entities. It shares the configurable disconnection delay with alarm sources and uses existing warning notifications, problem tracking, and stable recovery confirmation. Existing monitor settings are preserved.
+
+### Patch Changes
+
+- 301ac89: Make camera double-tap zoom fill the popup's image area horizontally and vertically while retaining the existing 2x minimum. Keep the tapped detail centered as far as the image edges allow.
+
 ## 0.16.0
 
 ### Minor Changes
