@@ -212,7 +212,7 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 	}
 }
 
-async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false } = {}) {
+async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false, mediaWidth = 400, mediaHeight = 200, viewportWidth = 400, viewportHeight = 200 } = {}) {
 	const f = await fixture({ ios })
 	let media: HTMLImageElement | HTMLVideoElement = f.camera.shadowRoot!.querySelector('img')!
 	if (playerTag) {
@@ -228,8 +228,8 @@ async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false 
 	Object.defineProperties(
 		media,
 		media.tagName === 'VIDEO'
-			? { videoWidth: { value: 400, configurable: true }, videoHeight: { value: 200, configurable: true } }
-			: { naturalWidth: { value: 400, configurable: true }, naturalHeight: { value: 200, configurable: true } }
+			? { videoWidth: { value: mediaWidth, configurable: true }, videoHeight: { value: mediaHeight, configurable: true } }
+			: { naturalWidth: { value: mediaWidth, configurable: true }, naturalHeight: { value: mediaHeight, configurable: true } }
 	)
 	let frameTime = 0
 	let frameId = 0
@@ -246,14 +246,15 @@ async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false 
 		return values ? { x: Number(values[1]), y: Number(values[2]), scale: Number(values[3]) } : { x: 0, y: 0, scale: 1 }
 	}
 	const Rect = f.w.DOMRect as typeof DOMRect
+	viewport.getBoundingClientRect = () => new Rect(100, 200, viewportWidth, viewportHeight)
 	media.getBoundingClientRect = () => {
 		const { x, y, scale } = view()
-		const width = parseFloat(media.style.width) || 400
-		const height = parseFloat(media.style.height) || 200
-		return new Rect(300 + x - (width * scale) / 2, 300 + y - (height * scale) / 2, width * scale, height * scale)
+		const width = parseFloat(media.style.width) || mediaWidth
+		const height = parseFloat(media.style.height) || mediaHeight
+		const box = viewport.getBoundingClientRect()
+		return new Rect(box.x + box.width / 2 + x - (width * scale) / 2, box.y + box.height / 2 + y - (height * scale) / 2, width * scale, height * scale)
 	}
-	viewport.getBoundingClientRect = () => new Rect(100, 200, 400, 200)
-	f.camera.getBoundingClientRect = () => new Rect(100, 200, 400, 200)
+	f.camera.getBoundingClientRect = () => viewport.getBoundingClientRect()
 	const pointer = (type: string, { pointerId = 1, pointerType = 'touch', clientX = 300, clientY = 300, button = 0 } = {}) => {
 		// jsdom has no PointerEvent constructor; supply its fields on a mouse event.
 		const event = new f.w.MouseEvent(type, { clientX, clientY, button, bubbles: true, composed: true, cancelable: true })
@@ -274,6 +275,7 @@ async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false 
 	return {
 		...f,
 		media,
+		viewport,
 		view,
 		pointer,
 		tap: (clientX = 300, clientY = 300, pointerType = 'touch') => {
@@ -316,6 +318,81 @@ describe('camera double-tap zoom', () => {
 		f.frame()
 		expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
 		expect(ancestorGestures).toBe(0)
+		f.dispose()
+	})
+
+	test.each(
+		[
+			{ mediaWidth: 400, mediaHeight: 300, viewportWidth: 400, viewportHeight: 400, expectedScale: 2 },
+			{ mediaWidth: 400, mediaHeight: 200, viewportWidth: 400, viewportHeight: 800, expectedScale: 4 },
+			{ mediaWidth: 200, mediaHeight: 400, viewportWidth: 800, viewportHeight: 400, expectedScale: 4 },
+			{ mediaWidth: 1920, mediaHeight: 1080, viewportWidth: 400, viewportHeight: 700, expectedScale: 700 / 225 },
+		].flatMap((geometry) => [false, true].flatMap((ios) => ['', 'ha-hls-player', 'ha-web-rtc-player'].map((playerTag) => ({ ...geometry, ios, playerTag }))))
+	)('fills both viewport dimensions with at least 2x zoom and returns to the overview (%j)', async (options) => {
+		const f = await zoomFixture(options)
+		for (const corner of [-1, 0, 1]) {
+			const image = f.media.getBoundingClientRect()
+			const clientX = image.x + image.width / 2 + (corner * image.width) / 2
+			const clientY = image.y + image.height / 2 + (corner * image.height) / 2
+			f.tap(clientX, clientY)
+			f.tap(clientX, clientY)
+			f.frame()
+			expect(f.view().scale).toBeCloseTo(options.expectedScale)
+			const zoomed = f.media.getBoundingClientRect()
+			const viewport = f.viewport.getBoundingClientRect()
+			expect(zoomed.left).toBeLessThanOrEqual(viewport.left + 1e-6)
+			expect(zoomed.top).toBeLessThanOrEqual(viewport.top + 1e-6)
+			expect(zoomed.right).toBeGreaterThanOrEqual(viewport.right - 1e-6)
+			expect(zoomed.bottom).toBeGreaterThanOrEqual(viewport.bottom - 1e-6)
+			f.tap()
+			f.tap()
+			f.frame()
+			expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+		}
+		f.dispose()
+	})
+
+	test('uses the same viewport-filling zoom for a mouse double-click with reduced motion', async () => {
+		const f = await zoomFixture({ viewportHeight: 800, reducedMotion: true })
+		f.tap(490, 690, 'mouse')
+		f.tap(490, 690, 'mouse')
+		f.media.dispatchEvent(new f.w.MouseEvent('dblclick', { clientX: 490, clientY: 690, button: 0 }))
+		expect(f.view()).toEqual({ scale: 4, x: -600, y: 0 })
+		f.tap(490, 690, 'mouse')
+		f.tap(490, 690, 'mouse')
+		f.media.dispatchEvent(new f.w.MouseEvent('dblclick', { clientX: 490, clientY: 690, button: 0 }))
+		expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+		f.dispose()
+	})
+
+	test('recalculates the fill scale after the popup changes size', async () => {
+		const f = await zoomFixture()
+		const Rect = f.w.DOMRect as typeof DOMRect
+		for (const height of [800, 200]) {
+			f.viewport.getBoundingClientRect = () => new Rect(100, 200, 400, height)
+			f.w.dispatchEvent(new f.w.Event('resize'))
+			f.tap()
+			f.tap()
+			f.frame()
+			expect(f.view().scale).toBe(height === 800 ? 4 : 2)
+			f.tap()
+			f.tap()
+			f.frame()
+			expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+		}
+		f.dispose()
+	})
+
+	test.each(['viewport', 'media'] as const)('keeps a finite 2x zoom when %s geometry is missing', async (missing) => {
+		const f = await zoomFixture()
+		const Rect = f.w.DOMRect as typeof DOMRect
+		f[missing].getBoundingClientRect = () => new Rect(0, 0, 0, 0)
+		f.tap()
+		f.tap()
+		f.frame()
+		expect(f.view().scale).toBe(2)
+		expect(Number.isFinite(f.view().x)).toBe(true)
+		expect(Number.isFinite(f.view().y)).toBe(true)
 		f.dispose()
 	})
 

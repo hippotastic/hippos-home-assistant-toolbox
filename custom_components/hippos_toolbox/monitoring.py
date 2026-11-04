@@ -26,7 +26,6 @@ from homeassistant.util import dt as dt_util
 from .const import (
     ALARMS_UNIQUE_ID,
     CONF_ALARM_LABELS,
-    CONF_ALARM_UNAVAILABLE_DELAY,
     CONF_BATTERY_CRITICAL_DELAY,
     CONF_BELOW_10_LABELS,
     CONF_BELOW_20_LABELS,
@@ -36,6 +35,8 @@ from .const import (
     CONF_MONITOR_CRITICAL_BATTERIES,
     CONF_SOLVED_DELAY,
     CONF_TRIGGER_DELAY,
+    CONF_UNAVAILABLE_DELAY,
+    CONF_UNAVAILABLE_LABELS,
     CONF_WARNING_LABELS,
     DOMAIN,
     MONITORING_DELAY_DEFAULTS,
@@ -73,6 +74,7 @@ class _Observation:
     reason: str
     delay: timedelta
     alarm_active: bool | None = None
+    alarm_monitored: bool = False
 
 
 class _ProblemMonitor:
@@ -166,7 +168,7 @@ class _ProblemMonitor:
     def _track_states(self) -> TrackStates:
         configured_labels = set().union(*(
             set(self._options.get(key, [])) for key in (
-                CONF_ALARM_LABELS, CONF_WARNING_LABELS, CONF_BELOW_30_LABELS,
+                CONF_ALARM_LABELS, CONF_WARNING_LABELS, CONF_UNAVAILABLE_LABELS, CONF_BELOW_30_LABELS,
                 CONF_BELOW_20_LABELS, CONF_BELOW_10_LABELS,
             )
         ))
@@ -201,7 +203,7 @@ class _ProblemMonitor:
         observation = self._classify(entity_id, event.data["new_state"])
         if event.data["new_state"] is None and (old_state := event.data.get("old_state")) is not None:
             if (old := self._classify(entity_id, old_state)) is not None:
-                observation = _Observation(None, old.name, old.reason, old.delay)
+                observation = _Observation(None, old.name, old.reason, old.delay, alarm_monitored=old.alarm_monitored)
         self._async_queue(entity_id, observation)
 
     @callback
@@ -256,8 +258,8 @@ class _ProblemMonitor:
             # unavailable state is itself a warning, with its own total delay.
             active = True if value == "unavailable" else False if known else None
             return _Observation(
-                active, name, "unavailable", self._delay(CONF_ALARM_UNAVAILABLE_DELAY),
-                value == "on" if known else None,
+                active, name, "unavailable", self._delay(CONF_UNAVAILABLE_DELAY),
+                value == "on" if known else None, alarm_monitored=True,
             )
         if labels & set(self._options.get(CONF_IGNORED_LABELS, [])):
             return None
@@ -274,6 +276,12 @@ class _ProblemMonitor:
             rules.append((value == "on" if value in {"on", "off"} else None, "problem", delay))
         if labels & set(self._options.get(CONF_WARNING_LABELS, [])):
             rules.append((value == "on" if known else None, "problem", delay))
+        if labels & set(self._options.get(CONF_UNAVAILABLE_LABELS, [])):
+            # Unknown or missing states neither prove a disconnection nor recovery.
+            rules.append((
+                True if value == "unavailable" else False if known else None,
+                "unavailable", self._delay(CONF_UNAVAILABLE_DELAY),
+            ))
         if monitor_batteries and (
             "battery_state" in attributes or (not known and previous is not None and previous.reason == "battery_critical")
         ):
@@ -298,6 +306,8 @@ class _ProblemMonitor:
             return _Observation(None if any(rule[0] is None for rule in rules) else False, name, reason, delay)
         if state is None and previous is not None:
             # Disabling a rule also retires its restored incidents for missing sources.
+            if previous.reason == "unavailable":
+                return None
             if previous.reason == "problem" and not monitor_problems:
                 return None
             if previous.reason == "battery_critical" and not monitor_batteries:
@@ -318,8 +328,9 @@ class _ProblemMonitor:
             alarm_rollback = replace(alarm) if alarm else None
             alarm_before = alarm.as_dict() if alarm else None
             events: list[tuple[str, dict[str, Any]]] = []
-            if observation is None or observation.reason != "unavailable":
-                # Removing an alarm label is configuration, not an all-clear.
+            if observation is None or not observation.alarm_monitored:
+                # Availability warnings alone do not monitor alarms. Removing
+                # an alarm label is configuration, not an all-clear.
                 self._alarms.pop(entity_id, None)
             elif observation.alarm_active is True:
                 if alarm is None:

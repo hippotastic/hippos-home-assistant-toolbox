@@ -16,7 +16,7 @@ from homeassistant.helpers import device_registry as dr
 
 from custom_components.hippos_toolbox import monitoring
 from custom_components.hippos_toolbox.const import (
-    CONF_ALARM_LABELS, CONF_ALARM_UNAVAILABLE_DELAY, CONF_BATTERY_CRITICAL_DELAY,
+    CONF_ALARM_LABELS, CONF_UNAVAILABLE_DELAY, CONF_UNAVAILABLE_LABELS, CONF_BATTERY_CRITICAL_DELAY,
     CONF_BELOW_10_LABELS, CONF_BELOW_20_LABELS, CONF_BELOW_30_LABELS,
     CONF_IGNORED_LABELS, CONF_SOLVED_DELAY, CONF_TRIGGER_DELAY, CONF_WARNING_LABELS,
     CONF_MONITOR_PROBLEM_SENSORS, CONF_MONITOR_CRITICAL_BATTERIES,
@@ -44,8 +44,9 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.timer = self.timer_patch.start()
         self.options = {
             CONF_TRIGGER_DELAY: 1, CONF_SOLVED_DELAY: 10,
-            CONF_ALARM_UNAVAILABLE_DELAY: 5, CONF_BATTERY_CRITICAL_DELAY: 30,
+            CONF_UNAVAILABLE_DELAY: 5, CONF_BATTERY_CRITICAL_DELAY: 30,
             CONF_ALARM_LABELS: ["alarms"], CONF_WARNING_LABELS: ["warnings"],
+            CONF_UNAVAILABLE_LABELS: ["availability"],
             CONF_IGNORED_LABELS: ["ignored"], CONF_BELOW_30_LABELS: ["below30"],
             CONF_BELOW_20_LABELS: ["below20"], CONF_BELOW_10_LABELS: ["below10"],
         }
@@ -254,6 +255,133 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         await self.observe(360, "unavailable", labels=("alarms",), attributes={"device_class": "smoke"})
         self.assertEqual(len(self.events), 1)
 
+    async def test_unavailable_label_is_opt_in_and_known_player_states_are_healthy(self):
+        entity_id = "media_player.fixture"
+        state = self.source(entity_id, "unavailable", labels=("availability",), attributes={})
+        self.options.pop(CONF_UNAVAILABLE_LABELS)
+        self.assertIsNone(self.monitor._classify(entity_id, state))
+        self.options[CONF_UNAVAILABLE_LABELS] = []
+        self.assertIsNone(self.monitor._classify(entity_id, state))
+        self.options[CONF_UNAVAILABLE_LABELS] = ["availability"]
+        self.options[CONF_MONITOR_PROBLEM_SENSORS] = False
+        self.options[CONF_MONITOR_CRITICAL_BATTERIES] = False
+        self.assertTrue(self.monitor._classify(entity_id, state).active)
+        for value in ("on", "off", "idle", "playing", "paused", "buffering"):
+            await self.observe(0, value, entity_id=entity_id, labels=("availability",), attributes={})
+        self.assertEqual(self.monitor.problems, {})
+        self.assertEqual(self.monitor.alarms, {})
+        self.assertEqual(self.events, [])
+
+    async def test_player_disconnect_warns_once_then_requires_stable_known_recovery(self):
+        entity_id = "media_player.fixture"
+        for seconds in (0, 299):
+            await self.observe(seconds, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+        self.assertEqual(self.events, [])
+        self.assertIn(entity_id, self.monitor._track_states().entities)
+        await self.observe(300, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+        await self.observe(900, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+        self.assertEqual([kind for kind, _ in self.events], ["triggered"])
+        self.assertEqual(self.events[0][1]["reason"], "unavailable")
+        self.assertEqual(self.monitor.alarms, {})
+        await self.observe(901, "off", entity_id=entity_id, labels=("availability",), attributes={})
+        await self.observe(1499, "unknown", entity_id=entity_id, labels=("availability",), attributes={})
+        self.assertIsNone(self.monitor.problems[entity_id]["solved_delay_since"])
+        await self.observe(1500, "idle", entity_id=entity_id, labels=("availability",), attributes={})
+        await self.observe(2099, "on", entity_id=entity_id, labels=("availability",), attributes={})
+        self.assertEqual(len(self.events), 1)
+        await self.observe(2100, "playing", entity_id=entity_id, labels=("availability",), attributes={})
+        self.assertEqual(self.monitor.problems, {})
+        self.assertEqual(self.monitor.alarms, {})
+        self.assertEqual([kind for kind, _ in self.events], ["triggered", "solved"])
+
+    async def test_short_player_disconnect_or_unknown_restarts_confirmation(self):
+        for interruption in ("off", "unknown", None):
+            with self.subTest(interruption=interruption):
+                entity_id = "media_player.fixture"
+                await self.observe(0, "unknown", entity_id=entity_id, labels=("availability",), attributes={})
+                self.assertEqual(self.monitor.problems, {})
+                await self.observe(1, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+                if interruption is None:
+                    self.clock += timedelta(seconds=298)
+                    await self.monitor._async_observe(entity_id, self.monitor._classify(entity_id, None), self.clock)
+                else:
+                    await self.observe(299, interruption, entity_id=entity_id, labels=("availability",), attributes={})
+                self.assertEqual(self.monitor.problems, {})
+                self.assertEqual(self.events, [])
+                await self.observe(300, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+                await self.observe(599, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+                self.assertEqual(self.events, [])
+                await self.observe(600, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+                self.assertEqual([kind for kind, _ in self.events], ["triggered"])
+                self.monitor._problems.clear()
+                self.events.clear()
+
+    async def test_missing_player_interrupts_recovery_without_an_all_clear(self):
+        entity_id = "media_player.fixture"
+        await self.observe(0, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+        await self.observe(300, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+        await self.observe(301, "idle", entity_id=entity_id, labels=("availability",), attributes={})
+        old_state = self.hass.states.get(entity_id)
+        self.hass.states.async_remove(entity_id)
+        self.monitor._async_source_changed(Event("state_changed", {
+            "entity_id": entity_id, "old_state": old_state, "new_state": None,
+        }))
+        await asyncio.gather(*tuple(self.monitor._tasks))
+        self.assertIsNone(self.monitor.problems[entity_id]["solved_delay_since"])
+        self.assertEqual([kind for kind, _ in self.events], ["triggered"])
+        await self.observe(1000, "idle", entity_id=entity_id, labels=("availability",), attributes={})
+        await self.observe(1599, "idle", entity_id=entity_id, labels=("availability",), attributes={})
+        self.assertEqual(len(self.events), 1)
+        await self.observe(1600, "idle", entity_id=entity_id, labels=("availability",), attributes={})
+        self.assertEqual([kind for kind, _ in self.events], ["triggered", "solved"])
+
+    async def test_removing_unavailable_label_retires_incident_without_all_clear(self):
+        entity_id = "media_player.fixture"
+        for value in ("on", "unknown", "unavailable", None):
+            with self.subTest(value=value):
+                await self.observe(0, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+                await self.observe(300, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+                if value is None:
+                    self.registrations[entity_id].labels.clear()
+                    await self.monitor._async_observe(entity_id, self.monitor._classify(entity_id, None), self.clock)
+                else:
+                    await self.observe(301, value, entity_id=entity_id, attributes={})
+                self.assertEqual(self.monitor.problems, {})
+                self.assertEqual([kind for kind, _ in self.events], ["triggered"])
+                self.events.clear()
+
+    async def test_warning_and_unavailable_labels_keep_one_problem_until_both_are_clear(self):
+        entity_id = "switch.fixture"
+        labels = ("warnings", "availability")
+        await self.observe(0, "on", entity_id=entity_id, labels=labels, attributes={})
+        await self.observe(30, "unavailable", entity_id=entity_id, labels=labels, attributes={})
+        await self.observe(329, "unavailable", entity_id=entity_id, labels=labels, attributes={})
+        self.assertEqual(self.events, [])
+        await self.observe(330, "unavailable", entity_id=entity_id, labels=labels, attributes={})
+        await self.observe(331, "on", entity_id=entity_id, labels=labels, attributes={})
+        await self.observe(2000, "on", entity_id=entity_id, labels=labels, attributes={})
+        self.assertEqual([kind for kind, _ in self.events], ["triggered"])
+        self.assertIsNone(self.monitor.problems[entity_id]["solved_delay_since"])
+        await self.observe(2001, "off", entity_id=entity_id, labels=labels, attributes={})
+        await self.observe(2601, "off", entity_id=entity_id, labels=labels, attributes={})
+        self.assertEqual([kind for kind, _ in self.events], ["triggered", "solved"])
+        self.assertEqual(self.monitor.problems, {})
+
+    async def test_unavailable_rule_does_not_replace_battery_or_threshold_warnings(self):
+        for entity_id, value, labels, attributes in (
+            ("sensor.fixture_battery", "5", ("availability",), {"battery_state": "critical"}),
+            ("sensor.fixture_level", "5", ("availability", "below10"), {}),
+        ):
+            with self.subTest(entity_id=entity_id):
+                await self.observe(0, "unavailable", entity_id=entity_id, labels=labels, attributes=attributes)
+                await self.observe(300, "unavailable", entity_id=entity_id, labels=labels, attributes=attributes)
+                await self.observe(301, value, entity_id=entity_id, labels=labels, attributes=attributes)
+                await self.observe(2000, value, entity_id=entity_id, labels=labels, attributes=attributes)
+                self.assertIsNone(self.monitor.problems[entity_id]["solved_delay_since"])
+                self.assertEqual([kind for kind, _ in self.events], ["triggered"])
+                self.monitor._problems.clear()
+                self.events.clear()
+
     async def test_short_alarm_disconnect_is_silent_and_return_restarts_delay(self):
         await self.observe(0, "unavailable", labels=("alarms",))
         await self.observe(299, "off", labels=("alarms",))
@@ -311,6 +439,16 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.monitor.alarms, {})
         self.assertEqual([kind for kind, _ in self.events], ["alarm_triggered"])
 
+    async def test_removing_alarm_label_keeps_only_availability_monitoring(self):
+        entity_id = "switch.fixture"
+        await self.observe(0, "on", entity_id=entity_id, labels=("alarms", "availability"), attributes={})
+        self.assertEqual([kind for kind, _ in self.events], ["alarm_triggered"])
+        await self.observe(1, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+        self.assertEqual(self.monitor.alarms, {})
+        self.assertEqual([kind for kind, _ in self.events], ["alarm_triggered"])
+        await self.observe(301, "unavailable", entity_id=entity_id, labels=("availability",), attributes={})
+        self.assertEqual([kind for kind, _ in self.events], ["alarm_triggered", "triggered"])
+
     async def test_rapid_alarm_on_off_is_not_coalesced(self):
         for value in ("on", "off"):
             state = self.source(value=value, labels=("alarms",))
@@ -364,6 +502,11 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         state = self.source(labels=("ignored",))
         self.assertIsNone(self.monitor._classify(state.entity_id, state))
         state = self.source()
+        self.registrations[state.entity_id].disabled_by = "user"
+        self.assertIsNone(self.monitor._classify(state.entity_id, state))
+        state = self.source("media_player.fixture", "unavailable", labels=("ignored", "availability"), attributes={})
+        self.assertIsNone(self.monitor._classify(state.entity_id, state))
+        state = self.source("media_player.fixture", "unavailable", labels=("availability",), attributes={})
         self.registrations[state.entity_id].disabled_by = "user"
         self.assertIsNone(self.monitor._classify(state.entity_id, state))
 
@@ -432,12 +575,20 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*tuple(self.monitor._tasks))
         self.assertEqual([kind for kind, _ in self.events], ["triggered"])
 
-    async def test_alarm_delay_is_configurable_and_not_extended_by_general_delay(self):
-        self.options[CONF_ALARM_UNAVAILABLE_DELAY] = 2
-        self.options[CONF_TRIGGER_DELAY] = 10
-        await self.observe(0, "unavailable", labels=("alarms",))
-        await self.observe(120, "unavailable", labels=("alarms",))
-        self.assertEqual([kind for kind, _ in self.events], ["triggered"])
+    async def test_unavailable_delay_is_configurable_and_not_extended_by_general_delay(self):
+        for label in ("alarms", "availability"):
+            for minutes in (0, 2):
+                with self.subTest(label=label, minutes=minutes):
+                    self.options[CONF_UNAVAILABLE_DELAY] = minutes
+                    self.options[CONF_TRIGGER_DELAY] = 10
+                    await self.observe(0, "unavailable", labels=(label,))
+                    if minutes:
+                        await self.observe(minutes * 60 - 1, "unavailable", labels=(label,))
+                        self.assertEqual(self.events, [])
+                    await self.observe(minutes * 60, "unavailable", labels=(label,))
+                    self.assertEqual([kind for kind, _ in self.events], ["triggered"])
+                    self.monitor._problems.clear()
+                    self.events.clear()
 
     async def test_removed_source_is_unknown_not_a_solution(self):
         await self.observe(0)
@@ -581,6 +732,50 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.source(value="on")
         await self.hass.async_block_till_done(wait_background_tasks=True)
         self.assertEqual(self.monitor.problems, {})
+
+    async def test_unavailable_players_are_detected_at_startup_and_after_label_assignment(self):
+        first, second = "media_player.fixture_a", "media_player.fixture_b"
+        self.options[CONF_UNAVAILABLE_DELAY] = 0
+        self.options[CONF_SOLVED_DELAY] = 0
+        self.source(first, "unavailable", labels=("availability",), attributes={})
+        self.source(second, "unavailable", attributes={})
+        self.hass.state = CoreState.running
+        self.monitor.async_start()
+        await self.hass.async_block_till_done(wait_background_tasks=True)
+        self.assertEqual(set(self.monitor.problems), {first})
+        self.assertEqual([(kind, record["entity_id"]) for kind, record in self.events], [("triggered", first)])
+
+        self.registrations[second].labels.add("availability")
+        self.hass.bus.async_fire(monitoring.er.EVENT_ENTITY_REGISTRY_UPDATED, {"entity_id": second, "action": "update"})
+        await self.hass.async_block_till_done(wait_background_tasks=True)
+        self.assertEqual(set(self.monitor.problems), {first, second})
+        self.assertIn(second, self.monitor._track_states().entities)
+
+        self.source(first, "off", labels=("availability",), attributes={})
+        await self.hass.async_block_till_done(wait_background_tasks=True)
+        self.assertEqual(set(self.monitor.problems), {second})
+        self.assertEqual(self.events[-1][0], "solved")
+        self.hass.states.async_remove(second)
+        await self.hass.async_block_till_done(wait_background_tasks=True)
+        self.assertEqual(set(self.monitor.problems), {second})
+        self.assertEqual(len(self.events), 3)
+        self.registrations[second].labels.clear()
+        self.hass.bus.async_fire(monitoring.er.EVENT_ENTITY_REGISTRY_UPDATED, {"entity_id": second, "action": "update"})
+        await self.hass.async_block_till_done(wait_background_tasks=True)
+        self.assertEqual(self.monitor.problems, {})
+        self.assertEqual(self.monitor.alarms, {})
+        self.assertEqual(len(self.events), 3)
+
+    async def test_missing_alarm_source_retains_alarm_with_availability_label(self):
+        entity_id = "binary_sensor.fixture_alarm"
+        self.source(entity_id, "on", labels=("alarms", "availability"), attributes={})
+        self.hass.state = CoreState.running
+        self.monitor.async_start()
+        await self.hass.async_block_till_done(wait_background_tasks=True)
+        self.hass.states.async_remove(entity_id)
+        await self.hass.async_block_till_done(wait_background_tasks=True)
+        self.assertEqual(set(self.monitor.alarms), {entity_id})
+        self.assertEqual([kind for kind, _ in self.events], ["alarm_triggered"])
 
     async def test_real_store_survives_new_monitor_instance_without_replaying_event(self):
         self.monitor._store = Store(self.hass, 1, "test.monitor", atomic_writes=True)

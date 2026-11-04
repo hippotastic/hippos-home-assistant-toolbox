@@ -10,7 +10,7 @@
 
 | Category | Typical use | When it starts | When it ends |
 | --- | --- | --- | --- |
-| Warning | Device problem, low battery, numeric threshold, disconnected alarm source | After the applicable warning delay | After continuous reliable recovery for the solution delay |
+| Warning | Device problem, low battery, numeric threshold, disconnected selected entity or alarm source | After the applicable warning delay | After continuous reliable recovery for the solution delay |
 | Alarm | An entity selected through an **Alarm entities** label turns `on` | Immediately | Immediately when a reliable non-alarm state is observed |
 
 For example, a marked smoke detector reporting `on` creates an alarm. The same source becoming `unavailable` creates a warning after the disconnection delay. Losing contact with an active alarm source does not end its alarm.
@@ -46,12 +46,12 @@ Existing monitors without saved switch settings keep both enabled. Label rules r
 
 ### 4. Set confirmation delays
 
-| Field                              | Default    | What must remain continuous                                            |
-| ---------------------------------- | ---------- | ---------------------------------------------------------------------- |
-| **Warning delay**                  | 1 minute   | An ordinary problem before it is reported                              |
-| **Solution confirmation delay**    | 10 minutes | Reliable recovery before an ordinary problem is closed                 |
-| **Alarm entity unavailable delay** | 5 minutes  | An alarm source reporting `unavailable` before a disconnection warning |
-| **Critical battery delay**         | 30 minutes | A critical battery flag before it is reported                          |
+| Field                           | Default    | What must remain continuous                                                                                              |
+| ------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **Warning delay**               | 1 minute   | An ordinary problem before it is reported                                                                                |
+| **Solution confirmation delay** | 10 minutes | Reliable recovery before an ordinary problem is closed                                                                   |
+| **Unavailable delay**           | 5 minutes  | An entity selected for availability monitoring or an alarm source reporting `unavailable` before a disconnection warning |
+| **Critical battery delay**      | 30 minutes | A critical battery flag before it is reported                                                                            |
 
 All values are in minutes. **Zero means no waiting**, not disabled monitoring. The battery and disconnection delays replace the ordinary warning delay; they are not added to it. If several warning rules apply to one source, an active rule with a shorter delay can report it sooner.
 
@@ -63,18 +63,23 @@ Labels let you include additional sources or exclude ordinary problems. The inte
 
 Assign each label **directly to the relevant entity** under **Settings > Devices & services > Entities**, then select it in the matching monitor field. Labels only on a device or area are not inherited by the monitor.
 
-| Field                | Meaning for an entity carrying a selected label                                     |
-| -------------------- | ----------------------------------------------------------------------------------- |
-| **Warning when on**  | Warn while its state is `on`                                                        |
-| **Alarm entities**   | Report `on` immediately as an alarm; warn about continuous `unavailable` separately |
-| **Ignored problems** | Exclude it from ordinary warning rules, including automatic detection               |
-| **Warning below 30** | Warn when its numeric value is less than 30                                         |
-| **Warning below 20** | Warn when its numeric value is less than 20                                         |
-| **Warning below 10** | Warn when its numeric value is less than 10                                         |
+| Field                        | Meaning for an entity carrying a selected label                                                                                   |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| **Warning when on**          | Warn while its state is `on`                                                                                                      |
+| **Warning when unavailable** | Warn about continuous `unavailable`, using the unavailable delay; normal states such as `off` and `idle` do not trigger this rule |
+| **Alarm entities**           | Report `on` immediately as an alarm; warn about continuous `unavailable` separately                                               |
+| **Ignored problems**         | Exclude it from ordinary warning rules, including automatic detection                                                             |
+| **Warning below 30**         | Warn when its numeric value is less than 30                                                                                       |
+| **Warning below 20**         | Warn when its numeric value is less than 20                                                                                       |
+| **Warning below 10**         | Warn when its numeric value is less than 10                                                                                       |
 
 Each selection starts empty and accepts several labels. You only need labels for the rules you intend to use. For example, put a percentage battery sensor under one chosen numeric threshold. For a smoke detector, assign the alarm label to its actual alarm entity, not its separate battery entity.
 
 Alarm-label behavior takes precedence over **Ignored problems**. A selected alarm source is excluded from ordinary problem, battery and threshold rules, but its disconnection warning still applies.
+
+For an important media player, camera, or other entity that automations depend on, assign a label directly to that entity and select it under **Warning when unavailable**. With the default delays, five continuous minutes of `unavailable` produce one warning through the existing warning recipients and **Open problems** sensor. Reliable recovery must then last ten minutes before the all-clear. `unknown` and a temporarily missing state neither start a disconnection warning nor confirm recovery; they interrupt pending confirmation periods. This rule works across entity domains and remains active when both automatic detection switches are off. **Ignored problems** excludes it, while other warning rules on the same entity can still keep its problem open.
+
+Existing monitors keep their saved disconnection delay, now shown as **Unavailable delay** and shared with alarm sources. The new label selection starts empty, so an update does not enable additional monitoring automatically.
 
 ### 6. Choose recipients and messages
 
@@ -103,6 +108,8 @@ Home Assistant generates the entity IDs. Use the IDs from your installation when
 ### 8. Verify one complete notification cycle
 
 Create a temporary Toggle helper and give it a label selected under **Warning when on**. Turn it on and wait for the warning delay: **Open problems** should increase and warning recipients should receive a notification. Turn it off and wait for the solution delay: the problem closes and the same recipients receive an all-clear. Remove the temporary helper afterward.
+
+For **Warning when unavailable**, confirm that normal use, including turning a media player off, creates no availability warning. If the selected entity becomes `unavailable`, its pending record should appear in the **Open problems** sensor's `problems` attribute; the count and notification follow after the unavailable delay. A shorter disconnection should disappear without a notification. The problem remains open until reliable recovery completes.
 
 ## After setup
 

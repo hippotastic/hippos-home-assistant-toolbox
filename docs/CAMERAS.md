@@ -24,7 +24,7 @@ These features apply to Home Assistant's standard camera elements, including pro
 
 ## Zooming in a camera dialog
 
-Open a camera's standard more-info dialog and double-tap the detail you want to inspect. The view smoothly zooms to twice its initial size and centers that detail as far as the image edges allow. Double-tap again to return to the full image, including after zooming manually. A mouse double-click works the same way and follows your system's double-click speed. Reduced-motion preferences skip the animation.
+Open a camera's standard more-info dialog and double-tap the detail you want to inspect. The view smoothly zooms to at least twice its initial size, increasing magnification further when needed to fill the dialog's image area both horizontally and vertically. It centers the tapped detail as far as possible while keeping that area filled. Double-tap again to return to the full image, including after zooming manually. A mouse double-click works the same way and follows your system's double-click speed. Reduced-motion preferences skip the animation.
 
 Drag to move around an enlarged view, pinch to adjust magnification, or use the mouse wheel. Single taps, long presses, dragging, and pinch gestures do not trigger double-tap zoom. After updating the integration, reload the client and try two double-taps to verify that the view enlarges and returns to the full image. The existing **Camera zoom** option controls this behavior; no additional configuration is needed.
 

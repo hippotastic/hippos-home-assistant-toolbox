@@ -46,11 +46,13 @@ PROBLEM_CHANGES_UNIQUE_ID = f"{DOMAIN}_problem_changes"
 
 CONF_TRIGGER_DELAY = "trigger_delay_minutes"
 CONF_SOLVED_DELAY = "solved_delay_minutes"
-CONF_ALARM_UNAVAILABLE_DELAY = "alarm_unavailable_delay_minutes"
+# Keep the stored key so existing alarm disconnection delays remain configured.
+CONF_UNAVAILABLE_DELAY = "alarm_unavailable_delay_minutes"
 CONF_BATTERY_CRITICAL_DELAY = "battery_critical_delay_minutes"
 CONF_MONITOR_PROBLEM_SENSORS = "monitor_problem_sensors"
 CONF_MONITOR_CRITICAL_BATTERIES = "monitor_critical_batteries"
 CONF_WARNING_LABELS = "warning_labels"
+CONF_UNAVAILABLE_LABELS = "unavailable_labels"
 CONF_ALARM_LABELS = "alarm_labels"
 CONF_IGNORED_LABELS = "ignored_labels"
 CONF_BELOW_30_LABELS = "below_30_labels"
@@ -64,11 +66,12 @@ MONITORING_AUTOMATIC_OPTIONS = (
 MONITORING_DELAY_DEFAULTS = {
     CONF_TRIGGER_DELAY: 1,
     CONF_SOLVED_DELAY: 10,
-    CONF_ALARM_UNAVAILABLE_DELAY: 5,
+    CONF_UNAVAILABLE_DELAY: 5,
     CONF_BATTERY_CRITICAL_DELAY: 30,
 }
 MONITORING_LABEL_OPTIONS = (
     CONF_WARNING_LABELS,
+    CONF_UNAVAILABLE_LABELS,
     CONF_ALARM_LABELS,
     CONF_IGNORED_LABELS,
     CONF_BELOW_30_LABELS,

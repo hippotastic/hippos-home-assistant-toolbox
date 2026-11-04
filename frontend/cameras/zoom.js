@@ -1,6 +1,6 @@
 /* Camera dialog zoom, pan and aspect-ratio corrections. */
 export function installCameraZoom() {
-	const VERSION = 28
+	const VERSION = 29
 	let disposed = false
 	const undoPatches = []
 	const cleanups = new Map()
@@ -974,10 +974,12 @@ export function installCameraZoom() {
 			const target = { scale: MIN_SCALE, x: 0, y: 0 }
 			if (state.scale === MIN_SCALE) {
 				const rect = media.getBoundingClientRect()
-				target.scale = DOUBLE_TAP_SCALE
-				// Center the tapped detail, keeping the image edges inside the pan bounds.
-				const maxX = (rect.width * (target.scale - MIN_SCALE)) / 2
-				const maxY = (rect.height * (target.scale - MIN_SCALE)) / 2
+				const viewport = getCameraViewport(media)?.rect ?? rect
+				// Cover both viewport dimensions, with the existing 2x zoom as a minimum.
+				target.scale = rect.width > 0 && rect.height > 0 ? Math.max(DOUBLE_TAP_SCALE, viewport.width / rect.width, viewport.height / rect.height) : DOUBLE_TAP_SCALE
+				// Center the tapped detail without exposing empty edges in the viewport.
+				const maxX = Math.max(0, (rect.width * target.scale - viewport.width) / 2)
+				const maxY = Math.max(0, (rect.height * target.scale - viewport.height) / 2)
 				target.x = clamp((rect.left + rect.width / 2 - clientX) * target.scale, -maxX, maxX)
 				target.y = clamp((rect.top + rect.height / 2 - clientY) * target.scale, -maxY, maxY)
 			}

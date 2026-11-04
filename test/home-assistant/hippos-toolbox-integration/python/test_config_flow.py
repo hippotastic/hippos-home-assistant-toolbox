@@ -26,6 +26,7 @@ from custom_components.hippos_toolbox.const import (
     CONF_IGNORED_LABELS,
     CONF_MONITOR_PROBLEM_SENSORS,
     CONF_MONITOR_CRITICAL_BATTERIES,
+    CONF_UNAVAILABLE_LABELS,
     CONF_WARNING_LABELS,
     MONITORING_DELAY_DEFAULTS,
     MONITORING_NOTIFICATION_DEFAULTS,
@@ -223,7 +224,7 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             CONF_MONITOR_PROBLEM_SENSORS: True, CONF_MONITOR_CRITICAL_BATTERIES: True,
             **MONITORING_DELAY_DEFAULTS,
             **MONITORING_NOTIFICATION_DEFAULTS,
-            CONF_WARNING_LABELS: [], CONF_ALARM_LABELS: [], CONF_IGNORED_LABELS: [],
+            CONF_WARNING_LABELS: [], CONF_UNAVAILABLE_LABELS: [], CONF_ALARM_LABELS: [], CONF_IGNORED_LABELS: [],
             CONF_BELOW_30_LABELS: [], CONF_BELOW_20_LABELS: [], CONF_BELOW_10_LABELS: [],
         })
 
@@ -233,6 +234,7 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             "trigger_delay_minutes": 2, "solved_delay_minutes": 11,
             "alarm_unavailable_delay_minutes": 7, "battery_critical_delay_minutes": 31,
             CONF_WARNING_LABELS: ["fixture_warning_a", "fixture_warning_b"],
+            CONF_UNAVAILABLE_LABELS: ["fixture_availability_a", "fixture_availability_b"],
             CONF_ALARM_LABELS: ["fixture_alarm"], CONF_IGNORED_LABELS: [],
             CONF_BELOW_30_LABELS: [], CONF_BELOW_20_LABELS: ["fixture_threshold"],
             CONF_BELOW_10_LABELS: ["fixture_low_threshold"],
@@ -270,7 +272,7 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             CONF_MONITOR_PROBLEM_SENSORS: True, CONF_MONITOR_CRITICAL_BATTERIES: True,
             **MONITORING_DELAY_DEFAULTS,
             **MONITORING_NOTIFICATION_DEFAULTS,
-            CONF_WARNING_LABELS: ["fixture_warning"], CONF_ALARM_LABELS: [], CONF_IGNORED_LABELS: [],
+            CONF_WARNING_LABELS: ["fixture_warning"], CONF_UNAVAILABLE_LABELS: [], CONF_ALARM_LABELS: [], CONF_IGNORED_LABELS: [],
             CONF_BELOW_30_LABELS: [], CONF_BELOW_20_LABELS: [], CONF_BELOW_10_LABELS: [],
         })
 
@@ -282,6 +284,7 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
         submitted = {
             **MONITORING_DELAY_DEFAULTS,
             CONF_MONITOR_PROBLEM_SENSORS: False, CONF_MONITOR_CRITICAL_BATTERIES: True,
+            CONF_UNAVAILABLE_LABELS: ["fixture_availability"],
         }
         with patch.object(flow, "_get_entry", return_value=SimpleNamespace(subentries={})):
             result = await flow.async_step_user(submitted)
@@ -425,6 +428,7 @@ class MonitoringSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             CONF_MONITOR_PROBLEM_SENSORS: False, CONF_MONITOR_CRITICAL_BATTERIES: True,
             **MONITORING_DELAY_DEFAULTS,
             CONF_WARNING_LABELS: ["fixture_warning_a", "fixture_warning_b"],
+            CONF_UNAVAILABLE_LABELS: ["fixture_availability"],
             CONF_ALARM_LABELS: ["fixture_alarm"], CONF_IGNORED_LABELS: [],
             CONF_BELOW_30_LABELS: [], CONF_BELOW_20_LABELS: ["fixture_threshold"],
             CONF_BELOW_10_LABELS: ["fixture_low_threshold"],
