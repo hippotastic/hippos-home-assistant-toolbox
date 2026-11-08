@@ -287,6 +287,47 @@ async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false,
 }
 
 describe('camera double-tap zoom', () => {
+	test('animates only the iOS video and commits the visible zoom when a drag interrupts', async () => {
+		const f = await zoomFixture({ ios: true, playerTag: 'ha-hls-player', viewportHeight: 800 })
+		const animations: Array<{
+			element: HTMLElement
+			keyframes: Keyframe[] | PropertyIndexedKeyframes | null
+			options: number | KeyframeAnimationOptions | undefined
+			canceled: boolean
+		}> = []
+		f.w.HTMLElement.prototype.animate = function (this: HTMLElement, keyframes, options) {
+			const animation = {
+				element: this,
+				keyframes,
+				options,
+				canceled: false,
+				effect: { getComputedTiming: () => ({ progress: 0.5 }) },
+				cancel() {
+					this.canceled = true
+				},
+			}
+			animations.push(animation)
+			return animation as unknown as Animation
+		}
+
+		f.tap(300, 600)
+		f.tap(300, 600)
+		expect(animations.map((animation) => animation.element)).toEqual([f.media])
+		expect(f.camera.shadowRoot!.querySelector('[data-hippo-camera-zoom-matte]')).toBeNull()
+		const [animation] = animations
+		expect(animation.options).toEqual({ duration: 300, easing: 'ease-in-out', fill: 'both' })
+		expect(animation.keyframes).toEqual([{ transform: 'translate(0px, 0px) scale(1)' }, { transform: 'translate(0px, 0px) scale(4)' }])
+		f.media.dispatchEvent(new f.w.Event('playing'))
+		expect(animation.canceled).toBe(false)
+
+		f.pointer('pointerdown', { clientY: 600 })
+		expect(animation.canceled).toBe(true)
+		expect(f.view()).toEqual({ scale: 2.5, x: 0, y: 0 })
+		f.pointer('pointermove', { clientX: 320, clientY: 600 })
+		expect(f.view()).toEqual({ scale: 2.5, x: 20, y: 0 })
+		f.dispose()
+	})
+
 	test.each([
 		{ ios: false, playerTag: '' },
 		{ ios: true, playerTag: '' },

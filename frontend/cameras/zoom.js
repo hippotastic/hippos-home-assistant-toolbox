@@ -38,7 +38,8 @@ export function installCameraZoom() {
 	const DOUBLE_TAP_DELAY_MS = 300
 	const TAP_SLOP_PX = 10
 	const DOUBLE_TAP_DISTANCE_PX = 30
-	const ZOOM_ANIMATION_MS = 220
+	const ZOOM_ANIMATION_MS = 300
+	const FALLBACK_ZOOM_ANIMATION_MS = 220
 	const VIDEO_MIN_REVEAL_DELAY_MS = 180
 	const VIDEO_REVEAL_WATCHDOG_MS = 5000
 	const IS_IOS_WEBKIT = /iP(?:ad|hone|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
@@ -47,14 +48,12 @@ export function installCameraZoom() {
 	const SCOPE_ATTRIBUTE = 'data-hippo-camera-zoom'
 	const STYLE_ATTRIBUTE = 'data-hippo-camera-zoom-style'
 	const PREFLIGHT_STYLE_ATTRIBUTE = 'data-hippo-camera-zoom-preflight-style'
-	const MATTE_ATTRIBUTE = 'data-hippo-camera-zoom-matte'
 	const PLAYER_TAGS = new Set(['HA-HLS-PLAYER', 'HA-WEB-RTC-PLAYER'])
 	const MEDIA_HOOK = Symbol.for('hippo.cameraZoom.mediaHook')
 	const DIALOG_PATCH = Symbol.for('hippo.cameraZoom.dialogPatch')
 	const ATTACH_SHADOW_PATCH = Symbol.for('hippo.cameraZoom.attachShadowPatch')
 	const CUSTOM_ELEMENTS_DEFINE_PATCH = Symbol.for('hippo.cameraZoom.customElementsDefinePatch')
 	const PLAYER_CLASS_PATCH = Symbol.for('hippo.cameraZoom.playerClassPatch')
-	const CAMERA_MATTE = Symbol.for('hippo.cameraZoom.cameraMatte')
 	const cameraVideoAspectRatios = new Map()
 
 	const shadowStyles = {
@@ -224,7 +223,7 @@ export function installCameraZoom() {
 
 	function mediaPlayerStyle() {
 		return /* css */ `
-            :host([${SCOPE_ATTRIBUTE}]) {
+            :host([${SCOPE_ATTRIBUTE}]:not(.hidden)) {
                 align-items: center;
                 display: flex !important;
                 height: 100%;
@@ -696,7 +695,6 @@ export function installCameraZoom() {
 
 		if (player) {
 			player.style.setProperty('align-items', 'center', 'important')
-			player.style.setProperty('display', 'flex', 'important')
 			player.style.setProperty('height', '100%', 'important')
 			player.style.setProperty('justify-content', 'center', 'important')
 			player.style.setProperty('overflow', 'hidden', 'important')
@@ -728,98 +726,15 @@ export function installCameraZoom() {
 		return viewport.element
 	}
 
-	function applyTransform(media, state) {
-		media.style.transformOrigin = '50% 50%'
+	function zoomTransform(state) {
 		// A 3D transform makes WKWebView reuse the media's pre-zoom raster,
 		// which leaves enlarged camera pixels blurry despite a full-resolution source.
 		const translation = IS_IOS_WEBKIT ? `translate(${state.x}px, ${state.y}px)` : `translate3d(${state.x}px, ${state.y}px, 0)`
-		media.style.transform = `${translation} scale(${state.scale})`
+		return `${translation} scale(${state.scale})`
 	}
 
-	function ensureCameraMatte(media) {
-		if (!IS_IOS_WEBKIT) return null
-
-		const cameraStream = findComposedAncestor(media, 'HA-CAMERA-STREAM')
-		const root = cameraStream?.shadowRoot
-		if (!cameraStream || !root) return null
-
-		const existing = cameraStream[CAMERA_MATTE]
-		if (existing?.container?.isConnected) return existing
-
-		const container = document.createElement('div')
-		container.setAttribute(MATTE_ATTRIBUTE, '')
-		container.style.cssText = /* css declarations */ `
-            contain: layout paint;
-            inset: 0;
-            overflow: hidden;
-            pointer-events: none;
-            position: absolute;
-            z-index: 10;
-        `
-
-		const createEdge = () => {
-			const edge = document.createElement('div')
-			edge.style.cssText = /* css declarations */ `
-                /* Match the theme fallback used by HA's dialog and bottom sheet. */
-                background-color: var(--ha-dialog-surface-background, var(--card-background-color, var(--ha-color-surface-default, #111111)));
-                position: absolute;
-            `
-			container.append(edge)
-			return edge
-		}
-
-		const matte = {
-			cameraStream,
-			container,
-			top: createEdge(),
-			right: createEdge(),
-			bottom: createEdge(),
-			left: createEdge(),
-		}
-		root.append(container)
-		cameraStream[CAMERA_MATTE] = matte
-		return matte
-	}
-
-	function setMatteEdge(edge, left, top, width, height) {
-		edge.style.left = `${left}px`
-		edge.style.top = `${top}px`
-		edge.style.width = `${Math.max(0, width)}px`
-		edge.style.height = `${Math.max(0, height)}px`
-	}
-
-	function updateCameraMatte(media, matte) {
-		if (!matte?.container?.isConnected) return
-
-		const viewportRect = matte.cameraStream.getBoundingClientRect()
-		const mediaRect = media.getBoundingClientRect()
-		if (viewportRect.width <= 0 || viewportRect.height <= 0 || mediaRect.width <= 0 || mediaRect.height <= 0) {
-			matte.container.style.display = 'none'
-			return
-		}
-
-		matte.container.style.display = 'block'
-		const overlap = 1 / Math.max(1, window.devicePixelRatio || 1)
-		const mediaTop = clamp(mediaRect.top - viewportRect.top + overlap, 0, viewportRect.height)
-		const mediaRight = clamp(mediaRect.right - viewportRect.left - overlap, 0, viewportRect.width)
-		const mediaBottom = clamp(mediaRect.bottom - viewportRect.top - overlap, 0, viewportRect.height)
-		const mediaLeft = clamp(mediaRect.left - viewportRect.left + overlap, 0, viewportRect.width)
-		const middleHeight = Math.max(0, mediaBottom - mediaTop)
-
-		// These four opaque edges cover WebKit's stale pixels without changing
-		// the media geometry or intercepting the camera's zoom and pan gestures.
-		setMatteEdge(matte.top, 0, 0, viewportRect.width, mediaTop)
-		setMatteEdge(matte.right, mediaRight, mediaTop, viewportRect.width - mediaRight, middleHeight)
-		setMatteEdge(matte.bottom, 0, mediaBottom, viewportRect.width, viewportRect.height - mediaBottom)
-		setMatteEdge(matte.left, 0, mediaTop, mediaLeft, middleHeight)
-	}
-
-	function removeCameraMatte(matte) {
-		if (!matte) return
-		matte.container.remove()
-		if (matte.cameraStream[CAMERA_MATTE] === matte) {
-			delete matte.cameraStream[CAMERA_MATTE]
-		}
+	function interpolateZoom(from, target, progress) {
+		return { scale: from.scale + (target.scale - from.scale) * progress, x: from.x + (target.x - from.x) * progress, y: from.y + (target.y - from.y) * progress }
 	}
 
 	function hookMedia(media) {
@@ -840,38 +755,38 @@ export function installCameraZoom() {
 		let lastTap = null
 		let lastPointerType = null
 		let zoomFrame = null
+		let zoomAnimation = null
 		let revealCheckTimer = null
 		let revealWatchdogTimer = null
 		let revealFrame = null
 		let revealGeneration = 0
 		let revealPending = false
 		let revealStartedAt = 0
-		let cameraMatte = null
-		let cameraMatteFrame = null
 		const pointers = new Map()
 
 		media.style.touchAction = 'none'
 		media.style.userSelect = 'none'
 		media.style.cursor = 'grab'
+		media.style.transformOrigin = '50% 50%'
 		if (media.tagName === 'VIDEO') media.controls = false
 
 		const renderState = () => {
 			if (disposed || !mediaActive) return
-			applyTransform(media, state)
-			if (!IS_IOS_WEBKIT || cameraMatteFrame != null) return
-
-			// Pointer events may arrive faster than WebKit can paint. Updating
-			// the matte once per display frame avoids redundant layout work.
-			cameraMatteFrame = requestAnimationFrame(() => {
-				cameraMatteFrame = null
-				cameraMatte ??= ensureCameraMatte(media)
-				updateCameraMatte(media, cameraMatte)
-			})
+			media.style.transform = zoomTransform(state)
 		}
 
-		const stopZoomAnimation = () => {
+		const stopZoomAnimation = (keepCurrent = true) => {
 			if (zoomFrame != null) cancelAnimationFrame(zoomFrame)
 			zoomFrame = null
+			if (!zoomAnimation) return
+
+			const { from, animation } = zoomAnimation
+			zoomAnimation = null
+			if (keepCurrent) state = interpolateZoom(from, state, animation.effect.getComputedTiming().progress ?? 0)
+			animation.cancel()
+			// The inline styles normally hold the destination. On interruption
+			// commit the visible intermediate state before the next gesture reads it.
+			if (keepCurrent) renderState()
 		}
 
 		const refit = () => {
@@ -882,7 +797,7 @@ export function installCameraZoom() {
 			// Playback events also refit the media. Preserve an ongoing zoom unless
 			// fitting actually changes its untransformed size.
 			if (media.style.width !== previousWidth || media.style.height !== previousHeight) stopZoomAnimation()
-			if (!viewport) return null
+			if (!viewport || zoomAnimation) return viewport
 			state = calculatePanState(state, media.getBoundingClientRect(), 0, 0)
 			renderState()
 			return viewport
@@ -978,12 +893,21 @@ export function installCameraZoom() {
 			if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
 				state = target
 				renderState()
+			} else if (typeof media.animate === 'function') {
+				const options = { duration: ZOOM_ANIMATION_MS, easing: 'ease-in-out', fill: 'both' }
+				const animation = media.animate([{ transform: zoomTransform(from) }, { transform: zoomTransform(target) }], options)
+				zoomAnimation = { from, animation }
+				animation.onfinish = () => {
+					if (zoomAnimation?.animation === animation) stopZoomAnimation(false)
+				}
+				state = target
+				renderState()
 			} else {
 				const startedAt = performance.now()
 				const animate = (now) => {
-					const progress = clamp((now - startedAt) / ZOOM_ANIMATION_MS, 0, 1)
+					const progress = clamp((now - startedAt) / FALLBACK_ZOOM_ANIMATION_MS, 0, 1)
 					const eased = 1 - (1 - progress) ** 3
-					state = { scale: from.scale + (target.scale - from.scale) * eased, x: from.x + (target.x - from.x) * eased, y: from.y + (target.y - from.y) * eased }
+					state = interpolateZoom(from, target, eased)
 					renderState()
 					zoomFrame = progress < 1 ? requestAnimationFrame(animate) : null
 				}
@@ -1136,15 +1060,13 @@ export function installCameraZoom() {
 		const cleanup = () => {
 			mediaActive = false
 			events.abort()
-			stopZoomAnimation()
+			stopZoomAnimation(false)
 			revealPending = false
 			revealGeneration += 1
 			clearTimeout(revealCheckTimer)
 			clearTimeout(revealWatchdogTimer)
 			if (revealFrame != null) cancelAnimationFrame(revealFrame)
-			if (cameraMatteFrame != null) cancelAnimationFrame(cameraMatteFrame)
 			resizeObserver?.disconnect()
-			removeCameraMatte(cameraMatte)
 			delete media[MEDIA_HOOK]
 			restore(media)
 			cleanups.delete(media)
