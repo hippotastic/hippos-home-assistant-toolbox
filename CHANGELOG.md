@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.17.3
+
+### Patch Changes
+
+- 56479d4: Match the camera zoom's iOS masking edges to the dialog's theme color so the background stays consistent as the image loads.
+
 ## 0.17.2
 
 ### Patch Changes
