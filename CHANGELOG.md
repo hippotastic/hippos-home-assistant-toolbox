@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.17.4
+
+### Patch Changes
+
+- df9d124: Make double-tap camera zoom ease in and out smoothly and remove the iOS masking edge that could lag behind the video.
+
 ## 0.17.3
 
 ### Patch Changes
