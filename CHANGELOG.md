@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.17.1
+
+### Patch Changes
+
+- c9758b7: Fix Toolbox startup on Home Assistant Core 2026.11 by importing the blueprint instance schema from its defining module.
+
 ## 0.17.0
 
 ### Minor Changes
