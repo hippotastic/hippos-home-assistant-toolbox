@@ -760,7 +760,8 @@ export function installCameraZoom() {
 		const createEdge = () => {
 			const edge = document.createElement('div')
 			edge.style.cssText = /* css declarations */ `
-                background: var(--primary-background-color, #111111);
+                /* Match the theme fallback used by HA's dialog and bottom sheet. */
+                background-color: var(--ha-dialog-surface-background, var(--card-background-color, var(--ha-color-surface-default, #111111)));
                 position: absolute;
             `
 			container.append(edge)
