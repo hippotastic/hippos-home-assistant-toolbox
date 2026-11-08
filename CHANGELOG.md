@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.17.2
+
+### Patch Changes
+
+- 6d1a5f3: Open zoom-enabled camera dialogs at full height and fit the preview to the available space while the live video loads.
+
 ## 0.17.1
 
 ### Patch Changes
