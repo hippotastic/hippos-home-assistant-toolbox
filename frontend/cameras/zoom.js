@@ -42,6 +42,8 @@ export function installCameraZoom() {
 	const VIDEO_MIN_REVEAL_DELAY_MS = 180
 	const VIDEO_REVEAL_WATCHDOG_MS = 5000
 	const IS_IOS_WEBKIT = /iP(?:ad|hone|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+	// WebKit's separate video layer needs intrinsic sizing even without metadata.
+	const VIDEO_LOADING_SIZE = IS_IOS_WEBKIT ? 'auto' : '100%'
 	const SCOPE_ATTRIBUTE = 'data-hippo-camera-zoom'
 	const STYLE_ATTRIBUTE = 'data-hippo-camera-zoom-style'
 	const PREFLIGHT_STYLE_ATTRIBUTE = 'data-hippo-camera-zoom-preflight-style'
@@ -57,6 +59,11 @@ export function installCameraZoom() {
 
 	const shadowStyles = {
 		'HA-MORE-INFO-DIALOG': /* css */ `
+            /* Reserve the desktop dialog height before HA loads the camera control. */
+            :host([${SCOPE_ATTRIBUTE}]) ha-adaptive-dialog {
+                --ha-dialog-min-height: var(--ha-dialog-max-height);
+            }
+
             :host([${SCOPE_ATTRIBUTE}]) .content-wrapper {
                 min-height: 0;
             }
@@ -181,10 +188,8 @@ export function installCameraZoom() {
             }
 
             :host([${SCOPE_ATTRIBUTE}]) > img {
-                height: auto !important;
                 margin: auto;
                 object-fit: contain !important;
-                width: auto !important;
             }
         `,
 		'HA-HLS-PLAYER': mediaPlayerStyle(),
@@ -230,12 +235,12 @@ export function installCameraZoom() {
             }
 
             :host([${SCOPE_ATTRIBUTE}]) video {
-                height: auto !important;
+                height: ${VIDEO_LOADING_SIZE} !important;
                 margin: auto;
                 max-height: 100% !important;
                 max-width: 100% !important;
                 object-fit: contain !important;
-                width: auto !important;
+                width: ${VIDEO_LOADING_SIZE} !important;
             }
         `
 	}
@@ -599,23 +604,11 @@ export function installCameraZoom() {
 		}
 	}
 
-	function getMediaAspectRatio(media) {
+	function getUsableMediaAspectRatio(media) {
 		const intrinsicWidth = media.videoWidth || media.naturalWidth
 		const intrinsicHeight = media.videoHeight || media.naturalHeight
-		if (intrinsicWidth > 0 && intrinsicHeight > 0) {
-			return intrinsicWidth / intrinsicHeight
-		}
-
-		// A temporary player box is not a trustworthy video aspect ratio.
-		// Safari can render the stream while keeping these JS dimensions at 0.
-		if (media.tagName === 'VIDEO') return 0
-
-		const rect = media.getBoundingClientRect()
-		return rect.width > 0 && rect.height > 0 ? rect.width / rect.height : 16 / 9
-	}
-
-	function getUsableMediaAspectRatio(media) {
-		const intrinsicAspectRatio = getMediaAspectRatio(media)
+		// Until metadata arrives, the element can be sized by its alt text or poster.
+		const intrinsicAspectRatio = intrinsicWidth > 0 && intrinsicHeight > 0 ? intrinsicWidth / intrinsicHeight : 0
 		if (media.tagName !== 'VIDEO') return intrinsicAspectRatio
 
 		const dialog = findComposedAncestor(media, 'HA-MORE-INFO-DIALOG')
@@ -713,17 +706,15 @@ export function installCameraZoom() {
 		const { width, height } = calculateContainedSize(viewport.rect.width, viewport.rect.height, getUsableMediaAspectRatio(media))
 
 		if (!width || !height) {
-			// Fail open on iOS: its media renderer still knows the decoded
-			// aspect ratio even when videoWidth/videoHeight remain unavailable
-			// to JavaScript. Let CSS contain that intrinsic image instead of
-			// guessing from HA's briefly stretched full-height player box.
+			// Let object-fit contain the image or poster in the stage before its dimensions are known.
+			const loadingSize = media.tagName === 'VIDEO' ? VIDEO_LOADING_SIZE : '100%'
 			media.style.setProperty('display', 'block', 'important')
 			media.style.setProperty('flex', '0 0 auto', 'important')
-			media.style.setProperty('height', 'auto', 'important')
+			media.style.setProperty('height', loadingSize, 'important')
 			media.style.setProperty('max-height', '100%', 'important')
 			media.style.setProperty('max-width', '100%', 'important')
 			media.style.setProperty('object-fit', 'contain', 'important')
-			media.style.setProperty('width', 'auto', 'important')
+			media.style.setProperty('width', loadingSize, 'important')
 			return viewport.element
 		}
 

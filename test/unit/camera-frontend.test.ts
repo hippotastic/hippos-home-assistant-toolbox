@@ -642,6 +642,47 @@ describe('camera frontend', () => {
 		f.dispose()
 	})
 
+	test('reserves the desktop dialog height before the camera control loads', async () => {
+		const f = await fixture()
+		f.camera.remove()
+		f.dialog._entityId = 'sensor.temperature'
+		const root = f.dialog.attachShadow({ mode: 'open' })
+		await f.settings(true, false, false)
+
+		f.dialog.showDialog({ entityId: 'camera.front_door' })
+		expect(f.dialog.hasAttribute('data-hippo-camera-zoom')).toBe(true)
+		expect(root.querySelector('style[data-hippo-camera-zoom-style]')?.textContent).toMatch(
+			/:host\(\[data-hippo-camera-zoom\]\) ha-adaptive-dialog\{--ha-dialog-min-height:\s*var\(--ha-dialog-max-height\)\}/
+		)
+
+		f.dialog.showDialog({ entityId: 'sensor.temperature' })
+		expect(root.querySelector('style[data-hippo-camera-zoom-style]')).toBeNull()
+		f.dispose()
+	})
+
+	test.each([
+		{ playerTag: '', ios: false, loadingSize: '100%' },
+		{ playerTag: 'ha-hls-player', ios: false, loadingSize: '100%' },
+		{ playerTag: 'ha-web-rtc-player', ios: false, loadingSize: '100%' },
+		{ playerTag: 'ha-web-rtc-player', ios: true, loadingSize: 'auto' },
+	])('contains the camera media before its intrinsic dimensions are available (%j)', async ({ playerTag, ios, loadingSize }) => {
+		const f = await zoomFixture({ playerTag, ios, mediaWidth: 0, mediaHeight: 0, viewportHeight: 300 })
+		expect(f.media.style.width).toBe(loadingSize)
+		expect(f.media.style.height).toBe(loadingSize)
+		expect(f.media.style.objectFit).toBe('contain')
+
+		if (playerTag) {
+			Object.defineProperties(f.media, { videoWidth: { value: 800 }, videoHeight: { value: 400 } })
+			f.media.dispatchEvent(new f.w.Event('loadedmetadata'))
+		} else {
+			Object.defineProperties(f.media, { naturalWidth: { value: 800 }, naturalHeight: { value: 400 } })
+			f.media.dispatchEvent(new f.w.Event('load'))
+		}
+		expect(f.media.style.width).toBe('400px')
+		expect(f.media.style.height).toBe('200px')
+		f.dispose()
+	})
+
 	test('keeps native rendering usable when the initial settings subscription fails', async () => {
 		const f = await fixture({ rejectSubscription: true })
 		f.camera.requestUpdate()
