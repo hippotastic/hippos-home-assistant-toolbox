@@ -201,6 +201,7 @@ class AnnouncementServiceTests(unittest.IsolatedAsyncioTestCase):
         (self.root / "custom_components").symlink_to(Path(announcements.__file__).parent.parent)
         loader.async_setup(self.hass)
         self.hass.config_entries = ConfigEntries(self.hass, {})
+        await self.hass.config_entries.async_initialize()
         self.hass.config.media_dirs = {"local": str(self.media)}
         self.loaded = SimpleNamespace(state=ConfigEntryState.LOADED)
         self.entries_patch = patch.object(self.hass.config_entries, "async_entries", return_value=[self.loaded])

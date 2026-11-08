@@ -16,12 +16,12 @@ import voluptuous as vol
 
 from homeassistant.components.automation.config import AUTOMATION_BLUEPRINT_SCHEMA
 from homeassistant.components.blueprint import (
-    BLUEPRINT_INSTANCE_FIELDS,
     Blueprint,
     BlueprintInputs,
     is_blueprint_instance_config,
 )
 from homeassistant.components.blueprint.const import CONF_USE_BLUEPRINT
+from homeassistant.components.blueprint.schemas import BLUEPRINT_INSTANCE_FIELDS
 from homeassistant.config import async_hass_config_yaml
 from homeassistant.const import CONF_ALIAS, CONF_ID, CONF_PATH
 from homeassistant.core import HomeAssistant

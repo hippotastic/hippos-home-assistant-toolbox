@@ -670,6 +670,7 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.registry_patch.stop()
         loader.async_setup(self.hass)
         self.hass.config_entries = ConfigEntries(self.hass, {})
+        await self.hass.config_entries.async_initialize()
         entry = ConfigEntry(
             domain="hippos_toolbox", entry_id="toolbox", data={}, options={},
             source="user", title="Toolbox", unique_id=None, version=1,
