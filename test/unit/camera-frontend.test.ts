@@ -1058,6 +1058,32 @@ describe('camera frontend', () => {
 		f.dispose()
 	})
 
+	test('shows the iOS camera preview while the video waits for its first visible frame', async () => {
+		const f = await zoomFixture({ ios: true, playerTag: 'ha-web-rtc-player', mediaWidth: 0, mediaHeight: 0 })
+		const video = f.media as HTMLVideoElement
+		const root = video.getRootNode() as ShadowRoot
+		const preview = () => root.querySelector('img[data-hippo-camera-video-preview]')
+		video.poster = '/camera-preview.jpg'
+		await flush()
+		expect(preview()?.getAttribute('src')).toBe('/camera-preview.jpg')
+		expect(video.style.visibility).toBe('hidden')
+
+		Object.defineProperties(video, { videoWidth: { value: 800 }, videoHeight: { value: 400 }, readyState: { value: video.HAVE_CURRENT_DATA } })
+		f.frame(180)
+		video.dispatchEvent(new f.w.Event('loadeddata'))
+		f.frame(16)
+		expect(preview()).not.toBeNull()
+		f.frame(16)
+		expect(video.style.visibility).toBe('visible')
+		expect(preview()).toBeNull()
+
+		video.dispatchEvent(new f.w.Event('loadstart'))
+		expect(preview()).not.toBeNull()
+		await f.settings(false, false, false)
+		expect(preview()).toBeNull()
+		f.dispose()
+	})
+
 	test('keeps native rendering usable when the initial settings subscription fails', async () => {
 		const f = await fixture({ rejectSubscription: true })
 		f.camera.requestUpdate()

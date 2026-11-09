@@ -2,7 +2,7 @@
 export const IS_IOS_WEBKIT = /iP(?:ad|hone|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 
 export function installCameraZoom() {
-	const VERSION = 32
+	const VERSION = 33
 	let disposed = false
 	const undoPatches = []
 	const cleanups = new Map()
@@ -59,6 +59,7 @@ export function installCameraZoom() {
 	const SCOPE_ATTRIBUTE = 'data-hippo-camera-zoom'
 	const STYLE_ATTRIBUTE = 'data-hippo-camera-zoom-style'
 	const PREFLIGHT_STYLE_ATTRIBUTE = 'data-hippo-camera-zoom-preflight-style'
+	const VIDEO_PREVIEW_ATTRIBUTE = 'data-hippo-camera-video-preview'
 	const PLAYER_TAGS = new Set(['HA-HLS-PLAYER', 'HA-WEB-RTC-PLAYER'])
 	const MEDIA_HOOK = Symbol.for('hippo.cameraZoom.mediaHook')
 	const DIALOG_PATCH = Symbol.for('hippo.cameraZoom.dialogPatch')
@@ -255,6 +256,7 @@ export function installCameraZoom() {
                 justify-content: center;
                 min-height: 0;
                 overflow: hidden;
+                position: relative;
                 width: 100%;
             }
 
@@ -265,6 +267,15 @@ export function installCameraZoom() {
                 max-width: 100% !important;
                 object-fit: contain !important;
                 width: ${VIDEO_LOADING_SIZE} !important;
+            }
+
+            :host([${SCOPE_ATTRIBUTE}]) img[${VIDEO_PREVIEW_ATTRIBUTE}] {
+                height: 100%;
+                inset: 0;
+                object-fit: contain;
+                pointer-events: none;
+                position: absolute;
+                width: 100%;
             }
         `
 	}
@@ -426,6 +437,7 @@ export function installCameraZoom() {
 	}
 
 	function processElement(element) {
+		if (element.hasAttribute(VIDEO_PREVIEW_ATTRIBUTE)) return
 		if (element.tagName === 'HA-MORE-INFO-DIALOG') {
 			if (shouldEnhanceDialog(element)) activateCameraScope(element)
 			return
@@ -803,7 +815,7 @@ export function installCameraZoom() {
 	}
 
 	function hookMedia(media) {
-		if (disposed) return
+		if (disposed || media.hasAttribute(VIDEO_PREVIEW_ATTRIBUTE)) return
 		remember(media)
 		if (media[MEDIA_HOOK]) {
 			media[MEDIA_HOOK].refit()
@@ -830,6 +842,31 @@ export function installCameraZoom() {
 		let revealPending = false
 		let revealStartedAt = 0
 		const pointers = new Map()
+		const mediaRoot = media.getRootNode()
+		const previewRoot = IS_IOS_WEBKIT && media.tagName === 'VIDEO' && PLAYER_TAGS.has(mediaRoot.host?.tagName) ? mediaRoot : null
+		const previewStream = previewRoot && findComposedAncestor(media, 'HA-CAMERA-STREAM')
+		let previewImage
+
+		const syncVideoPreview = () => {
+			if (!previewRoot) return
+			const liveVisible = media.style.getPropertyValue('visibility') === 'visible' && media.readyState >= media.HAVE_CURRENT_DATA && media.videoWidth > 0
+			const source = media.getAttribute('poster') || previewStream?.stateObj?.attributes?.entity_picture
+			if (liveVisible || !source) {
+				previewImage?.remove()
+				previewImage = undefined
+				return
+			}
+			// WebKit hides the video's own poster together with the video layer.
+			if (!previewImage) {
+				previewImage = document.createElement('img')
+				previewImage.alt = ''
+				previewImage.setAttribute(VIDEO_PREVIEW_ATTRIBUTE, '')
+				previewRoot.append(previewImage)
+			}
+			if (previewImage.getAttribute('src') !== source) previewImage.src = source
+		}
+		const posterObserver = previewRoot && new MutationObserver(syncVideoPreview)
+		posterObserver?.observe(media, { attributes: true, attributeFilter: ['poster'] })
 
 		media.style.touchAction = 'none'
 		media.style.userSelect = 'none'
@@ -924,6 +961,7 @@ export function installCameraZoom() {
 				revealFrame = requestAnimationFrame(() => {
 					if (generation !== revealGeneration) return
 					media.style.setProperty('visibility', 'visible', 'important')
+					syncVideoPreview()
 					revealFrame = null
 				})
 			})
@@ -955,6 +993,7 @@ export function installCameraZoom() {
 			clearTimeout(revealWatchdogTimer)
 			if (revealFrame != null) cancelAnimationFrame(revealFrame)
 			media.style.setProperty('visibility', 'hidden', 'important')
+			syncVideoPreview()
 
 			// The normal gate waits for both the short compositor-settle period
 			// and a trustworthy current or cached aspect ratio. The watchdog is
@@ -1243,6 +1282,7 @@ export function installCameraZoom() {
 			listen(media, type, () => {
 				refit()
 				if (revealPending) checkVideoReveal(revealGeneration)
+				syncVideoPreview()
 			})
 		}
 		listen(media, 'loadstart', scheduleVideoReveal)
@@ -1269,6 +1309,8 @@ export function installCameraZoom() {
 			clearTimeout(revealWatchdogTimer)
 			if (revealFrame != null) cancelAnimationFrame(revealFrame)
 			resizeObserver?.disconnect()
+			posterObserver?.disconnect()
+			previewImage?.remove()
 			delete media[MEDIA_HOOK]
 			restore(media)
 			cleanups.delete(media)
