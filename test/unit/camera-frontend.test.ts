@@ -86,6 +86,7 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 	if (!deferConnection) finishConnection()
 	class CameraStream extends w.HTMLElement {
 		stateObj = { entity_id: 'camera.front_door' }
+		controls = true
 		_capabilities = { frontend_stream_types: [] as string[] }
 		_posterUrl: string | undefined
 		updateComplete = Promise.resolve()
@@ -110,7 +111,10 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 			super()
 			this.attachShadow({ mode: 'open' }).innerHTML = '<img>'
 		}
-		_renderStream(_transport: { type: string }) {
+		_renderStream(transport: { type: string }) {
+			if (transport.type === 'hls' || transport.type === 'web_rtc') {
+				return { strings: ['<ha-player .muted=', ' .controls=', ' .entityid=', '></ha-player>'], values: [false, this.controls, this.stateObj.entity_id] as unknown[] }
+			}
 			return { strings: ['<img .src=', '>'], values: [`/api/camera_proxy_stream/${this.stateObj.entity_id}?token=old`] as unknown[] }
 		}
 		requestUpdate() {
@@ -935,6 +939,41 @@ describe('camera frontend', () => {
 		f.dispose()
 	})
 
+	test.each([false, true])('keeps Lit camera players renderable when zoom is toggled (dialog=%s)', async (inDialog) => {
+		const f = await fixture({ ios: true })
+		const camera = f.w.document.createElement('ha-camera-stream')
+		;(inDialog ? f.dialog : f.w.document.body).append(camera)
+		await f.settings(true, false, false)
+		class Player extends f.w.HTMLElement {
+			renderOptions: { renderBefore: ChildNode | null } = { renderBefore: null }
+			connectedCallback() {
+				const root = this.attachShadow({ mode: 'open' })
+				this.renderOptions.renderBefore = root.firstChild
+			}
+			renderVideo() {
+				const video = f.w.document.createElement('video')
+				this.shadowRoot!.insertBefore(video, this.renderOptions.renderBefore)
+				return video
+			}
+		}
+		f.w.customElements.define('ha-web-rtc-player', Player)
+		const player = new Player()
+		camera.shadowRoot!.append(player)
+		await flush()
+		const anchor = player.renderOptions.renderBefore
+		expect(Boolean(anchor)).toBe(inDialog)
+		expect(player.renderVideo().isConnected).toBe(true)
+
+		await f.settings(false, false, false)
+		expect(player.renderVideo().isConnected).toBe(true)
+		if (anchor) expect(anchor.textContent).toBe('')
+
+		await f.settings(true, false, false)
+		expect(player.renderVideo().isConnected).toBe(true)
+		if (anchor) expect(anchor.textContent).toContain('hippo-camera-video-reveal')
+		f.dispose()
+	})
+
 	test('reserves the desktop dialog height before the camera control loads', async () => {
 		const f = await fixture()
 		f.camera.remove()
@@ -951,6 +990,49 @@ describe('camera frontend', () => {
 		f.dialog.showDialog({ entityId: 'sensor.temperature' })
 		expect(root.querySelector('style[data-hippo-camera-zoom-style]')).toBeNull()
 		f.dispose()
+	})
+
+	test('keeps the native talk button in the dialog corner while zooming a smaller video', async () => {
+		const f = await zoomFixture({ playerTag: 'ha-web-rtc-player', viewportHeight: 400, reducedMotion: true })
+		const root = f.viewport.attachShadow({ mode: 'open' })
+		root.innerHTML = '<slot></slot><div class="buttons"><div id="microphone-button"><button>Start talking</button></div></div>'
+		await flush()
+
+		const style = root.querySelector('style[data-hippo-camera-zoom-style]')?.textContent
+		const buttonRule = style?.match(/:is\(\.buttons,\s*\.actions\):has\(#microphone-button\)\{([^}]+)\}/)?.[1]
+		expect(buttonRule).toContain('position:absolute')
+		expect(buttonRule).toMatch(/(?:^|;)bottom:max\(12px,\s*env\(safe-area-inset-bottom,\s*0px\)\)(?:;|$)/)
+		expect(buttonRule).toMatch(/(?:^|;)right:max\(12px,\s*env\(safe-area-inset-right,\s*0px\)\)(?:;|$)/)
+		expect(f.media.style.height).toBe('200px')
+		f.tap()
+		f.tap()
+		expect(f.view().scale).toBe(2)
+		const button = root.querySelector('button')!
+		let clicks = 0
+		button.addEventListener('click', () => clicks++)
+		button.click()
+		expect(clicks).toBe(1)
+		expect(f.view().scale).toBe(2)
+
+		await f.settings(false, false, false)
+		expect(root.querySelector('style[data-hippo-camera-zoom-style]')).toBeNull()
+		expect(button.isConnected).toBe(true)
+		f.dispose()
+	})
+
+	test.each([true, false])('sets iOS camera controls in the player template with zoom off (iOS=%s)', async (ios) => {
+		const f = await fixture({ ios })
+		await f.settings(false, false, false)
+		expect(f.intervals.size).toBe(0)
+		for (const type of ['hls', 'web_rtc']) {
+			expect(f.camera._renderStream({ type }).values).toEqual([false, !ios, 'camera.front_door'])
+		}
+		expect(f.camera.controls).toBe(true)
+		f.camera.stateObj = { entity_id: 'media_player.living_room' }
+		expect(f.camera._renderStream({ type: 'hls' }).values).toEqual([false, true, 'media_player.living_room'])
+		f.camera.stateObj = { entity_id: 'camera.front_door' }
+		f.dispose()
+		expect(f.camera._renderStream({ type: 'web_rtc' }).values).toEqual([false, true, 'camera.front_door'])
 	})
 
 	test.each([

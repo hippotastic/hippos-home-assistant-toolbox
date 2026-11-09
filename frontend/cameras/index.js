@@ -1,5 +1,5 @@
 import { installCameraRecovery } from './recovery.js'
-import { installCameraZoom } from './zoom.js'
+import { IS_IOS_WEBKIT, installCameraZoom } from './zoom.js'
 
 // Bump together with CAMERA_FRONTEND_PROTOCOL for incompatible API changes.
 const PROTOCOL = 1
@@ -50,7 +50,7 @@ function applySettings(next) {
 	const zoom = next.camera_zoom
 	if (!settings || settings.recovery !== recovery || settings.cleanup !== cleanup) {
 		stopStreams?.()
-		stopStreams = recovery || cleanup ? installCameraRecovery({ recovery, cleanup }) : undefined
+		stopStreams = recovery || cleanup || IS_IOS_WEBKIT ? installCameraRecovery({ recovery, cleanup, hideControls: IS_IOS_WEBKIT }) : undefined
 	}
 	if (!settings || settings.zoom !== zoom) {
 		stopZoom?.()

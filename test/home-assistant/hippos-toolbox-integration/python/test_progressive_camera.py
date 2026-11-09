@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, patch
 
 from PIL import Image as PillowImage
 
-from homeassistant.components.camera import Camera
+from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.hippos_toolbox import progressive_camera
 from custom_components.hippos_toolbox.progressive_camera import (
@@ -36,6 +37,7 @@ class _States:
 class _Hass:
     def __init__(self, entity_ids: tuple[str, ...]) -> None:
         self.states = _States(entity_ids)
+        self.data = {}
 
     async def async_add_executor_job(self, function, *args):
         return function(*args)
@@ -103,6 +105,43 @@ async def _wait_until(predicate, timeout: float = 1.0) -> None:
 
 class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
     """Verify cache transitions and live/background request dispatching."""
+
+    async def test_preview_failure_falls_back_to_frame_from_video(self) -> None:
+        source, preview = "camera.porch", "camera.porch_preview"
+        hass = _Hass((source, preview))
+        manager = _ProgressiveCameraManager(
+            hass, _Entry(), {"porch": source},
+            preview_entity_ids={"porch": preview},
+        )
+        frame = _jpeg()
+        video_camera = SimpleNamespace(
+            use_stream_for_stills=False, supported_features=CameraEntityFeature.STREAM
+        )
+        with (
+            patch.object(
+                progressive_camera, "async_track_state_change_event", return_value=lambda: None
+            ),
+            patch.object(
+                progressive_camera, "async_get_image",
+                AsyncMock(side_effect=HomeAssistantError("No JPEG")),
+            ) as get_image,
+            patch.object(
+                progressive_camera, "get_camera_from_entity_id",
+                side_effect=[HomeAssistantError("No preview"), video_camera],
+            ),
+            patch.object(
+                progressive_camera, "async_get_stream_image",
+                AsyncMock(return_value=frame),
+            ) as get_stream_image,
+        ):
+            await manager.async_start()
+            try:
+                self.assertEqual(await manager.async_get_frame("porch"), frame)
+                self.assertEqual(await manager.async_get_frame("porch"), frame)
+            finally:
+                await manager.async_stop()
+        self.assertEqual([call.args[1] for call in get_image.await_args_list], [preview, source])
+        get_stream_image.assert_awaited_once_with(video_camera)
 
     async def test_dashboard_access_overtakes_delayed_warmup(self) -> None:
         source = "camera.front_door"

@@ -1,13 +1,14 @@
 /* Camera recovery and its shared HA stream hook. */
 import { openControlledStream, stopControlledStream } from './stream-cleanup.js'
 
-export function installCameraRecovery({ recovery = true, cleanup = true } = {}) {
+export function installCameraRecovery({ recovery = true, cleanup = true, hideControls = false } = {}) {
 	const CHECK_INTERVAL = 2000
 	const LOAD_TIMEOUT = 20000
 	const BACKGROUND_RESTART_DELAY = 60000
 	const MAX_RETRY_DELAY = 30000
 	const NO_CHANGE = Symbol.for('lit-noChange')
 	const STREAM_PATH = '/api/hippos_toolbox/camera_stream/'
+	const trackStreams = recovery || cleanup
 
 	const streams = new Map()
 	const players = new Map()
@@ -280,6 +281,16 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 		}
 	}
 
+	function* cameraStreams() {
+		const roots = [document]
+		while (roots.length) {
+			for (const element of roots.pop().querySelectorAll('*')) {
+				if (element.shadowRoot) roots.push(element.shadowRoot)
+				if (element.localName === 'ha-camera-stream' && element.stateObj?.entity_id?.startsWith('camera.')) yield element
+			}
+		}
+	}
+
 	function dispose() {
 		if (disposed) return
 		disposed = true
@@ -291,10 +302,13 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 			stream.removeEventListener('load', state.onLoad)
 			state.image?.removeEventListener('error', state.onError)
 		}
-		const activeStreams = [...streams.keys()].filter((stream) => stream.isConnected)
+		const activeStreams = new Set([...streams.keys()].filter((stream) => stream.isConnected))
 		streams.clear()
 		for (const [player, state] of players) detachPlayer(player, state)
-		if (prototype?._renderStream === patchedRender) prototype._renderStream = originalRender
+		if (patchedRender && prototype?._renderStream === patchedRender) {
+			prototype._renderStream = originalRender
+			if (hideControls) for (const stream of cameraStreams()) activeStreams.add(stream)
+		}
 		// Restore native sources after removing our render hook. A disposed module
 		// must not leave a stopped signed URL in an otherwise connected image.
 		for (const stream of activeStreams) stream.requestUpdate()
@@ -315,8 +329,14 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 		patchedRender = function renderCameraWithRecovery(...args) {
 			// HA renders a poster after disconnection. Release the old live image
 			// first, with the watchdog covering components that no longer render.
-			releaseDisconnectedImage(this, this.shadowRoot?.querySelector('img'))
+			if (trackStreams) releaseDisconnectedImage(this, this.shadowRoot?.querySelector('img'))
 			const result = originalRender.apply(this, args)
+			if (hideControls && (args[0]?.type === 'hls' || args[0]?.type === 'web_rtc') && this.stateObj?.entity_id?.startsWith('camera.')) {
+				// Set the child player's Lit binding before WebKit creates its
+				// native controls. Removing them from the video later can flash.
+				const index = result?.strings?.findIndex((part) => /[.?]controls=\s*$/.test(part))
+				if (index >= 0 && index < result.values?.length) result.values[index] = false
+			}
 			const source = result?.values?.[0]
 			if (
 				cleanup &&
@@ -348,28 +368,25 @@ export function installCameraRecovery({ recovery = true, cleanup = true } = {}) 
 					state.managedEntity = null
 				}
 			}
-			this.updateComplete.then(() => {
-				if (!disposed) watchStream(this)
-			})
+			if (trackStreams)
+				this.updateComplete.then(() => {
+					if (!disposed) watchStream(this)
+				})
 			return result
 		}
 		prototype._renderStream = patchedRender
-		document.addEventListener('visibilitychange', onVisibility)
-		window.addEventListener('online', onOnline)
-		timer = setInterval(checkStreams, CHECK_INTERVAL)
+		if (trackStreams) {
+			document.addEventListener('visibilitychange', onVisibility)
+			window.addEventListener('online', onOnline)
+			timer = setInterval(checkStreams, CHECK_INTERVAL)
+		}
 
 		// Attach once to existing cards. Future cards are covered by _renderStream.
-		const roots = [document]
-		while (roots.length) {
-			for (const element of roots.pop().querySelectorAll('*')) {
-				if (element.shadowRoot) roots.push(element.shadowRoot)
-				if (element.localName === 'ha-camera-stream') {
-					watchStream(element)
-					const image = element.shadowRoot?.querySelector('img')
-					const source = image?.getAttribute('src') ?? ''
-					if (source.includes('/api/camera_proxy_stream/') || source.includes(STREAM_PATH)) element.requestUpdate()
-				}
-			}
+		for (const element of cameraStreams()) {
+			if (trackStreams) watchStream(element)
+			const image = element.shadowRoot?.querySelector('img')
+			const source = image?.getAttribute('src') ?? ''
+			if (hideControls || source.includes('/api/camera_proxy_stream/') || source.includes(STREAM_PATH)) element.requestUpdate()
 		}
 	})
 

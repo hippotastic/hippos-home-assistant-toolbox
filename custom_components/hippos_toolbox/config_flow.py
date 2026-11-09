@@ -15,6 +15,7 @@ from homeassistant.helpers.template import Template
 
 from .const import (
     CAMERA_FRONTEND_OPTIONS,
+    CONF_PREVIEW_ENTITY_ID,
     CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
     DEFAULT_UPDATE_CHANNEL,
@@ -26,6 +27,7 @@ from .const import (
     MONITORING_NOTIFICATION_DEFAULTS,
     MONITORING_SUBENTRY_TYPE,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
+    PROGRESSIVE_CAMERA_OPTIMIZATIONS,
     UPDATE_CHANNEL_DEVELOPMENT,
     UPDATE_CHANNEL_STABLE,
     normalize_update_channel,
@@ -141,16 +143,22 @@ class ProgressiveCameraSubentryFlow(config_entries.ConfigSubentryFlow):
             if step_id == "reconfigure"
             else None
         )
+        current_data = current_subentry.data if current_subentry is not None else {}
         errors: dict[str, str] = {}
 
         if user_input is not None:
             name = str(user_input[CONF_NAME]).strip()
             source_entity_id = str(user_input[CONF_SOURCE_ENTITY_ID])
+            preview_entity_id = user_input.get(CONF_PREVIEW_ENTITY_ID)
 
             if not name:
                 errors[CONF_NAME] = "invalid_name"
             elif source_error := self._source_validation_error(source_entity_id):
                 errors[CONF_SOURCE_ENTITY_ID] = source_error
+            elif preview_entity_id and (
+                preview_error := self._source_validation_error(preview_entity_id)
+            ):
+                errors[CONF_PREVIEW_ENTITY_ID] = preview_error
             elif any(
                 subentry.subentry_type == PROGRESSIVE_CAMERA_SUBENTRY_TYPE
                 and subentry.subentry_id
@@ -166,6 +174,16 @@ class ProgressiveCameraSubentryFlow(config_entries.ConfigSubentryFlow):
 
             if not errors:
                 data = {CONF_SOURCE_ENTITY_ID: source_entity_id}
+                if preview_entity_id and preview_entity_id != source_entity_id:
+                    data[CONF_PREVIEW_ENTITY_ID] = preview_entity_id
+                # Older entries omit these keys. Only overrides need storing.
+                data.update(
+                    {
+                        key: False
+                        for key in PROGRESSIVE_CAMERA_OPTIMIZATIONS
+                        if not user_input.get(key, current_data.get(key, True))
+                    }
+                )
                 if current_subentry is not None:
                     return self.async_update_and_abort(
                         entry,
@@ -175,13 +193,9 @@ class ProgressiveCameraSubentryFlow(config_entries.ConfigSubentryFlow):
                     )
                 return self.async_create_entry(title=name, data=data)
 
-        default_name = (
-            current_subentry.title if current_subentry is not None else ""
-        )
-        default_source = (
-            current_subentry.data[CONF_SOURCE_ENTITY_ID]
-            if current_subentry is not None
-            else vol.UNDEFINED
+        default_name = current_subentry.title if current_subentry else ""
+        camera_selector = selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=CAMERA_DOMAIN)
         )
         return self.async_show_form(
             step_id=step_id,
@@ -189,10 +203,19 @@ class ProgressiveCameraSubentryFlow(config_entries.ConfigSubentryFlow):
                 {
                     vol.Required(CONF_NAME, default=default_name): selector.TextSelector(),
                     vol.Required(
-                        CONF_SOURCE_ENTITY_ID, default=default_source
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(domain=CAMERA_DOMAIN)
-                    ),
+                        CONF_SOURCE_ENTITY_ID,
+                        default=current_data.get(CONF_SOURCE_ENTITY_ID, vol.UNDEFINED),
+                    ): camera_selector,
+                    vol.Optional(
+                        CONF_PREVIEW_ENTITY_ID,
+                        description={"suggested_value": current_data[CONF_PREVIEW_ENTITY_ID]}
+                        if CONF_PREVIEW_ENTITY_ID in current_data else None,
+                    ): camera_selector,
+                    **{
+                        vol.Required(option, default=current_data.get(option, True)):
+                        selector.BooleanSelector()
+                        for option in PROGRESSIVE_CAMERA_OPTIMIZATIONS
+                    },
                 }
             ),
             errors=errors,

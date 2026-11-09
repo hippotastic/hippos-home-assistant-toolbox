@@ -22,11 +22,15 @@ Changes apply to connected clients without reloading the integration or clearing
 
 These features apply to Home Assistant's standard camera elements, including progressive cameras. Third-party camera cards that implement their own players are outside this scope. A stream that silently stops updating while retaining a valid decoded image cannot be reliably identified through a native MJPEG image element. Frontend extensions depend on HA internals; unsupported camera rendering falls back to HA's native path.
 
+On iPhone and iPad, the standard camera player starts WebRTC and HLS without the native playback controls over the image. This also applies to camera cards with zoom disabled.
+
 ## Zooming in a camera dialog
 
 Open a camera's standard more-info dialog and double-tap the detail you want to inspect. The view smoothly zooms to at least twice its initial size, increasing magnification further when needed to fill the dialog's image area both horizontally and vertically. It centers the tapped detail as far as possible while keeping that area filled. Double-tap again to return to the full image, including after zooming manually. A mouse double-click works the same way and follows your system's double-click speed. Reduced-motion preferences skip the animation.
 
 Drag to move around an enlarged view, pinch to adjust magnification, or use the mouse wheel. Single taps, long presses, dragging, and pinch gestures do not trigger double-tap zoom. After updating the integration, reload the client and try two double-taps to verify that the view enlarges and returns to the full image. The existing **Camera zoom** option controls this behavior; no additional configuration is needed.
+
+When Home Assistant offers two-way audio, its **Start talking** button stays in the bottom right corner of the camera popup, even if the video is smaller than the popup. The button stays in place while you zoom or pan the image.
 
 ## Loading and communication
 

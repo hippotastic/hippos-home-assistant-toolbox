@@ -3,10 +3,12 @@
 import asyncio
 from types import MappingProxyType, SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
+
+from aiohttp import UnixConnector
 
 from homeassistant import config_entries
-from homeassistant.components.camera import CameraEntityFeature
+from homeassistant.components.camera import CameraEntityFeature, StreamType
 
 from custom_components.hippos_toolbox.camera import (
     _ProgressiveSnapshotCamera,
@@ -125,6 +127,80 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(camera.available)
         self.assertIn("access_token", camera.state_attributes)
+
+    async def test_webrtc_passthrough_for_native_and_external_providers(self) -> None:
+        source = SimpleNamespace(
+            camera_capabilities=SimpleNamespace(frontend_stream_types={StreamType.WEB_RTC}),
+            async_handle_async_webrtc_offer=AsyncMock(),
+            async_on_webrtc_candidate=AsyncMock(),
+            close_webrtc_session=Mock(),
+        )
+        with (
+            patch("custom_components.hippos_toolbox.camera.async_entity_id_to_device"),
+            patch("custom_components.hippos_toolbox.camera.get_camera_from_entity_id", return_value=source),
+        ):
+            camera = _ProgressiveSnapshotCamera(_hass(), _Manager(), _subentry())
+            self.assertIn(CameraEntityFeature.STREAM, camera.supported_features)
+            send = Mock()
+            for provider in (None, SimpleNamespace(domain="go2rtc")):
+                source.webrtc_provider = provider
+                await camera.async_handle_async_webrtc_offer("offer", "session", send)
+                await camera.async_on_webrtc_candidate("session", "candidate")
+                camera.close_webrtc_session("session")
+                await camera.async_on_webrtc_candidate("session", "too late")
+                source.async_handle_async_webrtc_offer.assert_awaited_once_with("offer", "session", send)
+                source.async_on_webrtc_candidate.assert_awaited_once_with("session", "candidate")
+                source.close_webrtc_session.assert_called_once_with("session")
+                source.async_handle_async_webrtc_offer.reset_mock()
+                source.async_on_webrtc_candidate.reset_mock()
+                source.close_webrtc_session.reset_mock()
+
+    async def test_go2rtc_receives_relay_url_and_early_ice_waits_for_offer(self) -> None:
+        pending = asyncio.Event()
+        registered = asyncio.Event()
+
+        async def register(camera, *_):
+            self.assertEqual(await camera.stream_source(), "rtsp://127.0.0.1:9001/paced")
+            pending.set()
+            await registered.wait()
+
+        provider = SimpleNamespace(
+            domain="go2rtc",
+            _session=SimpleNamespace(connector=Mock(spec=UnixConnector)),
+            async_handle_async_webrtc_offer=AsyncMock(side_effect=register),
+            async_on_webrtc_candidate=AsyncMock(),
+            async_close_session=Mock(),
+        )
+        source = SimpleNamespace(
+            webrtc_provider=provider,
+            stream_source=AsyncMock(return_value="rtsp://camera.invalid/main"),
+            camera_entity_capabilities=SimpleNamespace(two_way_audio=True),
+        )
+        with (
+            patch("custom_components.hippos_toolbox.camera.async_entity_id_to_device"),
+            patch("custom_components.hippos_toolbox.camera.get_camera_from_entity_id", return_value=source),
+            patch(
+                "custom_components.hippos_toolbox.camera_relay._CameraRelay.async_get_url",
+                return_value="rtsp://127.0.0.1:9001/paced",
+            ) as relay,
+        ):
+            camera = _ProgressiveSnapshotCamera(_hass(), _Manager(), _subentry())
+            offer = asyncio.create_task(
+                camera.async_handle_async_webrtc_offer("offer", "session", Mock())
+            )
+            await asyncio.wait_for(pending.wait(), 1)
+            candidate = asyncio.create_task(
+                camera.async_on_webrtc_candidate("session", "candidate")
+            )
+            await asyncio.sleep(0)
+            provider.async_on_webrtc_candidate.assert_not_called()
+            registered.set()
+            await asyncio.gather(offer, candidate)
+            camera.close_webrtc_session("session")
+            relay.assert_awaited_once_with("rtsp://camera.invalid/main", True)
+
+        provider.async_on_webrtc_candidate.assert_awaited_once_with("session", "candidate")
+        provider.async_close_session.assert_called_once_with("session")
 
     async def test_cached_frame_keeps_entity_available_without_source(self) -> None:
         with patch(

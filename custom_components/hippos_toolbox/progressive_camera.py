@@ -17,6 +17,7 @@ from yarl import URL
 
 from homeassistant.components.camera import (
     Camera,
+    CameraEntityFeature,
     MIN_STREAM_INTERVAL,
     async_get_image,
 )
@@ -28,6 +29,12 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.network import NoURLAvailableError, get_url
+
+try:
+    from homeassistant.components.camera.helper import async_get_stream_image
+except ImportError:
+    # Home Assistant 2026.7 kept the same helper in the camera component.
+    from homeassistant.components.camera import _async_get_stream_image as async_get_stream_image
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,6 +66,7 @@ class _CameraCache:
 
     subentry_id: str
     source_entity_id: str
+    preview_entity_id: str | None = None
     last_good_frame: bytes | None = None
     display_frame: bytes | None = None
     last_success_at: float | None = None
@@ -83,11 +91,15 @@ class _ProgressiveCameraManager:
         hass: HomeAssistant,
         entry: ConfigEntry,
         source_entity_ids: Mapping[str, str],
+        *,
+        preview_entity_ids: Mapping[str, str] | None = None,
     ) -> None:
         self._hass = hass
         self._entry = entry
         self._caches = {
-            subentry_id: _CameraCache(subentry_id, source_entity_id)
+            subentry_id: _CameraCache(
+                subentry_id, source_entity_id, (preview_entity_ids or {}).get(subentry_id)
+            )
             for subentry_id, source_entity_id in source_entity_ids.items()
         }
         self._overlay_png = b""
@@ -620,23 +632,19 @@ class _ProgressiveCameraManager:
                 )
                 return
 
-            image = await async_get_image(
-                self._hass, cache.source_entity_id, timeout=_FETCH_TIMEOUT
-            )
-            content_type = image.content_type.lower().split(";", 1)[0].strip()
-            if not image.content:
-                raise ValueError("source returned an empty image")
-            if (
-                content_type not in _JPEG_CONTENT_TYPES
-                and not image.content.startswith(b"\xff\xd8\xff")
-            ):
-                raise ValueError(
-                    f"source returned unsupported content type {content_type!r}"
-                )
+            frame = None
+            if cache.preview_entity_id:
+                try:
+                    frame = await self._async_fetch_jpeg(cache.preview_entity_id, 1)
+                except (HomeAssistantError, TimeoutError, ValueError):
+                    # The original camera remains a usable still source on a cache miss.
+                    pass
+            if frame is None:
+                frame = await self._async_fetch_jpeg(cache.source_entity_id, _FETCH_TIMEOUT)
             # A background request may finish after a live relay has started.
             # Its older snapshot must not overwrite a newer native stream frame.
             if cache.native_stream is None:
-                self._async_record_success(cache, image.content)
+                self._async_record_success(cache, frame)
         except asyncio.CancelledError:
             raise
         except Exception as err:  # Home Assistant integrations expose varied errors.
@@ -672,6 +680,34 @@ class _ProgressiveCameraManager:
                     replace=True,
                 )
             self._wake.set()
+
+    async def _async_fetch_jpeg(self, entity_id: str, timeout: int) -> bytes:
+        async with asyncio.timeout(timeout):
+            try:
+                image = await async_get_image(self._hass, entity_id, timeout=timeout)
+            except (HomeAssistantError, NotImplementedError):
+                # Some integrations expose the stream without a snapshot method.
+                try:
+                    camera = get_camera_from_entity_id(self._hass, entity_id)
+                    if (
+                        not camera.use_stream_for_stills
+                        and CameraEntityFeature.STREAM in camera.supported_features
+                        and (frame := await async_get_stream_image(camera))
+                        and frame.startswith(b"\xff\xd8\xff")
+                    ):
+                        return frame
+                except HomeAssistantError:
+                    pass
+                raise
+        content_type = image.content_type.lower().split(";", 1)[0].strip()
+        if not image.content:
+            raise ValueError("source returned an empty image")
+        if (
+            content_type not in _JPEG_CONTENT_TYPES
+            and not image.content.startswith(b"\xff\xd8\xff")
+        ):
+            raise ValueError(f"source returned unsupported content type {content_type!r}")
+        return image.content
 
     def _source_frame_interval(self, cache: _CameraCache) -> float:
         """Return the same still-stream interval as the source camera."""

@@ -1,6 +1,8 @@
 /* Camera dialog zoom, pan and aspect-ratio corrections. */
+export const IS_IOS_WEBKIT = /iP(?:ad|hone|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+
 export function installCameraZoom() {
-	const VERSION = 29
+	const VERSION = 32
 	let disposed = false
 	const undoPatches = []
 	const cleanups = new Map()
@@ -11,7 +13,7 @@ export function installCameraZoom() {
 		if (!originals.has(element))
 			originals.set(element, {
 				style: element.getAttribute('style'),
-				controls: element.controls,
+				controls: element.tagName === 'VIDEO' && !IS_IOS_WEBKIT ? element.controls : undefined,
 				fitMode: element.fitMode,
 				width: element.width,
 				fill: element._fill,
@@ -23,7 +25,7 @@ export function installCameraZoom() {
 		if (!saved) return
 		if (saved.style === null) element.removeAttribute('style')
 		else element.setAttribute('style', saved.style)
-		if ('controls' in element) element.controls = saved.controls
+		if (saved.controls !== undefined) element.controls = saved.controls
 		if ('fitMode' in element) element.fitMode = saved.fitMode
 		if (element.tagName === 'HA-ADAPTIVE-DIALOG') element.width = saved.width
 		if (element.tagName === 'HA-MORE-INFO-DIALOG') {
@@ -52,7 +54,6 @@ export function installCameraZoom() {
 	const RUBBER_BAND_RETURN_PER_MS = 0.022
 	const VIDEO_MIN_REVEAL_DELAY_MS = 180
 	const VIDEO_REVEAL_WATCHDOG_MS = 5000
-	const IS_IOS_WEBKIT = /iP(?:ad|hone|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 	// WebKit's separate video layer needs intrinsic sizing even without metadata.
 	const VIDEO_LOADING_SIZE = IS_IOS_WEBKIT ? 'auto' : '100%'
 	const SCOPE_ATTRIBUTE = 'data-hippo-camera-zoom'
@@ -167,6 +168,15 @@ export function installCameraZoom() {
 
             :host([${SCOPE_ATTRIBUTE}]) .actions {
                 display: none !important;
+            }
+
+            :host([${SCOPE_ATTRIBUTE}]) :is(.buttons, .actions):has(#microphone-button) {
+                bottom: max(12px, env(safe-area-inset-bottom, 0px));
+                display: flex !important;
+                padding: 0;
+                position: absolute;
+                right: max(12px, env(safe-area-inset-right, 0px));
+                z-index: 1;
             }
 
             :host([${SCOPE_ATTRIBUTE}]) ha-camera-stream {
@@ -313,20 +323,22 @@ export function installCameraZoom() {
 		if (!css || !root) return
 
 		observeRoot(root)
-		if (root.querySelector(`style[${STYLE_ATTRIBUTE}]`)) return
+		const existing = root.querySelector(`style[${STYLE_ATTRIBUTE}]`)
+		if (existing?.textContent) return
 
-		const style = document.createElement('style')
+		const style = existing ?? document.createElement('style')
 		style.setAttribute(STYLE_ATTRIBUTE, '')
 		style.textContent = css
-		root.append(style)
+		if (!existing) root.append(style)
 	}
 
 	function ensurePlayerPreflightStyle(host, root = host.shadowRoot) {
 		if (!PLAYER_TAGS.has(host.tagName) || !root) return
 		scopedHosts.add(host)
-		if (root.querySelector?.(`style[${PREFLIGHT_STYLE_ATTRIBUTE}]`)) return
+		const existing = root.querySelector(`style[${PREFLIGHT_STYLE_ATTRIBUTE}]`)
+		if (existing?.textContent) return
 
-		const style = document.createElement('style')
+		const style = existing ?? document.createElement('style')
 		style.setAttribute(PREFLIGHT_STYLE_ATTRIBUTE, '')
 		style.textContent = /* css */ `
             video {
@@ -347,12 +359,19 @@ export function installCameraZoom() {
                 to { visibility: visible; }
             }
         `
-		root.append(style)
+		if (!existing) root.append(style)
+	}
+
+	function removeZoomStyle(host, style) {
+		if (!style) return
+		// Lit can retain the first shadow child as its insertion anchor.
+		if (host.renderOptions?.renderBefore === style) style.textContent = ''
+		else style.remove()
 	}
 
 	function removePlayerPreflightStyle(host) {
 		if (!PLAYER_TAGS.has(host.tagName)) return
-		host.shadowRoot?.querySelector(`style[${PREFLIGHT_STYLE_ATTRIBUTE}]`)?.remove()
+		removeZoomStyle(host, host.shadowRoot?.querySelector(`style[${PREFLIGHT_STYLE_ATTRIBUTE}]`))
 	}
 
 	function markScopedHost(host) {
@@ -401,7 +420,7 @@ export function installCameraZoom() {
 				cleanups.get(node)?.()
 				restore(node)
 				scopedHosts.delete(node)
-				node.shadowRoot?.querySelector(`style[${STYLE_ATTRIBUTE}]`)?.remove()
+				removeZoomStyle(node, node.shadowRoot?.querySelector(`style[${STYLE_ATTRIBUTE}]`))
 			}
 		})
 	}
@@ -448,10 +467,10 @@ export function installCameraZoom() {
 			const root = current.apply(this, args)
 			if (disposed) return root
 
-			// This executes inside the player's constructor, before Lit can
-			// render its first video frame. The MutationObserver path is too
-			// late for WKWebView, which may paint the default stretched video.
-			ensurePlayerPreflightStyle(this, root)
+			// Apply the preflight before Lit renders the first video frame,
+			// but only inside a camera dialog. Dashboard players own their layout.
+			const dialog = findComposedAncestor(this, 'HA-MORE-INFO-DIALOG')
+			if (dialog && shouldEnhanceDialog(dialog)) ensurePlayerPreflightStyle(this, root)
 			observeRoot(root)
 			queueMicrotask(() => scanNode(this))
 			return root
@@ -816,7 +835,7 @@ export function installCameraZoom() {
 		media.style.userSelect = 'none'
 		media.style.cursor = 'grab'
 		media.style.transformOrigin = '50% 50%'
-		if (media.tagName === 'VIDEO') media.controls = false
+		if (media.tagName === 'VIDEO' && !IS_IOS_WEBKIT) media.controls = false
 
 		const renderState = () => {
 			if (disposed || !mediaActive) return
@@ -1288,7 +1307,7 @@ export function installCameraZoom() {
 		for (const element of originals.keys()) restore(element)
 		for (const host of scopedHosts) {
 			host.removeAttribute(SCOPE_ATTRIBUTE)
-			for (const style of host.shadowRoot?.querySelectorAll(`style[${STYLE_ATTRIBUTE}], style[${PREFLIGHT_STYLE_ATTRIBUTE}]`) ?? []) style.remove()
+			for (const style of host.shadowRoot?.querySelectorAll(`style[${STYLE_ATTRIBUTE}], style[${PREFLIGHT_STYLE_ATTRIBUTE}]`) ?? []) removeZoomStyle(host, style)
 		}
 		scopedHosts.clear()
 		observedRoots.clear()

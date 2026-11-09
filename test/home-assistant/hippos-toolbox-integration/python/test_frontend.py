@@ -9,6 +9,7 @@ from custom_components.hippos_toolbox.const import (
     CAMERA_FRONTEND_OPTIONS,
     CAMERA_FRONTEND_PROTOCOL,
     CONF_CAMERA_STREAM_CLEANUP,
+    CONF_PACE_VIDEO,
     CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
     MONITORING_SUBENTRY_TYPE,
@@ -123,17 +124,33 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_camera_subentry_changes_still_reload_the_integration(self):
         self.hass.config_entries = SimpleNamespace(async_reload=AsyncMock())
-        self.entry.runtime_data.camera_subentries = {"removed": ("camera.front_door", "Front door")}
+        self.entry.runtime_data.camera_subentries = {
+            "removed": ("Front door", {CONF_SOURCE_ENTITY_ID: "camera.front_door"})
+        }
         await _async_reload_entry(self.hass, self.entry)
         self.hass.config_entries.async_reload.assert_awaited_once_with("toolbox")
 
     async def test_camera_title_changes_still_reload_the_entity_name(self):
         self.hass.config_entries = SimpleNamespace(async_reload=AsyncMock())
-        self.entry.runtime_data.camera_subentries = {"camera": ("camera.front_door", "Old title")}
+        self.entry.runtime_data.camera_subentries = {
+            "camera": ("Old title", {CONF_SOURCE_ENTITY_ID: "camera.front_door"})
+        }
         self.entry.subentries = {"camera": SimpleNamespace(
             subentry_id="camera", title="New title",
             subentry_type=PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
             data={CONF_SOURCE_ENTITY_ID: "camera.front_door"},
+        )}
+        await _async_reload_entry(self.hass, self.entry)
+        self.hass.config_entries.async_reload.assert_awaited_once_with("toolbox")
+
+    async def test_camera_optimization_changes_reload_the_camera(self):
+        self.hass.config_entries = SimpleNamespace(async_reload=AsyncMock())
+        saved = {CONF_SOURCE_ENTITY_ID: "camera.front_door"}
+        self.entry.runtime_data.camera_subentries = {"camera": ("Front door", saved)}
+        self.entry.subentries = {"camera": SimpleNamespace(
+            subentry_id="camera", title="Front door",
+            subentry_type=PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
+            data=saved | {CONF_PACE_VIDEO: False},
         )}
         await _async_reload_entry(self.hass, self.entry)
         self.hass.config_entries.async_reload.assert_awaited_once_with("toolbox")

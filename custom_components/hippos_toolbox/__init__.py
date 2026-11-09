@@ -1,6 +1,7 @@
 """Hippo's Home Assistant Toolbox integration."""
 
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -12,6 +13,7 @@ from .announcements import async_setup_announcements
 from .api import ToolboxApi
 from .camera_stream import async_stop_camera_streams
 from .const import (
+    CONF_PREVIEW_ENTITY_ID,
     CONF_SOURCE_ENTITY_ID,
     CONF_CAMERA_STREAM_CLEANUP,
     CONF_UPDATE_CHANNEL,
@@ -45,7 +47,7 @@ class ToolboxRuntimeData:
     coordinator: ToolboxCoordinator
     progressive_camera_manager: _ProgressiveCameraManager
     update_channel: str
-    camera_subentries: dict[str, tuple[str, str]]
+    camera_subentries: dict[str, tuple[str, dict[str, Any]]]
     monitor: _ProblemMonitor | None
     monitor_notifications: _MonitoringNotifications | None
     monitoring_subentries: dict[str, dict]
@@ -81,13 +83,21 @@ async def async_setup_entry(
     )
 
     camera_subentries = {
-        subentry.subentry_id: (str(subentry.data[CONF_SOURCE_ENTITY_ID]), subentry.title)
+        subentry.subentry_id: (subentry.title, dict(subentry.data))
         for subentry in entry.subentries.values()
         if subentry.subentry_type == PROGRESSIVE_CAMERA_SUBENTRY_TYPE
     }
     progressive_camera_manager = _ProgressiveCameraManager(
         hass, entry,
-        {subentry_id: source for subentry_id, (source, _) in camera_subentries.items()},
+        {
+            subentry_id: str(data[CONF_SOURCE_ENTITY_ID])
+            for subentry_id, (_, data) in camera_subentries.items()
+        },
+        preview_entity_ids={
+            subentry_id: str(data[CONF_PREVIEW_ENTITY_ID])
+            for subentry_id, (_, data) in camera_subentries.items()
+            if data.get(CONF_PREVIEW_ENTITY_ID)
+        },
     )
     monitoring_subentries = {
         item.subentry_id: dict(item.data) for item in entry.subentries.values()
@@ -161,7 +171,7 @@ async def _async_reload_entry(
         entry.options.get(CONF_UPDATE_CHANNEL, DEFAULT_UPDATE_CHANNEL)
     )
     camera_subentries = {
-        subentry.subentry_id: (str(subentry.data[CONF_SOURCE_ENTITY_ID]), subentry.title)
+        subentry.subentry_id: (subentry.title, dict(subentry.data))
         for subentry in entry.subentries.values()
         if subentry.subentry_type == PROGRESSIVE_CAMERA_SUBENTRY_TYPE
     }
