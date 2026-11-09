@@ -212,7 +212,16 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 	}
 }
 
-async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false, mediaWidth = 400, mediaHeight = 200, viewportWidth = 400, viewportHeight = 200 } = {}) {
+async function zoomFixture({
+	ios = false,
+	playerTag = '',
+	reducedMotion = false,
+	mediaWidth = 400,
+	mediaHeight = 200,
+	viewportWidth = 400,
+	viewportHeight = 200,
+	bottomSheet = false,
+} = {}) {
 	const f = await fixture({ ios })
 	let media: HTMLImageElement | HTMLVideoElement = f.camera.shadowRoot!.querySelector('img')!
 	if (playerTag) {
@@ -224,7 +233,12 @@ async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false,
 	}
 	const viewport = f.w.document.createElement('more-info-camera')
 	viewport.append(f.camera)
-	f.dialog.append(viewport)
+	if (bottomSheet) {
+		const adaptive = f.w.document.createElement('ha-adaptive-dialog')
+		adaptive.attachShadow({ mode: 'open' }).innerHTML = '<ha-bottom-sheet><slot></slot></ha-bottom-sheet>'
+		adaptive.append(viewport)
+		f.dialog.append(adaptive)
+	} else f.dialog.append(viewport)
 	Object.defineProperties(
 		media,
 		media.tagName === 'VIDEO'
@@ -262,6 +276,12 @@ async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false,
 		media.dispatchEvent(event)
 		return event
 	}
+	const touch = (type: string, touches: Array<Pick<Touch, 'identifier' | 'clientX' | 'clientY'>>, changedTouches = touches) => {
+		const event = new f.w.Event(type, { bubbles: true, composed: true, cancelable: true })
+		Object.defineProperties(event, { touches: { value: touches }, changedTouches: { value: changedTouches } })
+		media.dispatchEvent(event)
+		return event
+	}
 	const frame = (elapsed = 220) => {
 		frameTime += elapsed
 		for (const [id, callback] of [...frames]) {
@@ -278,6 +298,7 @@ async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false,
 		viewport,
 		view,
 		pointer,
+		touch,
 		tap: (clientX = 300, clientY = 300, pointerType = 'touch') => {
 			pointer('pointerdown', { clientX, clientY, pointerType })
 			pointer('pointerup', { clientX, clientY, pointerType })
@@ -285,6 +306,78 @@ async function zoomFixture({ ios = false, playerTag = '', reducedMotion = false,
 		frame,
 	}
 }
+
+describe('camera bottom sheet gestures', () => {
+	test('hands downward drags from the overview to HA and keeps zoomed drags on the image', async () => {
+		const f = await zoomFixture({ bottomSheet: true, reducedMotion: true })
+		const events: string[] = []
+		for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) f.w.document.addEventListener(type, (event) => events.push(event.type))
+		const start = { identifier: 1, clientX: 300, clientY: 300 }
+		const down = { ...start, clientY: 350 }
+		f.touch('touchstart', [start])
+		expect(f.touch('touchmove', [{ ...start, clientY: 305 }]).defaultPrevented).toBe(true)
+		expect(f.touch('touchmove', [down]).defaultPrevented).toBe(false)
+		f.touch('touchend', [], [down])
+		expect(events.splice(0)).toEqual(['touchstart', 'touchmove', 'touchend'])
+
+		f.touch('touchstart', [start])
+		f.touch('touchmove', [{ ...start, clientX: 320 }])
+		f.touch('touchmove', [down])
+		f.touch('touchcancel', [], [down])
+		expect(events.splice(0)).toEqual(['touchstart', 'touchcancel'])
+
+		f.tap()
+		f.tap()
+		f.pointer('pointerdown')
+		f.touch('touchstart', [start])
+		f.pointer('pointermove', { clientY: down.clientY })
+		expect(f.touch('touchmove', [down]).defaultPrevented).toBe(true)
+		f.pointer('pointerup', { clientY: down.clientY })
+		f.touch('touchend', [], [down])
+		expect(events).toEqual([])
+		expect(f.view()).toEqual({ scale: 2, x: 0, y: 50 })
+
+		f.tap()
+		f.tap()
+		f.touch('touchstart', [start])
+		f.touch('touchmove', [down])
+		f.touch('touchend', [], [down])
+		expect(events).toEqual(['touchstart', 'touchmove', 'touchend'])
+		expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+		f.dispose()
+	})
+
+	test.each([false, true])('keeps the first gesture owner when a second finger lands (sheet already dragging: %s)', async (dragging) => {
+		const f = await zoomFixture({ bottomSheet: true })
+		const events: string[] = []
+		for (const type of ['touchstart', 'touchmove', 'touchend']) f.w.document.addEventListener(type, (event) => events.push(event.type))
+		const first = { identifier: 1, clientX: 250, clientY: 300 }
+		const second = { identifier: 2, clientX: 350, clientY: 300 }
+		f.pointer('pointerdown', first)
+		f.touch('touchstart', [first])
+		if (dragging) {
+			first.clientY += 30
+			f.pointer('pointermove', first)
+			f.touch('touchmove', [first])
+		}
+		f.pointer('pointerdown', { ...second, pointerId: 2 })
+		f.touch('touchstart', [first, second], [second])
+		second.clientX += 50
+		f.pointer('pointermove', { ...second, pointerId: 2 })
+		f.touch('touchmove', [first, second], [second])
+		expect(f.view().scale > 1).toBe(!dragging)
+		f.pointer('pointerup', { ...second, pointerId: 2 })
+		f.touch('touchend', [first], [second])
+		expect(events).toEqual(dragging ? ['touchstart', 'touchmove'] : ['touchstart'])
+		first.clientY += 30
+		f.pointer('pointermove', first)
+		f.touch('touchmove', [first])
+		f.pointer('pointerup', first)
+		f.touch('touchend', [], [first])
+		expect(events).toEqual(dragging ? ['touchstart', 'touchmove', 'touchmove', 'touchend'] : ['touchstart', 'touchend'])
+		f.dispose()
+	})
+})
 
 describe('camera double-tap zoom', () => {
 	test('animates only the iOS video and commits the visible zoom when a drag interrupts', async () => {
@@ -549,6 +642,165 @@ describe('camera double-tap zoom', () => {
 		f.tap()
 		f.frame()
 		expect(f.view()).toEqual({ scale: 1, x: 0, y: 0 })
+		f.dispose()
+	})
+
+	test('reuses the pan geometry across moves and measures again when the viewport changes', async () => {
+		const f = await zoomFixture({ reducedMotion: true })
+		f.tap()
+		f.tap()
+		const measure = f.media.getBoundingClientRect
+		let measurements = 0
+		f.media.getBoundingClientRect = () => {
+			measurements++
+			return measure()
+		}
+
+		f.pointer('pointerdown')
+		f.pointer('pointermove', { clientX: 330, clientY: 320 })
+		expect(f.view()).toEqual({ scale: 2, x: 30, y: 20 })
+		f.pointer('pointermove', { clientX: 600, clientY: 450 })
+		expect(f.view()).toEqual({ scale: 2, x: 200, y: 100 })
+		expect(measurements).toBe(1)
+
+		const Rect = f.w.DOMRect as typeof DOMRect
+		f.viewport.getBoundingClientRect = () => new Rect(100, 200, 200, 100)
+		f.w.dispatchEvent(new f.w.Event('resize'))
+		measurements = 0
+		f.pointer('pointermove', { clientX: 590, clientY: 440 })
+		expect(f.view()).toEqual({ scale: 2, x: 100, y: 50 })
+		f.pointer('pointermove', { clientX: 330, clientY: 320 })
+		expect(f.view()).toEqual({ scale: 2, x: 30, y: 20 })
+		expect(measurements).toBe(1)
+		f.dispose()
+	})
+
+	test('coasts at the UIKit rate away from edges, brakes near an edge, and stops when grabbed again', async () => {
+		const f = await zoomFixture()
+		f.tap()
+		f.tap()
+		f.frame()
+		f.pointer('pointerdown')
+		await f.tick(30)
+		f.pointer('pointermove', { clientX: 340, clientY: 305 })
+		await f.tick(15)
+		f.pointer('pointermove', { clientX: 360, clientY: 308 })
+		await f.tick(5)
+		f.pointer('pointerup', { clientX: 360, clientY: 308 })
+		expect(f.view()).toEqual({ scale: 2, x: 60, y: 8 })
+
+		f.frame(20)
+		const coast = (0.998 / (1 - 0.998)) * (1 - 0.998 ** 20)
+		expect(f.view().x).toBeGreaterThan(60)
+		expect(f.view().x).toBeLessThan(60 + (60 / 50) * coast)
+		expect(f.view().y).toBeCloseTo(8 + (8 / 50) * coast, 1)
+		f.frame(160)
+		const braking = f.view()
+		expect(braking.x).toBeLessThan(200)
+		f.frame(100)
+		const regrab = f.view()
+		expect(regrab.x).toBeGreaterThan(braking.x)
+		expect(regrab.x).toBeLessThan(200)
+		expect(regrab.y).toBeGreaterThan(braking.y)
+		expect(regrab.y).toBeLessThan(100)
+
+		f.pointer('pointerdown')
+		f.frame(400)
+		expect(f.view()).toEqual(regrab)
+		f.pointer('pointermove', { clientX: 270 })
+		expect(f.view()).toEqual({ ...regrab, x: regrab.x - 30 })
+		f.dispose()
+	})
+
+	test.each(['tap', 'drag'])('resists vertical overdrag in portrait and brakes the return on %s', async (interaction) => {
+		const f = await zoomFixture({ ios: true, playerTag: 'ha-hls-player', viewportHeight: 800 })
+		f.tap(300, 600)
+		f.tap(300, 600)
+		f.frame()
+		expect(f.view()).toEqual({ scale: 4, x: 0, y: 0 })
+
+		const animations: Array<{ frames: Keyframe[]; timing: number | KeyframeAnimationOptions | undefined; canceled: boolean; onfinish?: () => void }> = []
+		f.media.animate = (keyframes, timing) => {
+			const entry = {
+				frames: keyframes as Keyframe[],
+				timing,
+				canceled: false,
+				effect: { getComputedTiming: () => ({ progress: 0.5 }) },
+				cancel: () => {
+					entry.canceled = true
+				},
+			}
+			animations.push(entry)
+			return entry as unknown as Animation
+		}
+		const offsets = (frames: Keyframe[]) => frames.map((frame) => Number(/translate\(0px, ([\d.]+)px\) scale\(4\)/.exec(frame.transform as string)?.[1]))
+
+		f.pointer('pointerdown', { clientY: 600 })
+		f.pointer('pointermove', { clientY: 800 })
+		const stretched = f.view().y
+		expect(stretched).toBeCloseTo((110 * 96) / (110 + 96))
+		f.media.dispatchEvent(new f.w.Event('playing'))
+		expect(f.view().y).toBe(stretched)
+		await f.tick(60)
+		f.pointer('pointerup', { clientY: 800 })
+		expect(animations).toHaveLength(1)
+		const [motion] = animations
+		expect(motion.timing).toMatchObject({ easing: 'linear', fill: 'both' })
+		const returning = offsets(motion.frames)
+		expect(returning[0]).toBe(stretched)
+		expect(returning.at(-1)).toBe(0)
+		for (const [index, value] of returning.slice(1).entries()) {
+			expect(value).toBeLessThan(returning[index])
+		}
+		f.media.dispatchEvent(new f.w.Event('playing'))
+		expect(motion.canceled).toBe(false)
+
+		f.pointer('pointerdown', { clientY: 800 })
+		expect(motion.canceled).toBe(true)
+		expect(animations).toHaveLength(2)
+		const brake = animations[1]
+		expect(brake.timing).toMatchObject({ duration: 96, easing: 'cubic-bezier(0.25, 0.5, 0.5, 1)' })
+		const [brakeFrom, brakeTo] = offsets(brake.frames)
+		expect(brakeFrom).toBeGreaterThan(0)
+		expect(brakeFrom).toBeLessThan(stretched)
+		expect(brakeTo).toBeLessThan(brakeFrom)
+
+		if (interaction === 'drag') {
+			f.pointer('pointermove', { clientY: 801 })
+			expect(brake.canceled).toBe(false)
+			f.pointer('pointermove', { clientY: 805 })
+			expect(brake.canceled).toBe(true)
+			const displayed = (brakeFrom + brakeTo) / 2
+			expect(f.view().y).toBeGreaterThan(displayed)
+			expect(f.view().y).toBeLessThan(displayed + 4)
+		} else {
+			f.pointer('pointerup', { clientY: 800 })
+			brake.onfinish?.()
+			expect(animations).toHaveLength(3)
+			const rest = offsets(animations[2].frames)
+			expect(rest[0]).toBe(brakeTo)
+			expect(rest.at(-1)).toBe(0)
+		}
+		f.dispose()
+	})
+
+	test.each(['overview', 'reduced motion', 'mouse', 'cancel', 'paused before release'])('keeps the release position for %s', async (gesture) => {
+		const f = await zoomFixture({ reducedMotion: gesture === 'reduced motion' })
+		if (gesture !== 'overview') {
+			f.tap()
+			f.tap()
+			f.frame()
+		}
+		const pointerType = gesture === 'mouse' ? 'mouse' : 'touch'
+		f.pointer('pointerdown', { pointerType })
+		await f.tick(30)
+		f.pointer('pointermove', { pointerType, clientX: 350 })
+		await f.tick(gesture === 'paused before release' ? 60 : 5)
+		f.pointer(gesture === 'cancel' ? 'pointercancel' : 'pointerup', { pointerType, clientX: 350 })
+		const released = f.view()
+		f.frame(50)
+		f.frame(300)
+		expect(f.view()).toEqual(released)
 		f.dispose()
 	})
 

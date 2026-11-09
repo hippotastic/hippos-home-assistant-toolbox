@@ -40,6 +40,16 @@ export function installCameraZoom() {
 	const DOUBLE_TAP_DISTANCE_PX = 30
 	const ZOOM_ANIMATION_MS = 300
 	const FALLBACK_ZOOM_ANIMATION_MS = 220
+	const PAN_DECELERATION_PER_MS = 0.998 // UIScrollView.DecelerationRate.normal
+	const PAN_VELOCITY_WINDOW_MS = 80
+	const PAN_RELEASE_MAX_GAP_MS = 50
+	const PAN_MOMENTUM_STOP_PX = 0.5
+	const PAN_KEYFRAME_INTERVAL_MS = 1000 / 60
+	const PAN_GRAB_BRAKE_MS = 96
+	const PAN_GRAB_DRAG_SLOP_PX = 2
+	const RUBBER_BAND_RESISTANCE = 0.55
+	const RUBBER_BAND_LIMIT_PX = 96
+	const RUBBER_BAND_RETURN_PER_MS = 0.022
 	const VIDEO_MIN_REVEAL_DELAY_MS = 180
 	const VIDEO_REVEAL_WATCHDOG_MS = 5000
 	const IS_IOS_WEBKIT = /iP(?:ad|hone|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
@@ -93,6 +103,11 @@ export function installCameraZoom() {
 		'HA-BOTTOM-SHEET': /* css */ `
             :host([${SCOPE_ATTRIBUTE}]) wa-drawer {
                 --show-duration: 0ms !important;
+            }
+
+            /* The camera stage extends to the bottom of the visual viewport. */
+            :host([${SCOPE_ATTRIBUTE}]) wa-drawer::part(body) {
+                padding-bottom: 0 !important;
             }
 
             :host([${SCOPE_ATTRIBUTE}]) .body {
@@ -548,7 +563,7 @@ export function installCameraZoom() {
 		})
 	}
 
-	function calculateZoomState(state, rect, requestedScale, clientX, clientY) {
+	function calculateZoomState(state, rect, viewport, requestedScale, clientX, clientY) {
 		const oldScale = Math.max(MIN_SCALE, state.scale || MIN_SCALE)
 		const newScale = Math.max(MIN_SCALE, Number.isFinite(requestedScale) ? requestedScale : oldScale)
 		const baseWidth = rect.width / oldScale
@@ -557,28 +572,54 @@ export function installCameraZoom() {
 		const oldOffsetY = clientY - (rect.top + rect.height / 2)
 		const newOffsetX = (oldOffsetX / oldScale) * newScale
 		const newOffsetY = (oldOffsetY / oldScale) * newScale
-		const maxX = Math.max(0, (baseWidth * (newScale - MIN_SCALE)) / 2)
-		const maxY = Math.max(0, (baseHeight * (newScale - MIN_SCALE)) / 2)
+		const bounds = getPanBounds(baseWidth * newScale, baseHeight * newScale, viewport ?? { width: baseWidth, height: baseHeight })
+		return calculatePanState({ ...state, scale: newScale }, bounds, oldOffsetX - newOffsetX, oldOffsetY - newOffsetY)
+	}
 
+	function getPanBounds(width, height, viewport) {
+		return { x: Math.max(0, (width - (viewport?.width ?? width)) / 2), y: Math.max(0, (height - (viewport?.height ?? height)) / 2) }
+	}
+
+	function rubberBandPosition(from, delta, limit) {
+		const startEdge = clamp(from, -limit, limit)
+		const stretch = from - startEdge
+		// Invert the compression if a new drag catches the image while stretched.
+		const remaining = Math.max(1, RUBBER_BAND_LIMIT_PX - Math.abs(stretch))
+		const start = startEdge + (RUBBER_BAND_LIMIT_PX * stretch) / (RUBBER_BAND_RESISTANCE * remaining)
+		const moved = start + delta
+		const edge = clamp(moved, -limit, limit)
+		const overflow = (moved - edge) * RUBBER_BAND_RESISTANCE
+		return edge + (overflow * RUBBER_BAND_LIMIT_PX) / (RUBBER_BAND_LIMIT_PX + Math.abs(overflow))
+	}
+
+	function calculatePanState(state, bounds, deltaX, deltaY, elastic = false) {
 		return {
-			scale: newScale,
-			x: clamp(state.x + oldOffsetX - newOffsetX, -maxX, maxX),
-			y: clamp(state.y + oldOffsetY - newOffsetY, -maxY, maxY),
+			scale: state.scale,
+			x: elastic ? rubberBandPosition(state.x, deltaX, bounds.x) : clamp(state.x + deltaX, -bounds.x, bounds.x),
+			y: elastic ? rubberBandPosition(state.y, deltaY, bounds.y) : clamp(state.y + deltaY, -bounds.y, bounds.y),
 		}
 	}
 
-	function calculatePanState(state, rect, deltaX, deltaY) {
-		const scale = Math.max(MIN_SCALE, state.scale || MIN_SCALE)
-		const baseWidth = rect.width / scale
-		const baseHeight = rect.height / scale
-		const maxX = Math.max(0, (baseWidth * (scale - MIN_SCALE)) / 2)
-		const maxY = Math.max(0, (baseHeight * (scale - MIN_SCALE)) / 2)
-
-		return {
-			scale,
-			x: clamp(state.x + deltaX, -maxX, maxX),
-			y: clamp(state.y + deltaY, -maxY, maxY),
+	function panMotionAxis(from, velocity, limit) {
+		const edge = clamp(from, -limit, limit)
+		if (from !== edge) {
+			// A critically damped return keeps the image on the stretched side
+			// of the edge and carries over some of the release velocity.
+			const stretch = from - edge
+			const distance = Math.abs(stretch)
+			const direction = Math.sign(stretch)
+			const rate = RUBBER_BAND_RETURN_PER_MS
+			const outwardVelocity = clamp(velocity * direction, -rate * distance, rate * Math.min(distance, Math.max(0, RUBBER_BAND_LIMIT_PX - distance)))
+			return { target: edge, at: (time) => edge + direction * (distance + (outwardVelocity + rate * distance) * time) * Math.exp(-rate * time) }
 		}
+
+		const projection = (velocity * PAN_DECELERATION_PER_MS) / (1 - PAN_DECELERATION_PER_MS)
+		const target = clamp(from + projection, -limit, limit)
+		const distance = target - from
+		// Brake earlier when the edge is closer than the projected stopping point.
+		// Scaling the decay preserves the launch speed without a hard clamp mid-flight.
+		const rate = distance === 0 ? 0 : Math.log(PAN_DECELERATION_PER_MS) * Math.abs(projection / distance)
+		return { target, at: (time) => target - distance * Math.exp(rate * time) }
 	}
 
 	function clamp(value, min, max) {
@@ -713,7 +754,7 @@ export function installCameraZoom() {
 			media.style.setProperty('max-width', '100%', 'important')
 			media.style.setProperty('object-fit', 'contain', 'important')
 			media.style.setProperty('width', loadingSize, 'important')
-			return viewport.element
+			return viewport
 		}
 
 		media.style.setProperty('display', 'block', 'important')
@@ -723,7 +764,7 @@ export function installCameraZoom() {
 		media.style.setProperty('max-width', '100%', 'important')
 		media.style.setProperty('object-fit', 'contain', 'important')
 		media.style.setProperty('width', `${width}px`, 'important')
-		return viewport.element
+		return viewport
 	}
 
 	function zoomTransform(state) {
@@ -733,8 +774,13 @@ export function installCameraZoom() {
 		return `${translation} scale(${state.scale})`
 	}
 
-	function interpolateZoom(from, target, progress) {
-		return { scale: from.scale + (target.scale - from.scale) * progress, x: from.x + (target.x - from.x) * progress, y: from.y + (target.y - from.y) * progress }
+	function animationState(states, progress) {
+		const index = clamp(progress, 0, 1) * (states.length - 1)
+		const lower = Math.floor(index)
+		const from = states[lower]
+		const target = states[Math.ceil(index)]
+		const fraction = index - lower
+		return { scale: from.scale + (target.scale - from.scale) * fraction, x: from.x + (target.x - from.x) * fraction, y: from.y + (target.y - from.y) * fraction }
 	}
 
 	function hookMedia(media) {
@@ -749,13 +795,15 @@ export function installCameraZoom() {
 		const events = new AbortController()
 		const listen = (target, type, callback, options = {}) => target?.addEventListener(type, callback, { ...options, signal: events.signal })
 		let state = { scale: MIN_SCALE, x: 0, y: 0 }
+		let viewportRect = null
 		let panOrigin = null
 		let pinchDistance = null
 		let tap = null
 		let lastTap = null
 		let lastPointerType = null
-		let zoomFrame = null
-		let zoomAnimation = null
+		let sheetTouch = null
+		let motionFrame = null
+		let transformAnimation = null
 		let revealCheckTimer = null
 		let revealWatchdogTimer = null
 		let revealFrame = null
@@ -775,18 +823,47 @@ export function installCameraZoom() {
 			media.style.transform = zoomTransform(state)
 		}
 
-		const stopZoomAnimation = (keepCurrent = true) => {
-			if (zoomFrame != null) cancelAnimationFrame(zoomFrame)
-			zoomFrame = null
-			if (!zoomAnimation) return
+		const stopCameraMotion = (keepCurrent = true) => {
+			if (motionFrame != null) cancelAnimationFrame(motionFrame)
+			motionFrame = null
+			if (!transformAnimation) return
 
-			const { from, animation } = zoomAnimation
-			zoomAnimation = null
-			if (keepCurrent) state = interpolateZoom(from, state, animation.effect.getComputedTiming().progress ?? 0)
+			const { states, animation } = transformAnimation
+			transformAnimation = null
+			if (keepCurrent) state = animationState(states, animation.effect.getComputedTiming().progress ?? 0)
 			animation.cancel()
 			// The inline styles normally hold the destination. On interruption
 			// commit the visible intermediate state before the next gesture reads it.
 			if (keepCurrent) renderState()
+		}
+
+		const playCameraMotion = (states, duration, easing, { fallbackDuration = duration, onFinish } = {}) => {
+			if (typeof media.animate === 'function') {
+				const animation = media.animate(
+					states.map((frame) => ({ transform: zoomTransform(frame) })),
+					{ duration, easing, fill: 'both' }
+				)
+				transformAnimation = { states, animation, duration, easing }
+				animation.onfinish = () => {
+					if (transformAnimation?.animation !== animation) return
+					stopCameraMotion(false)
+					onFinish?.()
+				}
+				state = states.at(-1)
+				renderState()
+				return
+			}
+
+			const startedAt = performance.now()
+			const advance = (now) => {
+				const progress = clamp((now - startedAt) / fallbackDuration, 0, 1)
+				// Keep the previous ease-out curve for the double-tap fallback.
+				state = animationState(states, easing === 'ease-in-out' ? 1 - (1 - progress) ** 3 : progress)
+				renderState()
+				motionFrame = progress < 1 ? requestAnimationFrame(advance) : null
+				if (progress === 1) onFinish?.()
+			}
+			motionFrame = requestAnimationFrame(advance)
 		}
 
 		const refit = () => {
@@ -794,13 +871,24 @@ export function installCameraZoom() {
 			const previousWidth = media.style.width
 			const previousHeight = media.style.height
 			const viewport = fitMediaToViewport(media)
-			// Playback events also refit the media. Preserve an ongoing zoom unless
-			// fitting actually changes its untransformed size.
-			if (media.style.width !== previousWidth || media.style.height !== previousHeight) stopZoomAnimation()
-			if (!viewport || zoomAnimation) return viewport
-			state = calculatePanState(state, media.getBoundingClientRect(), 0, 0)
+			const nextRect = viewport?.rect ?? null
+			const geometryChanged =
+				media.style.width !== previousWidth || media.style.height !== previousHeight || viewportRect?.width !== nextRect?.width || viewportRect?.height !== nextRect?.height
+			viewportRect = nextRect
+			// Playback events also refit the media. Preserve ongoing motion unless
+			// fitting changes the video size or the available travel at the edge.
+			if (geometryChanged) {
+				if (panOrigin) {
+					panOrigin.bounds = null
+					if (panOrigin.samples) panOrigin.samples.length = 0
+				}
+				stopCameraMotion()
+			}
+			if (!viewport || transformAnimation || motionFrame != null || (panOrigin && !geometryChanged)) return viewport?.element ?? null
+			const rect = media.getBoundingClientRect()
+			state = calculatePanState(state, getPanBounds(rect.width, rect.height, viewportRect), 0, 0)
 			renderState()
-			return viewport
+			return viewport.element
 		}
 
 		const finishVideoReveal = (generation) => {
@@ -861,12 +949,56 @@ export function installCameraZoom() {
 		scheduleVideoReveal()
 
 		const beginPan = (pointer) => {
+			const elastic = pointer.pointerType === 'touch' && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 			panOrigin = {
 				clientX: pointer.clientX,
 				clientY: pointer.clientY,
 				state: { ...state },
+				bounds: null,
+				elastic,
+				samples: elastic ? [{ x: state.x, y: state.y, timeStamp: pointer.timeStamp }] : null,
 			}
 			media.style.cursor = 'grabbing'
+		}
+
+		const settlePan = (releaseTime) => {
+			const from = state
+			let bounds = panOrigin?.bounds
+			if (!bounds) {
+				const rect = media.getBoundingClientRect()
+				bounds = getPanBounds(rect.width, rect.height, viewportRect)
+			}
+			if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+				state = calculatePanState(from, bounds, 0, 0)
+				renderState()
+				return
+			}
+
+			const samples = releaseTime == null ? null : panOrigin?.samples
+			const first = samples?.find((sample) => releaseTime - sample.timeStamp <= PAN_VELOCITY_WINDOW_MS)
+			const last = samples?.at(-1)
+			const elapsed = first && last && releaseTime - last.timeStamp <= PAN_RELEASE_MAX_GAP_MS ? releaseTime - first.timeStamp : 0
+			const x = panMotionAxis(from.x, elapsed > 0 ? (last.x - first.x) / elapsed : 0, bounds.x)
+			const y = panMotionAxis(from.y, elapsed > 0 ? (last.y - first.y) / elapsed : 0, bounds.y)
+			const target = { scale: from.scale, x: x.target, y: y.target }
+			if (Math.hypot(target.x - from.x, target.y - from.y) <= PAN_MOMENTUM_STOP_PX) {
+				state = target
+				renderState()
+				return
+			}
+
+			// A linear transform animation between these samples runs without JS
+			// on each frame. Both axes share a timeline but can settle separately.
+			const states = [from]
+			for (let step = 1; ; step++) {
+				const next = { scale: from.scale, x: x.at(step * PAN_KEYFRAME_INTERVAL_MS), y: y.at(step * PAN_KEYFRAME_INTERVAL_MS) }
+				if (Math.hypot(target.x - next.x, target.y - next.y) <= PAN_MOMENTUM_STOP_PX) {
+					states.push(target)
+					break
+				}
+				states.push(next)
+			}
+			playCameraMotion(states, (states.length - 1) * PAN_KEYFRAME_INTERVAL_MS, 'linear')
 		}
 
 		const beginPinch = () => {
@@ -876,7 +1008,7 @@ export function installCameraZoom() {
 		}
 
 		const toggleZoom = (clientX, clientY) => {
-			stopZoomAnimation()
+			stopCameraMotion()
 			const from = { ...state }
 			const target = { scale: MIN_SCALE, x: 0, y: 0 }
 			if (state.scale === MIN_SCALE) {
@@ -885,41 +1017,23 @@ export function installCameraZoom() {
 				// Cover both viewport dimensions, with the existing 2x zoom as a minimum.
 				target.scale = rect.width > 0 && rect.height > 0 ? Math.max(DOUBLE_TAP_SCALE, viewport.width / rect.width, viewport.height / rect.height) : DOUBLE_TAP_SCALE
 				// Center the tapped detail without exposing empty edges in the viewport.
-				const maxX = Math.max(0, (rect.width * target.scale - viewport.width) / 2)
-				const maxY = Math.max(0, (rect.height * target.scale - viewport.height) / 2)
-				target.x = clamp((rect.left + rect.width / 2 - clientX) * target.scale, -maxX, maxX)
-				target.y = clamp((rect.top + rect.height / 2 - clientY) * target.scale, -maxY, maxY)
+				const bounds = getPanBounds(rect.width * target.scale, rect.height * target.scale, viewport)
+				target.x = clamp((rect.left + rect.width / 2 - clientX) * target.scale, -bounds.x, bounds.x)
+				target.y = clamp((rect.top + rect.height / 2 - clientY) * target.scale, -bounds.y, bounds.y)
 			}
 			if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
 				state = target
 				renderState()
-			} else if (typeof media.animate === 'function') {
-				const options = { duration: ZOOM_ANIMATION_MS, easing: 'ease-in-out', fill: 'both' }
-				const animation = media.animate([{ transform: zoomTransform(from) }, { transform: zoomTransform(target) }], options)
-				zoomAnimation = { from, animation }
-				animation.onfinish = () => {
-					if (zoomAnimation?.animation === animation) stopZoomAnimation(false)
-				}
-				state = target
-				renderState()
-			} else {
-				const startedAt = performance.now()
-				const animate = (now) => {
-					const progress = clamp((now - startedAt) / FALLBACK_ZOOM_ANIMATION_MS, 0, 1)
-					const eased = 1 - (1 - progress) ** 3
-					state = interpolateZoom(from, target, eased)
-					renderState()
-					zoomFrame = progress < 1 ? requestAnimationFrame(animate) : null
-				}
-				zoomFrame = requestAnimationFrame(animate)
-			}
+			} else playCameraMotion([from, target], ZOOM_ANIMATION_MS, 'ease-in-out', { fallbackDuration: FALLBACK_ZOOM_ANIMATION_MS })
 		}
 
 		listen(media, 'pointerdown', (event) => {
 			if (event.button !== 0) return
 			event.preventDefault()
 			event.stopPropagation()
-			stopZoomAnimation()
+			const coast = pointers.size === 0 && event.pointerType === 'touch' && transformAnimation?.easing === 'linear' ? transformAnimation : null
+			const progress = coast?.animation.effect.getComputedTiming().progress
+			stopCameraMotion()
 			lastPointerType = event.pointerType
 			pointers.set(event.pointerId, event)
 			media.setPointerCapture?.(event.pointerId)
@@ -927,18 +1041,33 @@ export function installCameraZoom() {
 			if (pointers.size === 1) {
 				tap = { pointerId: event.pointerId, pointerType: event.pointerType, clientX: event.clientX, clientY: event.clientY, timeStamp: event.timeStamp }
 				beginPan(event)
+				if (coast && progress != null && panOrigin.elastic) {
+					// This curve starts at twice the average speed and eases to rest.
+					// Advance by half the braking time along the original trajectory.
+					const target = animationState(coast.states, progress + PAN_GRAB_BRAKE_MS / (2 * coast.duration))
+					if (Math.hypot(target.x - state.x, target.y - state.y) > PAN_MOMENTUM_STOP_PX) {
+						panOrigin.braking = true
+						playCameraMotion([state, target], PAN_GRAB_BRAKE_MS, 'cubic-bezier(0.25, 0.5, 0.5, 1)', {
+							onFinish: () => {
+								if (!pointers.size) settlePan(null)
+							},
+						})
+					}
+				}
 			} else {
 				tap = lastTap = null
-				if (pointers.size === 2) beginPinch()
+				if (pointers.size === 2 && sheetTouch?.mode !== 'sheet') beginPinch()
 			}
 		})
 
 		listen(media, 'pointermove', (event) => {
-			if (!pointers.has(event.pointerId)) return
+			const previousPointer = pointers.get(event.pointerId)
+			if (!previousPointer) return
 			event.preventDefault()
 			event.stopPropagation()
 			pointers.set(event.pointerId, event)
 			if (tap && Math.hypot(event.clientX - tap.clientX, event.clientY - tap.clientY) > TAP_SLOP_PX) tap = lastTap = null
+			if (sheetTouch?.mode === 'sheet') return
 
 			if (pointers.size >= 2) {
 				const [first, second] = [...pointers.values()]
@@ -947,14 +1076,35 @@ export function installCameraZoom() {
 
 				const clientX = (first.clientX + second.clientX) / 2
 				const clientY = (first.clientY + second.clientY) / 2
-				state = calculateZoomState(state, media.getBoundingClientRect(), state.scale * (distance / pinchDistance), clientX, clientY)
+				state = calculateZoomState(state, media.getBoundingClientRect(), viewportRect, state.scale * (distance / pinchDistance), clientX, clientY)
 				pinchDistance = distance
 				renderState()
 				return
 			}
 
-			if (!panOrigin) return
-			state = calculatePanState(panOrigin.state, media.getBoundingClientRect(), event.clientX - panOrigin.clientX, event.clientY - panOrigin.clientY)
+			if (panOrigin?.braking) {
+				if (Math.hypot(event.clientX - panOrigin.clientX, event.clientY - panOrigin.clientY) <= PAN_GRAB_DRAG_SLOP_PX) return
+				// A drag takes over from the currently displayed position.
+				stopCameraMotion()
+				beginPan(previousPointer)
+			}
+			if (!panOrigin || panOrigin.state.scale === MIN_SCALE) return
+			// Translation leaves the box size unchanged. Reuse it until a refit,
+			// unless another input changed the zoom since this drag began.
+			const sameScale = state.scale === panOrigin.state.scale
+			let bounds = sameScale ? panOrigin.bounds : null
+			if (!bounds) {
+				const rect = media.getBoundingClientRect()
+				const scaleRatio = panOrigin.state.scale / state.scale
+				bounds = getPanBounds(rect.width * scaleRatio, rect.height * scaleRatio, viewportRect)
+				panOrigin.bounds = bounds
+			}
+			state = calculatePanState(panOrigin.state, bounds, event.clientX - panOrigin.clientX, event.clientY - panOrigin.clientY, panOrigin.elastic)
+			const { samples } = panOrigin
+			if (samples && state.scale > MIN_SCALE) {
+				while (samples.length && event.timeStamp - samples[0].timeStamp > PAN_VELOCITY_WINDOW_MS) samples.shift()
+				samples.push({ x: state.x, y: state.y, timeStamp: event.timeStamp })
+			}
 			renderState()
 		})
 
@@ -980,6 +1130,10 @@ export function installCameraZoom() {
 					lastTap = null
 				} else lastTap = { pointerType: event.pointerType, clientX: event.clientX, clientY: event.clientY, timeStamp: event.timeStamp }
 			} else lastTap = null
+			if (panOrigin && pointers.size === 1 && state.scale > MIN_SCALE && !transformAnimation && motionFrame == null) {
+				const releaseTime = !tap && event.type === 'pointerup' && event.pointerType === 'touch' ? event.timeStamp : null
+				settlePan(releaseTime)
+			}
 			tap = null
 			pointers.delete(event.pointerId)
 			pinchDistance = null
@@ -1011,24 +1165,53 @@ export function installCameraZoom() {
 			(event) => {
 				event.preventDefault()
 				event.stopPropagation()
-				stopZoomAnimation()
+				stopCameraMotion()
 				tap = lastTap = null
 
 				const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1
 				const factor = Math.exp(-event.deltaY * unit * 0.0015)
-				state = calculateZoomState(state, media.getBoundingClientRect(), state.scale * factor, event.clientX, event.clientY)
+				state = calculateZoomState(state, media.getBoundingClientRect(), viewportRect, state.scale * factor, event.clientX, event.clientY)
 				renderState()
 			},
 			{ passive: false }
 		)
 
-		// HA's mobile bottom sheet listens for touch gestures on ancestors.
-		// Keeping these events local prevents a pinch from also dragging the sheet.
+		// HA needs the original touchstart to track the drag on document. Forward
+		// moves only once a single finger has committed to dragging the sheet down.
 		for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
 			listen(
 				media,
 				type,
 				(event) => {
+					if (type === 'touchstart') {
+						if (
+							!sheetTouch &&
+							event.touches.length === 1 &&
+							state.scale === MIN_SCALE &&
+							!transformAnimation &&
+							motionFrame == null &&
+							event.composedPath().some((node) => node.tagName === 'HA-BOTTOM-SHEET')
+						) {
+							const { identifier, clientX, clientY } = event.touches[0]
+							sheetTouch = { identifier, clientX, clientY, mode: 'pending' }
+							return
+						}
+						if (sheetTouch?.mode === 'pending') sheetTouch.mode = 'camera'
+					} else if (type === 'touchmove') {
+						const touch = event.touches[0]
+						if (event.touches.length === 1 && sheetTouch?.identifier === touch.identifier) {
+							if (sheetTouch.mode === 'pending') {
+								const dx = touch.clientX - sheetTouch.clientX
+								const dy = touch.clientY - sheetTouch.clientY
+								if (Math.hypot(dx, dy) > TAP_SLOP_PX) sheetTouch.mode = dy > Math.abs(dx) ? 'sheet' : 'camera'
+							}
+							if (sheetTouch.mode === 'sheet') return
+						}
+					} else if (sheetTouch && Array.from(event.changedTouches).some((touch) => touch.identifier === sheetTouch.identifier)) {
+						// Release HA's document listeners even when this became a tap or pinch.
+						sheetTouch = null
+						return
+					}
 					event.stopPropagation()
 					if (type === 'touchmove') event.preventDefault()
 				},
@@ -1046,7 +1229,7 @@ export function installCameraZoom() {
 		listen(media, 'loadstart', scheduleVideoReveal)
 
 		const resize = () => {
-			stopZoomAnimation()
+			stopCameraMotion()
 			refit()
 		}
 		const resizeObserver = viewport && typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null
@@ -1060,7 +1243,7 @@ export function installCameraZoom() {
 		const cleanup = () => {
 			mediaActive = false
 			events.abort()
-			stopZoomAnimation(false)
+			stopCameraMotion(false)
 			revealPending = false
 			revealGeneration += 1
 			clearTimeout(revealCheckTimer)
