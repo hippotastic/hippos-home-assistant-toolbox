@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.18.2
+
+### Patch Changes
+
+- 38ddbf9: Fix double-tap zoom on iPhone and iPad camera dialogs while a WebRTC or HLS stream starts. You can zoom in on the preview and continue using the same gestures when the live video takes over.
+
 ## 0.18.1
 
 ### Patch Changes
