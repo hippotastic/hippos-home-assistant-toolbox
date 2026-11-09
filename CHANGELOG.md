@@ -1,5 +1,11 @@
 # hippos-home-assistant-toolbox
 
+## 0.18.1
+
+### Patch Changes
+
+- 5028da6: Show the camera preview in zoom-enabled dialogs on iPhone and iPad while WebRTC or HLS starts. Keep the preview visible until the first live frame is ready to display.
+
 ## 0.18.0
 
 ### Minor Changes
