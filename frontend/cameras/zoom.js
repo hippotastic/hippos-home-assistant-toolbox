@@ -2,7 +2,7 @@
 export const IS_IOS_WEBKIT = /iP(?:ad|hone|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 
 export function installCameraZoom() {
-	const VERSION = 33
+	const VERSION = 34
 	let disposed = false
 	const undoPatches = []
 	const cleanups = new Map()
@@ -257,6 +257,7 @@ export function installCameraZoom() {
                 min-height: 0;
                 overflow: hidden;
                 position: relative;
+                touch-action: ${IS_IOS_WEBKIT ? 'none' : 'auto'};
                 width: 100%;
             }
 
@@ -730,7 +731,7 @@ export function installCameraZoom() {
 		return null
 	}
 
-	function fitMediaToViewport(media) {
+	function fitMediaToViewport(media, previewImage) {
 		const viewport = getCameraViewport(media)
 		if (!viewport) return null
 
@@ -773,7 +774,8 @@ export function installCameraZoom() {
 			player.style.setProperty('width', '100%', 'important')
 		}
 
-		const { width, height } = calculateContainedSize(viewport.rect.width, viewport.rect.height, getUsableMediaAspectRatio(media))
+		const previewAspectRatio = previewImage?.naturalWidth / previewImage?.naturalHeight || 0
+		const { width, height } = calculateContainedSize(viewport.rect.width, viewport.rect.height, getUsableMediaAspectRatio(media) || previewAspectRatio)
 
 		if (!width || !height) {
 			// Let object-fit contain the image or poster in the stage before its dimensions are known.
@@ -845,6 +847,8 @@ export function installCameraZoom() {
 		const mediaRoot = media.getRootNode()
 		const previewRoot = IS_IOS_WEBKIT && media.tagName === 'VIDEO' && PLAYER_TAGS.has(mediaRoot.host?.tagName) ? mediaRoot : null
 		const previewStream = previewRoot && findComposedAncestor(media, 'HA-CAMERA-STREAM')
+		// Keep one hit target even while the video is hidden or WebKit repaints its native layer.
+		const gestureTarget = previewRoot?.host ?? media
 		let previewImage
 
 		const syncVideoPreview = () => {
@@ -861,6 +865,8 @@ export function installCameraZoom() {
 				previewImage = document.createElement('img')
 				previewImage.alt = ''
 				previewImage.setAttribute(VIDEO_PREVIEW_ATTRIBUTE, '')
+				previewImage.style.transform = zoomTransform(state)
+				listen(previewImage, 'load', refit)
 				previewRoot.append(previewImage)
 			}
 			if (previewImage.getAttribute('src') !== source) previewImage.src = source
@@ -872,11 +878,14 @@ export function installCameraZoom() {
 		media.style.userSelect = 'none'
 		media.style.cursor = 'grab'
 		media.style.transformOrigin = '50% 50%'
+		if (gestureTarget !== media) media.style.pointerEvents = 'none'
 		if (media.tagName === 'VIDEO' && !IS_IOS_WEBKIT) media.controls = false
 
 		const renderState = () => {
 			if (disposed || !mediaActive) return
-			media.style.transform = zoomTransform(state)
+			const transform = zoomTransform(state)
+			media.style.transform = transform
+			if (previewImage) previewImage.style.transform = transform
 		}
 
 		const stopCameraMotion = (keepCurrent = true) => {
@@ -894,7 +903,7 @@ export function installCameraZoom() {
 		}
 
 		const playCameraMotion = (states, duration, easing, { fallbackDuration = duration, onFinish } = {}) => {
-			if (typeof media.animate === 'function') {
+			if (!previewImage && typeof media.animate === 'function') {
 				const animation = media.animate(
 					states.map((frame) => ({ transform: zoomTransform(frame) })),
 					{ duration, easing, fill: 'both' }
@@ -926,7 +935,7 @@ export function installCameraZoom() {
 			if (disposed || !mediaActive) return null
 			const previousWidth = media.style.width
 			const previousHeight = media.style.height
-			const viewport = fitMediaToViewport(media)
+			const viewport = fitMediaToViewport(media, previewImage)
 			const nextRect = viewport?.rect ?? null
 			const geometryChanged =
 				media.style.width !== previousWidth || media.style.height !== previousHeight || viewportRect?.width !== nextRect?.width || viewportRect?.height !== nextRect?.height
@@ -1085,7 +1094,7 @@ export function installCameraZoom() {
 			} else playCameraMotion([from, target], ZOOM_ANIMATION_MS, 'ease-in-out', { fallbackDuration: FALLBACK_ZOOM_ANIMATION_MS })
 		}
 
-		listen(media, 'pointerdown', (event) => {
+		listen(gestureTarget, 'pointerdown', (event) => {
 			if (event.button !== 0) return
 			event.preventDefault()
 			event.stopPropagation()
@@ -1094,7 +1103,7 @@ export function installCameraZoom() {
 			stopCameraMotion()
 			lastPointerType = event.pointerType
 			pointers.set(event.pointerId, event)
-			media.setPointerCapture?.(event.pointerId)
+			gestureTarget.setPointerCapture?.(event.pointerId)
 
 			if (pointers.size === 1) {
 				tap = { pointerId: event.pointerId, pointerType: event.pointerType, clientX: event.clientX, clientY: event.clientY, timeStamp: event.timeStamp }
@@ -1118,7 +1127,7 @@ export function installCameraZoom() {
 			}
 		})
 
-		listen(media, 'pointermove', (event) => {
+		listen(gestureTarget, 'pointermove', (event) => {
 			const previousPointer = pointers.get(event.pointerId)
 			if (!previousPointer) return
 			event.preventDefault()
@@ -1203,11 +1212,11 @@ export function installCameraZoom() {
 			}
 		}
 
-		listen(media, 'pointerup', endPointer)
-		listen(media, 'pointercancel', endPointer)
-		listen(media, 'lostpointercapture', endPointer)
+		listen(gestureTarget, 'pointerup', endPointer)
+		listen(gestureTarget, 'pointercancel', endPointer)
+		listen(gestureTarget, 'lostpointercapture', endPointer)
 
-		listen(media, 'dblclick', (event) => {
+		listen(gestureTarget, 'dblclick', (event) => {
 			// Native mouse timing follows the OS preference. Touch/pen pairs are
 			// handled above, so their compatibility events must not toggle again.
 			if (lastPointerType !== 'mouse' || event.button !== 0) return
@@ -1218,7 +1227,7 @@ export function installCameraZoom() {
 		})
 
 		listen(
-			media,
+			gestureTarget,
 			'wheel',
 			(event) => {
 				event.preventDefault()
@@ -1238,7 +1247,7 @@ export function installCameraZoom() {
 		// moves only once a single finger has committed to dragging the sheet down.
 		for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
 			listen(
-				media,
+				gestureTarget,
 				type,
 				(event) => {
 					if (type === 'touchstart') {

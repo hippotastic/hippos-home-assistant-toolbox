@@ -273,11 +273,11 @@ async function zoomFixture({
 		return new Rect(box.x + box.width / 2 + x - (width * scale) / 2, box.y + box.height / 2 + y - (height * scale) / 2, width * scale, height * scale)
 	}
 	f.camera.getBoundingClientRect = () => viewport.getBoundingClientRect()
-	const pointer = (type: string, { pointerId = 1, pointerType = 'touch', clientX = 300, clientY = 300, button = 0 } = {}) => {
+	const pointer = (type: string, { pointerId = 1, pointerType = 'touch', clientX = 300, clientY = 300, button = 0 } = {}, target: Element = media) => {
 		// jsdom has no PointerEvent constructor; supply its fields on a mouse event.
 		const event = new f.w.MouseEvent(type, { clientX, clientY, button, bubbles: true, composed: true, cancelable: true })
 		Object.defineProperties(event, { pointerId: { value: pointerId }, pointerType: { value: pointerType }, timeStamp: { value: f.w.Date.now() } })
-		media.dispatchEvent(event)
+		target.dispatchEvent(event)
 		return event
 	}
 	const touch = (type: string, touches: Array<Pick<Touch, 'identifier' | 'clientX' | 'clientY'>>, changedTouches = touches) => {
@@ -384,6 +384,42 @@ describe('camera bottom sheet gestures', () => {
 })
 
 describe('camera double-tap zoom', () => {
+	test('zooms the iOS WebRTC preview and recognizes a pair of taps across the switch to live video', async () => {
+		const f = await zoomFixture({ ios: true, playerTag: 'ha-web-rtc-player', mediaWidth: 0, mediaHeight: 0, viewportHeight: 400, reducedMotion: true })
+		const video = f.media as HTMLVideoElement
+		const root = video.getRootNode() as ShadowRoot
+		const tapPlayer = () => {
+			f.pointer('pointerdown', { clientY: 400 }, root.host)
+			f.pointer('pointerup', { clientY: 400 }, root.host)
+		}
+		video.poster = '/camera-preview.jpg'
+		await flush()
+		const preview = root.querySelector<HTMLImageElement>('img[data-hippo-camera-video-preview]')!
+		Object.defineProperties(preview, { naturalWidth: { value: 800 }, naturalHeight: { value: 400 } })
+		preview.dispatchEvent(new f.w.Event('load'))
+		expect(video.style.height).toBe('200px')
+		expect(video.style.visibility).toBe('hidden')
+		tapPlayer()
+		await f.tick(100)
+		tapPlayer()
+		expect(f.view().scale).toBe(2)
+		expect(preview.style.transform).toBe(video.style.transform)
+
+		tapPlayer()
+		Object.defineProperties(video, { videoWidth: { value: 800 }, videoHeight: { value: 400 }, readyState: { value: video.HAVE_CURRENT_DATA } })
+		f.frame(180)
+		video.dispatchEvent(new f.w.Event('loadeddata'))
+		f.frame(16)
+		f.frame(16)
+		expect(preview.isConnected).toBe(false)
+		expect(video.style.pointerEvents).toBe('none')
+		await f.tick(100)
+		tapPlayer()
+		expect(f.view().scale).toBe(1)
+		f.dispose()
+		expect(video.style.pointerEvents).toBe('')
+	})
+
 	test('animates only the iOS video and commits the visible zoom when a drag interrupts', async () => {
 		const f = await zoomFixture({ ios: true, playerTag: 'ha-hls-player', viewportHeight: 800 })
 		const animations: Array<{
