@@ -8,14 +8,24 @@ from unittest.mock import AsyncMock, Mock, patch
 from aiohttp import UnixConnector
 
 from homeassistant import config_entries
-from homeassistant.components.camera import CameraEntityFeature, StreamType
+from homeassistant.components.camera import (
+    CameraEntityFeature,
+    StreamType,
+    WebRTCAnswer,
+    WebRTCCandidate,
+    WebRTCError,
+)
+from webrtc_models import RTCIceCandidateInit
 
 from custom_components.hippos_toolbox.camera import (
     _ProgressiveSnapshotCamera,
     _access_token_store,
     async_setup_entry,
 )
+from custom_components.hippos_toolbox.camera_relay import _relay_config
 from custom_components.hippos_toolbox.const import (
+    ATTR_REPLACEMENT_CAMERA,
+    CONF_FALLBACK_ENTITY_ID,
     CONF_SOURCE_ENTITY_ID,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
 )
@@ -58,10 +68,10 @@ class _Response:
         self.writes.append(content)
 
 
-def _subentry() -> config_entries.ConfigSubentry:
+def _subentry(**options) -> config_entries.ConfigSubentry:
     return config_entries.ConfigSubentry(
         data=MappingProxyType(
-            {CONF_SOURCE_ENTITY_ID: "camera.front_door_snapshot"}
+            {CONF_SOURCE_ENTITY_ID: "camera.front_door_snapshot", **options}
         ),
         subentry_id="progressive-front-door",
         subentry_type=PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
@@ -139,10 +149,14 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
             patch("custom_components.hippos_toolbox.camera.async_entity_id_to_device"),
             patch("custom_components.hippos_toolbox.camera.get_camera_from_entity_id", return_value=source),
         ):
-            camera = _ProgressiveSnapshotCamera(_hass(), _Manager(), _subentry())
-            self.assertIn(CameraEntityFeature.STREAM, camera.supported_features)
             send = Mock()
-            for provider in (None, SimpleNamespace(domain="go2rtc")):
+            for provider in (
+                None,
+                SimpleNamespace(domain="go2rtc"),
+                SimpleNamespace(domain="other"),
+            ):
+                camera = _ProgressiveSnapshotCamera(_hass(), _Manager(), _subentry())
+                self.assertIn(CameraEntityFeature.STREAM, camera.supported_features)
                 source.webrtc_provider = provider
                 await camera.async_handle_async_webrtc_offer("offer", "session", send)
                 await camera.async_on_webrtc_candidate("session", "candidate")
@@ -160,7 +174,7 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
         registered = asyncio.Event()
 
         async def register(camera, *_):
-            self.assertEqual(await camera.stream_source(), "rtsp://127.0.0.1:9001/paced")
+            self.assertEqual(await camera.stream_source(), "rtsp://127.0.0.1:9001/input?video&audio&backchannel=1")
             pending.set()
             await registered.wait()
 
@@ -181,7 +195,7 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
             patch("custom_components.hippos_toolbox.camera.get_camera_from_entity_id", return_value=source),
             patch(
                 "custom_components.hippos_toolbox.camera_relay._CameraRelay.async_get_url",
-                return_value="rtsp://127.0.0.1:9001/paced",
+                return_value="rtsp://127.0.0.1:9001/input?video&audio&backchannel=1",
             ) as relay,
         ):
             camera = _ProgressiveSnapshotCamera(_hass(), _Manager(), _subentry())
@@ -201,6 +215,103 @@ class ProgressiveSnapshotCameraTests(unittest.IsolatedAsyncioTestCase):
 
         provider.async_on_webrtc_candidate.assert_awaited_once_with("session", "candidate")
         provider.async_close_session.assert_called_once_with("session")
+
+    async def test_saved_tcp_option_keeps_all_webrtc_candidates(self) -> None:
+        udp = RTCIceCandidateInit("candidate:1 1 UDP 2122260223 192.0.2.1 49152 typ host")
+        tcp = RTCIceCandidateInit("candidate:2 1 tcp 1518280447 192.0.2.1 9 typ host tcptype active")
+        end = RTCIceCandidateInit("")
+        media = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=rtpmap:102 H264/90000\r\n"
+        mixed_sdp = f"{media}a={udp.candidate}\r\na={tcp.candidate}\r\na=end-of-candidates\r\n"
+        error = WebRTCError("test_error", "Test signaling error")
+
+        for relay_url in (None, "rtsp://127.0.0.1:9001/input"):
+            with self.subTest(relay_url=relay_url):
+                provider = SimpleNamespace(
+                    domain="go2rtc",
+                    _session=SimpleNamespace(connector=Mock(spec=UnixConnector)),
+                    async_handle_async_webrtc_offer=AsyncMock(),
+                    async_on_webrtc_candidate=AsyncMock(),
+                )
+                source = SimpleNamespace(
+                    webrtc_provider=provider,
+                    stream_source=AsyncMock(return_value="rtsp://camera.invalid/main"),
+                    async_handle_async_webrtc_offer=AsyncMock(),
+                    async_on_webrtc_candidate=AsyncMock(),
+                )
+                send = Mock()
+                with (
+                    patch("custom_components.hippos_toolbox.camera.async_entity_id_to_device"),
+                    patch("custom_components.hippos_toolbox.camera.get_camera_from_entity_id", return_value=source),
+                    patch("custom_components.hippos_toolbox.camera_relay._CameraRelay.async_get_url", return_value=relay_url),
+                ):
+                    camera = _ProgressiveSnapshotCamera(
+                        _hass(), _Manager(), _subentry(webrtc_tcp=True)
+                    )
+                    await camera.async_handle_async_webrtc_offer(mixed_sdp, "session", send)
+                    await camera.async_on_webrtc_candidate("session", udp)
+                    await camera.async_on_webrtc_candidate("session", tcp)
+                    await camera.async_on_webrtc_candidate("session", end)
+
+                selected = provider if relay_url else source
+                sent_sdp, session_id, reply = selected.async_handle_async_webrtc_offer.await_args.args[-3:]
+                self.assertEqual((sent_sdp, session_id), (mixed_sdp, "session"))
+                reply(WebRTCAnswer(mixed_sdp))
+                reply(WebRTCCandidate(udp))
+                reply(WebRTCCandidate(tcp))
+                reply(WebRTCCandidate(end))
+                reply(error)
+                self.assertEqual([c.args for c in send.call_args_list], [
+                    (WebRTCAnswer(mixed_sdp),), (WebRTCCandidate(udp),), (WebRTCCandidate(tcp),),
+                    (WebRTCCandidate(end),), (error,),
+                ])
+                self.assertEqual([c.args for c in selected.async_on_webrtc_candidate.await_args_list], [
+                    ("session", udp), ("session", tcp), ("session", end),
+                ])
+
+    def test_audio_relay_has_only_the_original_stream(self) -> None:
+        source = "rtsp://camera.invalid/main#backchannel=1"
+        config = _relay_config(source, 9001)
+        self.assertEqual(config["streams"], {"input": [source]})
+        self.assertNotIn("ffmpeg", config["app"]["modules"])
+        self.assertNotIn("ffmpeg", config)
+
+    async def test_h264_only_offer_keeps_original_stream_and_snapshot_replacement(self) -> None:
+        provider = SimpleNamespace(
+            domain="go2rtc",
+            _session=SimpleNamespace(connector=Mock(spec=UnixConnector)),
+            async_handle_async_webrtc_offer=AsyncMock(),
+        )
+        source = SimpleNamespace(
+            webrtc_provider=provider,
+            stream_source=AsyncMock(return_value="rtsp://camera.invalid/main"),
+            camera_capabilities=SimpleNamespace(frontend_stream_types={StreamType.WEB_RTC}),
+            camera_entity_capabilities=SimpleNamespace(two_way_audio=True),
+        )
+        h264_only = "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=rtpmap:102 H264/90000\r\n"
+        both_codecs = h264_only.replace(" 102\r\n", " 102 103\r\n") + "a=rtpmap:103 H265/90000\r\n"
+        send = Mock()
+        relay_url = "rtsp://127.0.0.1:9001/input?video&audio&backchannel=1"
+        with (
+            patch("custom_components.hippos_toolbox.camera.async_entity_id_to_device"),
+            patch("custom_components.hippos_toolbox.camera.get_camera_from_entity_id", return_value=source),
+        ):
+            camera = _ProgressiveSnapshotCamera(
+                _hass(), _Manager(), _subentry(**{
+                    CONF_FALLBACK_ENTITY_ID: "camera.front_door_still",
+                    "transcode_h264": True,
+                    "pace_video": True,
+                }),
+            )
+            self.assertEqual(camera.extra_state_attributes, {ATTR_REPLACEMENT_CAMERA: "camera.front_door_still"})
+            with patch.object(camera._relay, "async_get_url", return_value=relay_url):
+                await camera.async_handle_async_webrtc_offer(both_codecs, "both", send)
+                await camera.async_handle_async_webrtc_offer(h264_only, "h264_only", send)
+
+            self.assertEqual(await camera.stream_source(), relay_url)
+            self.assertEqual(
+                [call.args for call in provider.async_handle_async_webrtc_offer.await_args_list],
+                [(camera, both_codecs, "both", send), (camera, h264_only, "h264_only", send)],
+            )
 
     async def test_cached_frame_keeps_entity_available_without_source(self) -> None:
         with patch(

@@ -44,6 +44,7 @@ _INTERACTIVE_REFRESH_INTERVAL = 10.0
 _FETCH_HANDOFF_TIMEOUT = 5.0
 _FETCH_TIMEOUT = 15
 _COLD_REQUEST_TIMEOUT = 9.0
+_STREAM_FRAME_TIMEOUT = 8.0
 _NATIVE_STREAM_CONNECT_TIMEOUT = 15.0
 _NATIVE_STREAM_READ_TIMEOUT = 30.0
 _NATIVE_STREAM_RETRY_INTERVAL = 2.0
@@ -51,6 +52,7 @@ _NATIVE_STREAM_CHUNK_SIZE = 64 * 1024
 _MAX_NATIVE_FRAME_SIZE = 16 * 1024 * 1024
 _MAX_BACKGROUND_IN_FLIGHT = 2
 _MAX_CONSECUTIVE_INTERACTIVE_REQUESTS = 3
+_MAX_STILL_IMAGE_SIZES = 2
 
 _PRIORITY_INTERACTIVE = 0
 _PRIORITY_BACKGROUND = 1
@@ -66,9 +68,9 @@ class _CameraCache:
 
     subentry_id: str
     source_entity_id: str
-    preview_entity_id: str | None = None
     last_good_frame: bytes | None = None
     display_frame: bytes | None = None
+    still_images: dict[tuple[int, int], asyncio.Future[bytes]] = field(default_factory=dict)
     last_success_at: float | None = None
     last_completed_at: float | None = None
     failed: bool = False
@@ -91,15 +93,11 @@ class _ProgressiveCameraManager:
         hass: HomeAssistant,
         entry: ConfigEntry,
         source_entity_ids: Mapping[str, str],
-        *,
-        preview_entity_ids: Mapping[str, str] | None = None,
     ) -> None:
         self._hass = hass
         self._entry = entry
         self._caches = {
-            subentry_id: _CameraCache(
-                subentry_id, source_entity_id, (preview_entity_ids or {}).get(subentry_id)
-            )
+            subentry_id: _CameraCache(subentry_id, source_entity_id)
             for subentry_id, source_entity_id in source_entity_ids.items()
         }
         self._overlay_png = b""
@@ -179,26 +177,37 @@ class _ProgressiveCameraManager:
                 self._async_replace_queued_frame(queue, None)
             cache.subscribers.clear()
 
-    async def async_get_frame(self, subentry_id: str) -> bytes | None:
-        """Return the cache immediately, or briefly await the first snapshot."""
+    async def async_get_frame(
+        self, subentry_id: str, width: int | None = None, height: int | None = None
+    ) -> bytes | None:
+        """Return the cached frame, resized when a display size is requested."""
 
         cache = self._caches[subentry_id]
-        frame = cache.display_frame
         if self._needs_interactive_refresh(cache):
             self._async_schedule(
                 cache, time.monotonic(), _PRIORITY_INTERACTIVE
             )
-        if frame is not None:
-            return frame
-        if not self._source_is_available(cache):
+        if cache.display_frame is None and self._source_is_available(cache):
+            try:
+                async with asyncio.timeout(_COLD_REQUEST_TIMEOUT):
+                    await cache.first_attempt_completed.wait()
+            except TimeoutError:
+                pass
+        if (frame := cache.display_frame) is None:
             return None
 
-        try:
-            async with asyncio.timeout(_COLD_REQUEST_TIMEOUT):
-                await cache.first_attempt_completed.wait()
-        except TimeoutError:
-            pass
-        return cache.display_frame
+        if width is None or height is None or width <= 0 or height <= 0:
+            return frame
+
+        size = (width, height)
+        if (image := cache.still_images.get(size)) is None:
+            if len(cache.still_images) >= _MAX_STILL_IMAGE_SIZES:
+                cache.still_images.pop(next(iter(cache.still_images)))
+            image = cache.still_images[size] = asyncio.ensure_future(
+                self._hass.async_add_executor_job(_resize_still_image, frame, size)
+            )
+        # Closing one view must not cancel the encode shared by other viewers.
+        return await asyncio.shield(image)
 
     @callback
     def async_subscribe(self, subentry_id: str) -> _FrameQueue:
@@ -306,14 +315,7 @@ class _ProgressiveCameraManager:
         except HomeAssistantError:
             return None
 
-        if (
-            getattr(
-                type(source_camera),
-                "handle_async_mjpeg_stream",
-                Camera.handle_async_mjpeg_stream,
-            )
-            is Camera.handle_async_mjpeg_stream
-        ):
+        if not _has_native_mjpeg(source_camera):
             return None
 
         try:
@@ -632,15 +634,7 @@ class _ProgressiveCameraManager:
                 )
                 return
 
-            frame = None
-            if cache.preview_entity_id:
-                try:
-                    frame = await self._async_fetch_jpeg(cache.preview_entity_id, 1)
-                except (HomeAssistantError, TimeoutError, ValueError):
-                    # The original camera remains a usable still source on a cache miss.
-                    pass
-            if frame is None:
-                frame = await self._async_fetch_jpeg(cache.source_entity_id, _FETCH_TIMEOUT)
+            frame = await self._async_fetch_jpeg(cache)
             # A background request may finish after a live relay has started.
             # Its older snapshot must not overwrite a newer native stream frame.
             if cache.native_stream is None:
@@ -681,24 +675,24 @@ class _ProgressiveCameraManager:
                 )
             self._wake.set()
 
-    async def _async_fetch_jpeg(self, entity_id: str, timeout: int) -> bytes:
-        async with asyncio.timeout(timeout):
+    async def _async_fetch_jpeg(self, cache: _CameraCache) -> bytes:
+        camera = get_camera_from_entity_id(self._hass, cache.source_entity_id)
+        if (
+            CameraEntityFeature.STREAM in camera.supported_features
+            and not _has_native_mjpeg(camera)
+        ):
             try:
-                image = await async_get_image(self._hass, entity_id, timeout=timeout)
-            except (HomeAssistantError, NotImplementedError):
-                # Some integrations expose the stream without a snapshot method.
-                try:
-                    camera = get_camera_from_entity_id(self._hass, entity_id)
-                    if (
-                        not camera.use_stream_for_stills
-                        and CameraEntityFeature.STREAM in camera.supported_features
-                        and (frame := await async_get_stream_image(camera))
-                        and frame.startswith(b"\xff\xd8\xff")
-                    ):
-                        return frame
-                except HomeAssistantError:
-                    pass
-                raise
+                async with asyncio.timeout(_STREAM_FRAME_TIMEOUT):
+                    frame = await async_get_stream_image(camera)
+            except Exception as err:  # Stream providers may include source URLs in errors.
+                raise HomeAssistantError(f"stream image capture failed ({type(err).__name__})") from None
+            if frame and frame.startswith(b"\xff\xd8\xff"):
+                return frame
+            raise HomeAssistantError("stream returned no JPEG frame")
+
+        image = await async_get_image(
+            self._hass, cache.source_entity_id, timeout=_FETCH_TIMEOUT
+        )
         content_type = image.content_type.lower().split(";", 1)[0].strip()
         if not image.content:
             raise ValueError("source returned an empty image")
@@ -799,6 +793,7 @@ class _ProgressiveCameraManager:
         *,
         notify_listeners: bool = True,
     ) -> None:
+        cache.still_images.clear()
         for queue in tuple(cache.subscribers):
             self._async_replace_queued_frame(queue, frame)
         if notify_listeners:
@@ -898,6 +893,43 @@ class _ProgressiveCameraManager:
             time.monotonic() - cache.last_success_at
             >= _INTERACTIVE_REFRESH_INTERVAL
         )
+
+
+def _has_native_mjpeg(camera: Camera) -> bool:
+    return getattr(
+        type(camera), "handle_async_mjpeg_stream", Camera.handle_async_mjpeg_stream
+    ) is not Camera.handle_async_mjpeg_stream
+
+
+def _resize_still_image(frame: bytes, size: tuple[int, int]) -> bytes:
+    """Resize the JPEG to cover the requested display size."""
+
+    try:
+        with PillowImage.open(BytesIO(frame)) as image:
+            if image.format != "JPEG":
+                return frame
+            width, height = image.size
+            scale = max(size[0] / width, size[1] / height)
+            if scale >= 1:
+                return frame
+            exif = image.info.get("exif", b"")
+            icc_profile = image.info.get("icc_profile")
+            # Keep one dimension at the requested size so HA's proxy can
+            # serve the resized JPEG directly.
+            target = (max(1, round(width * scale)), max(1, round(height * scale)))
+            image.draft(image.mode, target)
+            still = (
+                image
+                if image.size == target
+                else image.resize(target, PillowImage.Resampling.LANCZOS)
+            )
+            output = BytesIO()
+            still.save(
+                output, format="JPEG", quality=75, exif=exif, icc_profile=icc_profile,
+            )
+            return output.getvalue()
+    except (OSError, ValueError, PillowImage.DecompressionBombError):
+        return frame
 
 
 def _render_error_overlay(frame: bytes, overlay_png: bytes) -> bytes:

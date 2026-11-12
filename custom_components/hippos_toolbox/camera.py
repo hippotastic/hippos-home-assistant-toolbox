@@ -28,6 +28,8 @@ from . import ToolboxConfigEntry
 from .camera_relay import _CameraRelay
 from .camera_stream import async_setup_camera_streams
 from .const import (
+    ATTR_REPLACEMENT_CAMERA,
+    CONF_FALLBACK_ENTITY_ID,
     CONF_SOURCE_ENTITY_ID,
     DOMAIN,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
@@ -55,6 +57,16 @@ class _WebRTCSession:
             self.provider.async_close_session(session_id)
         else:
             self.source.close_webrtc_session(session_id)
+
+
+def _managed_go2rtc_provider(source: Camera) -> CameraWebRTCProvider | None:
+    provider = getattr(source, "webrtc_provider", getattr(source, "_webrtc_provider", None))
+    # Only HA-managed go2rtc shares this process's loopback network.
+    if getattr(provider, "domain", None) == "go2rtc" and isinstance(
+        getattr(getattr(provider, "_session", None), "connector", None), UnixConnector
+    ):
+        return provider
+    return None
 
 
 def _access_token_store(hass: HomeAssistant) -> _AccessTokenStore:
@@ -108,6 +120,7 @@ class _ProgressiveSnapshotCamera(Camera):
         self._manager = manager
         self._subentry_id = subentry.subentry_id
         self._source_entity_id = str(subentry.data[CONF_SOURCE_ENTITY_ID])
+        self._fallback_entity_id = subentry.data.get(CONF_FALLBACK_ENTITY_ID)
         self._relay = _CameraRelay(hass, subentry.data)
         self._relay_url: str | None = None
         self._sessions: dict[str, _WebRTCSession] = {}
@@ -131,11 +144,15 @@ class _ProgressiveSnapshotCamera(Camera):
 
     def _source_camera(self) -> Camera | None:
         try:
-            return get_camera_from_entity_id(
-                self._token_store_hass, self._source_entity_id
-            )
+            return get_camera_from_entity_id(self._token_store_hass, self._source_entity_id)
         except HomeAssistantError:
             return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str] | None:
+        if self._fallback_entity_id and self.supported_features & CameraEntityFeature.STREAM:
+            return {ATTR_REPLACEMENT_CAMERA: self._fallback_entity_id}
+        return None
 
     @property
     def supported_features(self) -> CameraEntityFeature:
@@ -209,23 +226,14 @@ class _ProgressiveSnapshotCamera(Camera):
         if source is None:
             raise HomeAssistantError("Camera source is unavailable")
 
+        provider = _managed_go2rtc_provider(source)
         session = self._sessions[session_id] = _WebRTCSession(source)
         try:
-            provider = getattr(
-                source, "webrtc_provider", getattr(source, "_webrtc_provider", None)
-            )
-            # Only HA-managed go2rtc shares this process's loopback network.
-            if (
-                provider is not None
-                and provider.domain == "go2rtc"
-                and isinstance(
-                    getattr(getattr(provider, "_session", None), "connector", None),
-                    UnixConnector,
-                )
-            ):
+            if provider is not None:
                 if url := await source.stream_source():
                     if relay_url := await self._relay.async_get_url(
-                        url, getattr(self.camera_entity_capabilities, "two_way_audio", False)
+                        url,
+                        getattr(self.camera_entity_capabilities, "two_way_audio", False),
                     ):
                         self._relay_url = relay_url
                         session.provider = provider
@@ -271,9 +279,9 @@ class _ProgressiveSnapshotCamera(Camera):
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """Return the full-resolution RAM cache and refresh in parallel."""
+        """Return a JPEG from the RAM cache and refresh in parallel."""
 
-        return await self._manager.async_get_frame(self._subentry_id)
+        return await self._manager.async_get_frame(self._subentry_id, width, height)
 
     async def handle_async_mjpeg_stream(
         self, request: web.Request

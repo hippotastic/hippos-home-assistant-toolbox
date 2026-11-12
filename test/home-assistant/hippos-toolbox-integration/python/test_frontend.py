@@ -9,7 +9,6 @@ from custom_components.hippos_toolbox.const import (
     CAMERA_FRONTEND_OPTIONS,
     CAMERA_FRONTEND_PROTOCOL,
     CONF_CAMERA_STREAM_CLEANUP,
-    CONF_PACE_VIDEO,
     CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
     MONITORING_SUBENTRY_TYPE,
@@ -53,6 +52,22 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
         connection = _Connection()
         self.commands[0](self.hass, connection, {"id": 1, "protocol": CAMERA_FRONTEND_PROTOCOL})
         return connection
+
+    async def test_progressive_camera_enables_video_fallback_independently(self):
+        connection = self.subscribe()
+        self.entry.options = dict.fromkeys(CAMERA_FRONTEND_OPTIONS, False)
+        self.entry.subentries = {
+            "camera": SimpleNamespace(subentry_type=PROGRESSIVE_CAMERA_SUBENTRY_TYPE)
+        }
+        frontend.async_update_frontend(self.hass, self.entry)
+        self.assertEqual(connection.events[-1][1], {
+            "protocol": CAMERA_FRONTEND_PROTOCOL,
+            **dict.fromkeys(CAMERA_FRONTEND_OPTIONS, False),
+            "automatic_video": True,
+        })
+        self.entry.subentries.clear()
+        frontend.async_update_frontend(self.hass, self.entry)
+        self.assertNotIn("automatic_video", connection.events[-1][1])
 
     async def test_initial_snapshot_defaults_and_only_publishes_protocol_and_feature_booleans(self):
         connection = self.subscribe()
@@ -150,7 +165,7 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
         self.entry.subentries = {"camera": SimpleNamespace(
             subentry_id="camera", title="Front door",
             subentry_type=PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
-            data=saved | {CONF_PACE_VIDEO: False},
+            data=saved | {"repack_pcmu": False},
         )}
         await _async_reload_entry(self.hass, self.entry)
         self.hass.config_entries.async_reload.assert_awaited_once_with("toolbox")

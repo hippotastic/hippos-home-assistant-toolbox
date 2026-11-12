@@ -13,7 +13,13 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 
-from .const import CAMERA_FRONTEND_OPTIONS, CAMERA_FRONTEND_PROTOCOL, DATA_CAMERA_FRONTEND, DOMAIN
+from .const import (
+    CAMERA_FRONTEND_OPTIONS,
+    CAMERA_FRONTEND_PROTOCOL,
+    DATA_CAMERA_FRONTEND,
+    DOMAIN,
+    PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
+)
 
 _DATA_KEY = DATA_CAMERA_FRONTEND
 _BUNDLE_PATH = f"/{DOMAIN}/frontend/cameras.js"
@@ -55,13 +61,18 @@ def async_setup_frontend(hass: HomeAssistant) -> None:
 
 @callback
 def async_update_frontend(hass: HomeAssistant, entry: ConfigEntry | None) -> None:
-    """Push the protocol and three public booleans, never the config entry itself."""
+    """Push public feature switches, never the config entry itself."""
 
     state = hass.data[_DATA_KEY]
     settings = {
         option: bool(entry.options.get(option, True)) if entry is not None else False
         for option in CAMERA_FRONTEND_OPTIONS
     }
+    if entry is not None and any(
+        subentry.subentry_type == PROGRESSIVE_CAMERA_SUBENTRY_TYPE
+        for subentry in entry.subentries.values()
+    ):
+        settings["automatic_video"] = True
     if state.settings == settings:
         return
     state.settings = settings

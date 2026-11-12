@@ -13,7 +13,6 @@ from .announcements import async_setup_announcements
 from .api import ToolboxApi
 from .camera_stream import async_stop_camera_streams
 from .const import (
-    CONF_PREVIEW_ENTITY_ID,
     CONF_SOURCE_ENTITY_ID,
     CONF_CAMERA_STREAM_CLEANUP,
     CONF_UPDATE_CHANNEL,
@@ -92,11 +91,6 @@ async def async_setup_entry(
         {
             subentry_id: str(data[CONF_SOURCE_ENTITY_ID])
             for subentry_id, (_, data) in camera_subentries.items()
-        },
-        preview_entity_ids={
-            subentry_id: str(data[CONF_PREVIEW_ENTITY_ID])
-            for subentry_id, (_, data) in camera_subentries.items()
-            if data.get(CONF_PREVIEW_ENTITY_ID)
         },
     )
     monitoring_subentries = {

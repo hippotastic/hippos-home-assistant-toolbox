@@ -8,7 +8,7 @@
 
 ## Before you start
 
-Install and configure the [toolbox integration](../README.md#installation) and keep the original camera entity enabled. The source needs to provide JPEG images for the preview, either from a snapshot endpoint or from a stream that Home Assistant can decode. You can also choose a separate camera entity for the preview.
+Install and configure the [toolbox integration](../README.md#installation) and keep the original camera entity enabled. The source needs a video stream that Home Assistant can capture as JPEG, a native MJPEG stream, or JPEG snapshots for a still-only camera.
 
 ## Setup
 
@@ -21,24 +21,28 @@ With `camera_view: auto`, Home Assistant still shows the cached image, but its n
 
 ## Refresh behavior
 
-Frames are held only in RAM. Restarting Home Assistant or reloading the integration clears the cache; automatic warmup starts after 30 seconds. Idle cameras refresh every 30 seconds through a staggered queue with at most two source snapshots in flight. Before the first successful fetch, there is no previous frame to show.
+Frames are held only in RAM. Restarting Home Assistant or reloading the integration clears the cache. Automatic warmup starts after 30 seconds. Idle cameras refresh every 30 seconds through a staggered queue with at most two background fetches in flight. The first preview appears once the first frame arrives.
 
-A live view first shows the cached frame. Home Assistant plays WebRTC when the source offers it, including any two-way audio supported by the source and enabled in Home Assistant. Other sources use JPEG updates. Native MJPEG sources share one upstream connection per progressive camera across all live cards. Still-only sources follow the source camera's snapshot interval. A failed source keeps its last frame with a connection problem marker until the next successful refresh.
+For cameras with a video stream that Home Assistant can decode, the cache uses a JPEG from that stream so the preview is closer to the live picture. Native MJPEG and still-only sources use the JPEG images provided by their Home Assistant camera entity. When capture fails, the last successful frame remains available with a connection problem marker until capture recovers.
 
-Only JPEG snapshots and MJPEG streams containing complete JPEG frames are supported. MJPEG JPEG payloads are forwarded without decoding or recompression.
+A live view first shows the cached frame. Home Assistant plays WebRTC when the source offers it, including any two-way audio supported by the source and enabled in Home Assistant. Other sources use JPEG updates. Native MJPEG sources share one upstream connection per progressive camera across all live cards. Still-only sources follow the source camera's snapshot interval.
+
+Live dashboard cards request a preview sized for the card and the display's pixel density. With **Automatically restore camera streams** enabled in the toolbox options, the More Info dialog also uses the cached image while its video player starts. MJPEG JPEG payloads are forwarded without decoding or recompression.
 
 ## Camera settings
 
-Reconfigure a progressive camera to change its name, sources or optimizations. Existing entries pick up the default optimizations from their saved source. Reconfiguring reloads the integration and clears the RAM cache.
+Reconfigure a progressive camera to change its name, sources or optimizations. Reconfiguring reloads the integration and clears the RAM cache.
 
-| Setting                            | Effect                                                                                                                           |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Separate preview camera            | Optional JPEG source. A low-resolution source can fill the cache faster. The helper uses the main source if the preview fails.   |
-| Convert video to H.264 when needed | Offers H.264 to the browser for compatible RTSP sources served by go2rtc. An already compatible H.264 video track can be reused. |
-| Smooth video delivery              | Paces frames from compatible RTSP sources. When combined with H.264 conversion, the encoder targets 20 frames per second.        |
-| Apply PCMU audio compatibility     | Groups 8 kHz PCMU packets on the camera-facing RTSP audio return path. This adds up to about 128 ms of packet buffering.         |
+| Setting                        | Effect                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| Replacement camera             | Optional camera to show if the main video fails. It can provide live video or snapshots.                                 |
+| Apply PCMU audio compatibility | Groups 8 kHz PCMU packets on the main camera's RTSP audio return path. This adds up to about 128 ms of packet buffering. |
 
-The three optimizations are on by default. The RTSP options apply when the camera uses the go2rtc server managed by Home Assistant. Cameras with native WebRTC or an external WebRTC server use the source's own connection.
+When the main camera's WebRTC player reports a failure or cannot display its first frame within 15 seconds, the affected view opens the replacement camera with Home Assistant's normal player. You can select a lower-resolution stream, a snapshot entity, or another camera that covers the same area. The replacement uses its own playback options. Reopen the card or dialog to try the main stream again.
+
+The Toolbox passes through the camera's video codec. If a browser cannot play the main stream, you can choose a replacement camera with a compatible stream or JPEG updates.
+
+Audio compatibility is on by default for compatible RTSP sources with Home Assistant's managed go2rtc. Sources with native WebRTC or an external WebRTC server use their own connection.
 
 ## Development: rebuilding the connection marker
 

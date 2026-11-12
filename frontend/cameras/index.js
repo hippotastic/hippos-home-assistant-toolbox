@@ -48,15 +48,16 @@ function applySettings(next) {
 	const recovery = next.camera_recovery
 	const cleanup = next.camera_stream_cleanup
 	const zoom = next.camera_zoom
-	if (!settings || settings.recovery !== recovery || settings.cleanup !== cleanup) {
+	const automaticVideo = next.automatic_video === true
+	if (!settings || settings.recovery !== recovery || settings.cleanup !== cleanup || settings.automaticVideo !== automaticVideo) {
 		stopStreams?.()
-		stopStreams = recovery || cleanup || IS_IOS_WEBKIT ? installCameraRecovery({ recovery, cleanup, hideControls: IS_IOS_WEBKIT }) : undefined
+		stopStreams = recovery || cleanup || automaticVideo || IS_IOS_WEBKIT ? installCameraRecovery({ recovery, cleanup, automaticVideo, hideControls: IS_IOS_WEBKIT }) : undefined
 	}
 	if (!settings || settings.zoom !== zoom) {
 		stopZoom?.()
 		stopZoom = zoom ? installCameraZoom() : undefined
 	}
-	settings = { recovery, cleanup, zoom }
+	settings = { recovery, cleanup, zoom, automaticVideo }
 }
 
 async function subscribe() {

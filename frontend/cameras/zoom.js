@@ -67,6 +67,7 @@ export function installCameraZoom() {
 	const CUSTOM_ELEMENTS_DEFINE_PATCH = Symbol.for('hippo.cameraZoom.customElementsDefinePatch')
 	const PLAYER_CLASS_PATCH = Symbol.for('hippo.cameraZoom.playerClassPatch')
 	const cameraVideoAspectRatios = new Map()
+	const cameraViews = new WeakMap()
 
 	const shadowStyles = {
 		'HA-MORE-INFO-DIALOG': /* css */ `
@@ -427,6 +428,7 @@ export function installCameraZoom() {
 		dialog.style.removeProperty('--ha-dialog-show-duration')
 		walkTree(dialog, (node) => {
 			if (node.nodeType === Node.ELEMENT_NODE) {
+				if (node.tagName === 'HA-CAMERA-STREAM') cameraViews.delete(node)
 				node.removeAttribute(SCOPE_ATTRIBUTE)
 				removePlayerPreflightStyle(node)
 				cleanups.get(node)?.()
@@ -787,7 +789,7 @@ export function installCameraZoom() {
 			media.style.setProperty('max-width', '100%', 'important')
 			media.style.setProperty('object-fit', 'contain', 'important')
 			media.style.setProperty('width', loadingSize, 'important')
-			return viewport
+			return { ...viewport, width: 0, height: 0 }
 		}
 
 		media.style.setProperty('display', 'block', 'important')
@@ -797,7 +799,7 @@ export function installCameraZoom() {
 		media.style.setProperty('max-width', '100%', 'important')
 		media.style.setProperty('object-fit', 'contain', 'important')
 		media.style.setProperty('width', `${width}px`, 'important')
-		return viewport
+		return { ...viewport, width, height }
 	}
 
 	function zoomTransform(state) {
@@ -828,6 +830,10 @@ export function installCameraZoom() {
 		const events = new AbortController()
 		const listen = (target, type, callback, options = {}) => target?.addEventListener(type, callback, { ...options, signal: events.signal })
 		let state = { scale: MIN_SCALE, x: 0, y: 0 }
+		let fittedWidth = 0
+		let fittedHeight = 0
+		let sawLiveFrame = false
+		let zoomDestination
 		let viewportRect = null
 		let panOrigin = null
 		let pinchDistance = null
@@ -844,9 +850,16 @@ export function installCameraZoom() {
 		let revealPending = false
 		let revealStartedAt = 0
 		const pointers = new Map()
+		const dialog = findComposedAncestor(media, 'HA-MORE-INFO-DIALOG')
+		const cameraStream = findComposedAncestor(media, 'HA-CAMERA-STREAM')
+		const entityId = cameraStream.stateObj?.entity_id ?? dialog?._entityId
+		let view = cameraViews.get(cameraStream)
+		if (!view || view.entityId !== entityId) {
+			view = { entityId }
+			cameraViews.set(cameraStream, view)
+		}
 		const mediaRoot = media.getRootNode()
 		const previewRoot = IS_IOS_WEBKIT && media.tagName === 'VIDEO' && PLAYER_TAGS.has(mediaRoot.host?.tagName) ? mediaRoot : null
-		const previewStream = previewRoot && findComposedAncestor(media, 'HA-CAMERA-STREAM')
 		// Keep one hit target even while the video is hidden or WebKit repaints its native layer.
 		const gestureTarget = previewRoot?.host ?? media
 		let previewImage
@@ -854,7 +867,7 @@ export function installCameraZoom() {
 		const syncVideoPreview = () => {
 			if (!previewRoot) return
 			const liveVisible = media.style.getPropertyValue('visibility') === 'visible' && media.readyState >= media.HAVE_CURRENT_DATA && media.videoWidth > 0
-			const source = media.getAttribute('poster') || previewStream?.stateObj?.attributes?.entity_picture
+			const source = media.getAttribute('poster') || cameraStream.stateObj?.attributes?.entity_picture
 			if (liveVisible || !source) {
 				previewImage?.remove()
 				previewImage = undefined
@@ -880,18 +893,28 @@ export function installCameraZoom() {
 		media.style.transformOrigin = '50% 50%'
 		if (gestureTarget !== media) media.style.pointerEvents = 'none'
 		if (media.tagName === 'VIDEO' && !IS_IOS_WEBKIT) media.controls = false
+		const isVisible = (element) => element?.isConnected && !element.getRootNode().host?.classList.contains('hidden')
+		const saveView = () => {
+			if (view.owner === media && isVisible(media)) view.current = { state: zoomDestination ?? state, width: fittedWidth, height: fittedHeight }
+		}
 
 		const renderState = () => {
 			if (disposed || !mediaActive) return
 			const transform = zoomTransform(state)
 			media.style.transform = transform
 			if (previewImage) previewImage.style.transform = transform
+			saveView()
 		}
 
 		const stopCameraMotion = (keepCurrent = true) => {
+			const wasZooming = zoomDestination != null
+			zoomDestination = null
 			if (motionFrame != null) cancelAnimationFrame(motionFrame)
 			motionFrame = null
-			if (!transformAnimation) return
+			if (!transformAnimation) {
+				if (wasZooming && keepCurrent) saveView()
+				return
+			}
 
 			const { states, animation } = transformAnimation
 			transformAnimation = null
@@ -932,24 +955,47 @@ export function installCameraZoom() {
 		}
 
 		const refit = () => {
-			if (disposed || !mediaActive) return null
+			if (disposed || !mediaActive || !media.isConnected) return null
 			const previousWidth = media.style.width
 			const previousHeight = media.style.height
+			const previousFit = { width: fittedWidth, height: fittedHeight }
+			const startingVideo = media.tagName === 'VIDEO' && !sawLiveFrame
+			sawLiveFrame ||= media.readyState >= 2 && media.videoWidth > 0
 			const viewport = fitMediaToViewport(media, previewImage)
 			const nextRect = viewport?.rect ?? null
 			const geometryChanged =
 				media.style.width !== previousWidth || media.style.height !== previousHeight || viewportRect?.width !== nextRect?.width || viewportRect?.height !== nextRect?.height
 			viewportRect = nextRect
+			fittedWidth = viewport?.width ?? 0
+			fittedHeight = viewport?.height ?? 0
+			let carriedView
+			// HA can replace the cache/HLS player with a second video element.
+			// Transfer only from the outgoing player of this open camera popup.
+			if (viewport && isVisible(media) && view.owner !== media && !isVisible(view.owner)) {
+				carriedView = view.current
+				view.owner = media
+			}
 			// Playback events also refit the media. Preserve ongoing motion unless
 			// fitting changes the video size or the available travel at the edge.
 			if (geometryChanged) {
+				if (!carriedView && startingVideo && (zoomDestination || state.scale > MIN_SCALE)) carriedView = { ...previousFit, state: zoomDestination ?? state }
 				if (panOrigin) {
 					panOrigin.bounds = null
 					if (panOrigin.samples) panOrigin.samples.length = 0
 				}
-				stopCameraMotion()
+				if (!carriedView) stopCameraMotion()
 			}
-			if (!viewport || transformAnimation || motionFrame != null || (panOrigin && !geometryChanged)) return viewport?.element ?? null
+			if (carriedView) stopCameraMotion(false)
+			if (!viewport || transformAnimation || motionFrame != null || (panOrigin && !geometryChanged && !carriedView)) return viewport?.element ?? null
+			if (carriedView) {
+				// Keep the same focal point when the fitted picture changes size.
+				state = {
+					scale: carriedView.state.scale,
+					x: carriedView.state.x * (fittedWidth && carriedView.width ? fittedWidth / carriedView.width : 1),
+					y: carriedView.state.y * (fittedHeight && carriedView.height ? fittedHeight / carriedView.height : 1),
+				}
+			}
+			if (carriedView) renderState()
 			const rect = media.getBoundingClientRect()
 			state = calculatePanState(state, getPanBounds(rect.width, rect.height, viewportRect), 0, 0)
 			renderState()
@@ -1091,7 +1137,17 @@ export function installCameraZoom() {
 			if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
 				state = target
 				renderState()
-			} else playCameraMotion([from, target], ZOOM_ANIMATION_MS, 'ease-in-out', { fallbackDuration: FALLBACK_ZOOM_ANIMATION_MS })
+			} else {
+				zoomDestination = target
+				saveView()
+				playCameraMotion([from, target], ZOOM_ANIMATION_MS, 'ease-in-out', {
+					fallbackDuration: FALLBACK_ZOOM_ANIMATION_MS,
+					onFinish: () => {
+						zoomDestination = null
+						saveView()
+					},
+				})
+			}
 		}
 
 		listen(gestureTarget, 'pointerdown', (event) => {
@@ -1295,6 +1351,7 @@ export function installCameraZoom() {
 			})
 		}
 		listen(media, 'loadstart', scheduleVideoReveal)
+		listen(cameraStream, 'stream-type-changed', refit)
 
 		const resize = () => {
 			stopCameraMotion()
@@ -1307,7 +1364,6 @@ export function installCameraZoom() {
 		listen(window, 'resize', resize)
 		listen(window.visualViewport, 'resize', resize)
 
-		const dialog = findComposedAncestor(media, 'HA-MORE-INFO-DIALOG')
 		const cleanup = () => {
 			mediaActive = false
 			events.abort()
@@ -1325,7 +1381,15 @@ export function installCameraZoom() {
 			cleanups.delete(media)
 		}
 		cleanups.set(media, cleanup)
-		listen(dialog, 'closed', cleanup, { once: true })
+		listen(
+			dialog,
+			'closed',
+			() => {
+				cameraViews.delete(cameraStream)
+				cleanup()
+			},
+			{ once: true }
+		)
 	}
 
 	function handlePotentialMedia(media) {

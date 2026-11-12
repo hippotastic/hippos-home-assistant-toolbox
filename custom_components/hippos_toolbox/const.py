@@ -20,15 +20,9 @@ CATALOG_PATH = "blueprints/catalog.json"
 
 CONF_UPDATE_CHANNEL = "update_channel"
 CONF_SOURCE_ENTITY_ID = "source_entity_id"
-CONF_PREVIEW_ENTITY_ID = "preview_entity_id"
-CONF_TRANSCODE_H264 = "transcode_h264"
-CONF_PACE_VIDEO = "pace_video"
+CONF_FALLBACK_ENTITY_ID = "fallback_entity_id"
+ATTR_REPLACEMENT_CAMERA = f"{DOMAIN}_replacement_camera"
 CONF_REPACK_PCMU = "repack_pcmu"
-PROGRESSIVE_CAMERA_OPTIMIZATIONS = (
-    CONF_TRANSCODE_H264,
-    CONF_PACE_VIDEO,
-    CONF_REPACK_PCMU,
-)
 CONF_CAMERA_ZOOM = "camera_zoom"
 CONF_CAMERA_RECOVERY = "camera_recovery"
 CONF_CAMERA_STREAM_CLEANUP = "camera_stream_cleanup"

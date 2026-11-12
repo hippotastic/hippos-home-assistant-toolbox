@@ -15,7 +15,8 @@ from homeassistant.helpers.template import Template
 
 from .const import (
     CAMERA_FRONTEND_OPTIONS,
-    CONF_PREVIEW_ENTITY_ID,
+    CONF_FALLBACK_ENTITY_ID,
+    CONF_REPACK_PCMU,
     CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
     DEFAULT_UPDATE_CHANNEL,
@@ -27,7 +28,6 @@ from .const import (
     MONITORING_NOTIFICATION_DEFAULTS,
     MONITORING_SUBENTRY_TYPE,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
-    PROGRESSIVE_CAMERA_OPTIMIZATIONS,
     UPDATE_CHANNEL_DEVELOPMENT,
     UPDATE_CHANNEL_STABLE,
     normalize_update_channel,
@@ -149,17 +149,28 @@ class ProgressiveCameraSubentryFlow(config_entries.ConfigSubentryFlow):
         if user_input is not None:
             name = str(user_input[CONF_NAME]).strip()
             source_entity_id = str(user_input[CONF_SOURCE_ENTITY_ID])
-            preview_entity_id = user_input.get(CONF_PREVIEW_ENTITY_ID)
+            fallback_entity_id = user_input.get(CONF_FALLBACK_ENTITY_ID)
 
             if not name:
                 errors[CONF_NAME] = "invalid_name"
             elif source_error := self._source_validation_error(source_entity_id):
                 errors[CONF_SOURCE_ENTITY_ID] = source_error
-            elif preview_entity_id and (
-                preview_error := self._source_validation_error(preview_entity_id)
-            ):
-                errors[CONF_PREVIEW_ENTITY_ID] = preview_error
-            elif any(
+            elif fallback_entity_id == source_entity_id:
+                errors[CONF_FALLBACK_ENTITY_ID] = "same_fallback_source"
+            elif fallback_entity_id:
+                replacement = er.async_get(self.hass).async_get(fallback_entity_id)
+                if not fallback_entity_id.startswith(f"{CAMERA_DOMAIN}.") or (
+                    replacement is None and self.hass.states.get(fallback_entity_id) is None
+                ):
+                    errors[CONF_FALLBACK_ENTITY_ID] = "invalid_source"
+                elif (
+                    current_subentry is not None
+                    and replacement is not None
+                    and replacement.platform == DOMAIN
+                    and replacement.unique_id == current_subentry.subentry_id
+                ):
+                    errors[CONF_FALLBACK_ENTITY_ID] = "same_fallback_source"
+            if not errors and any(
                 subentry.subentry_type == PROGRESSIVE_CAMERA_SUBENTRY_TYPE
                 and subentry.subentry_id
                 != (
@@ -174,16 +185,10 @@ class ProgressiveCameraSubentryFlow(config_entries.ConfigSubentryFlow):
 
             if not errors:
                 data = {CONF_SOURCE_ENTITY_ID: source_entity_id}
-                if preview_entity_id and preview_entity_id != source_entity_id:
-                    data[CONF_PREVIEW_ENTITY_ID] = preview_entity_id
-                # Older entries omit these keys. Only overrides need storing.
-                data.update(
-                    {
-                        key: False
-                        for key in PROGRESSIVE_CAMERA_OPTIMIZATIONS
-                        if not user_input.get(key, current_data.get(key, True))
-                    }
-                )
+                if fallback_entity_id:
+                    data[CONF_FALLBACK_ENTITY_ID] = fallback_entity_id
+                if not user_input.get(CONF_REPACK_PCMU, current_data.get(CONF_REPACK_PCMU, True)):
+                    data[CONF_REPACK_PCMU] = False
                 if current_subentry is not None:
                     return self.async_update_and_abort(
                         entry,
@@ -207,15 +212,13 @@ class ProgressiveCameraSubentryFlow(config_entries.ConfigSubentryFlow):
                         default=current_data.get(CONF_SOURCE_ENTITY_ID, vol.UNDEFINED),
                     ): camera_selector,
                     vol.Optional(
-                        CONF_PREVIEW_ENTITY_ID,
-                        description={"suggested_value": current_data[CONF_PREVIEW_ENTITY_ID]}
-                        if CONF_PREVIEW_ENTITY_ID in current_data else None,
+                        CONF_FALLBACK_ENTITY_ID,
+                        description={"suggested_value": current_data[CONF_FALLBACK_ENTITY_ID]}
+                        if CONF_FALLBACK_ENTITY_ID in current_data else None,
                     ): camera_selector,
-                    **{
-                        vol.Required(option, default=current_data.get(option, True)):
-                        selector.BooleanSelector()
-                        for option in PROGRESSIVE_CAMERA_OPTIMIZATIONS
-                    },
+                    vol.Required(
+                        CONF_REPACK_PCMU, default=current_data.get(CONF_REPACK_PCMU, True)
+                    ): selector.BooleanSelector(),
                 }
             ),
             errors=errors,

@@ -9,10 +9,13 @@ from unittest.mock import AsyncMock, patch
 
 from PIL import Image as PillowImage
 
-from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.camera import Camera, CameraEntityFeature, CameraImageView
+from homeassistant.components.camera.const import DATA_COMPONENT
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.hippos_toolbox import progressive_camera
+from custom_components.hippos_toolbox.camera import _ProgressiveSnapshotCamera
+from custom_components.hippos_toolbox.const import CONF_SOURCE_ENTITY_ID
 from custom_components.hippos_toolbox.progressive_camera import (
     _ProgressiveCameraManager,
 )
@@ -37,7 +40,8 @@ class _States:
 class _Hass:
     def __init__(self, entity_ids: tuple[str, ...]) -> None:
         self.states = _States(entity_ids)
-        self.data = {}
+        cameras = {entity_id: Camera() for entity_id in entity_ids}
+        self.data = {DATA_COMPONENT: SimpleNamespace(get_entity=cameras.get)}
 
     async def async_add_executor_job(self, function, *args):
         return function(*args)
@@ -106,16 +110,13 @@ async def _wait_until(predicate, timeout: float = 1.0) -> None:
 class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
     """Verify cache transitions and live/background request dispatching."""
 
-    async def test_preview_failure_falls_back_to_frame_from_video(self) -> None:
-        source, preview = "camera.porch", "camera.porch_preview"
-        hass = _Hass((source, preview))
-        manager = _ProgressiveCameraManager(
-            hass, _Entry(), {"porch": source},
-            preview_entity_ids={"porch": preview},
-        )
+    async def test_video_cache_uses_stream_even_when_snapshot_exists(self) -> None:
+        source = "camera.porch"
+        hass = _Hass((source,))
+        manager = _ProgressiveCameraManager(hass, _Entry(), {"porch": source})
         frame = _jpeg()
         video_camera = SimpleNamespace(
-            use_stream_for_stills=False, supported_features=CameraEntityFeature.STREAM
+            supported_features=CameraEntityFeature.STREAM
         )
         with (
             patch.object(
@@ -123,11 +124,11 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 progressive_camera, "async_get_image",
-                AsyncMock(side_effect=HomeAssistantError("No JPEG")),
+                AsyncMock(return_value=SimpleNamespace(content_type="image/jpeg", content=_jpeg((150, 40, 10)))),
             ) as get_image,
             patch.object(
                 progressive_camera, "get_camera_from_entity_id",
-                side_effect=[HomeAssistantError("No preview"), video_camera],
+                return_value=video_camera,
             ),
             patch.object(
                 progressive_camera, "async_get_stream_image",
@@ -136,12 +137,71 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
         ):
             await manager.async_start()
             try:
-                self.assertEqual(await manager.async_get_frame("porch"), frame)
-                self.assertEqual(await manager.async_get_frame("porch"), frame)
+                self.assertIs(await manager.async_get_frame("porch"), frame)
+                self.assertIs(await manager.async_get_frame("porch"), frame)
+                get_stream_image.assert_awaited_once_with(video_camera)
+
+                get_stream_image.side_effect = HomeAssistantError("Stream unavailable")
+                cache = manager._caches["porch"]
+                await manager._async_fetch(cache)
+                self.assertIs(cache.last_good_frame, frame)
+                self.assertTrue(cache.failed)
+                self.assertIsNotNone(cache.display_frame)
             finally:
                 await manager.async_stop()
-        self.assertEqual([call.args[1] for call in get_image.await_args_list], [preview, source])
-        get_stream_image.assert_awaited_once_with(video_camera)
+        get_image.assert_not_awaited()
+
+    async def test_native_mjpeg_uses_existing_cache_source(self) -> None:
+        source = "camera.porch"
+        manager = _ProgressiveCameraManager(_Hass((source,)), _Entry(), {"porch": source})
+        snapshot = _jpeg()
+        camera = _NativeMjpegCamera()
+        camera._attr_supported_features = CameraEntityFeature.STREAM
+
+        with (
+            patch.object(progressive_camera, "get_camera_from_entity_id", return_value=camera),
+            patch.object(
+                progressive_camera, "async_get_image",
+                AsyncMock(return_value=SimpleNamespace(content_type="image/jpeg", content=snapshot)),
+            ) as get_image,
+            patch.object(progressive_camera, "async_get_stream_image", new_callable=AsyncMock) as get_stream_image,
+        ):
+            cache = manager._caches["porch"]
+            await manager._async_fetch(cache)
+
+        self.assertIs(cache.last_good_frame, snapshot)
+        get_image.assert_awaited_once()
+        get_stream_image.assert_not_awaited()
+
+    async def test_camera_proxy_serves_resized_baseline_jpeg(self) -> None:
+        source = "camera.porch"
+        hass = _Hass((source,))
+        manager = _ProgressiveCameraManager(hass, _Entry(), {"porch": source})
+        manager._async_record_success(manager._caches["porch"], _jpeg())
+        subentry = SimpleNamespace(
+            subentry_id="porch", title="Porch", data={CONF_SOURCE_ENTITY_ID: source}
+        )
+        with patch(
+            "custom_components.hippos_toolbox.camera.async_entity_id_to_device",
+            return_value=None,
+        ):
+            camera = _ProgressiveSnapshotCamera(hass, manager, subentry)
+
+        view = CameraImageView(None)
+        request = SimpleNamespace(query={"width": "320", "height": "180"})
+        first, second = await asyncio.gather(
+            view.handle(request, camera), view.handle(request, camera)
+        )
+
+        self.assertEqual(first.content_type, "image/jpeg")
+        self.assertIs(first.body, second.body)
+        with PillowImage.open(BytesIO(first.body)) as image:
+            self.assertEqual(image.size, (320, 240))
+            self.assertFalse(image.info.get("progressive", False))
+
+        manager._async_record_success(manager._caches["porch"], _jpeg((140, 90, 40)))
+        updated = await view.handle(request, camera)
+        self.assertNotEqual(updated.body, first.body)
 
     async def test_dashboard_access_overtakes_delayed_warmup(self) -> None:
         source = "camera.front_door"
@@ -170,7 +230,7 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(get_image.await_count, 0)
 
             frame = await manager.async_get_frame("front")
-            self.assertEqual(frame, snapshot)
+            self.assertIs(frame, snapshot)
             self.assertEqual(get_image.await_count, 1)
             get_image.assert_awaited_once_with(
                 hass, source, timeout=progressive_camera._FETCH_TIMEOUT
@@ -258,7 +318,7 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 progressive_camera,
                 "get_camera_from_entity_id",
-                return_value=SimpleNamespace(frame_interval=0.5),
+                return_value=SimpleNamespace(frame_interval=0.5, supported_features=CameraEntityFeature(0)),
             ),
             patch.object(
                 progressive_camera, "async_get_image", side_effect=get_image
@@ -375,7 +435,7 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 progressive_camera,
                 "get_camera_from_entity_id",
-                return_value=SimpleNamespace(frame_interval=0.5),
+                return_value=SimpleNamespace(frame_interval=0.5, supported_features=CameraEntityFeature(0)),
             ),
             patch.object(
                 progressive_camera, "async_get_image", side_effect=get_image
@@ -417,7 +477,7 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 progressive_camera,
                 "get_camera_from_entity_id",
-                return_value=SimpleNamespace(frame_interval=0.5),
+                return_value=SimpleNamespace(frame_interval=0.5, supported_features=CameraEntityFeature(0)),
             ),
         ):
             await manager._async_fetch(cache)
@@ -488,7 +548,7 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             progressive_camera,
             "get_camera_from_entity_id",
-            return_value=SimpleNamespace(frame_interval=0.5),
+            return_value=SimpleNamespace(frame_interval=0.5, supported_features=CameraEntityFeature(0)),
         ):
             subscribed_at = asyncio.get_running_loop().time()
             first_queue = manager.async_subscribe("garage")
@@ -627,7 +687,7 @@ class ProgressiveCameraManagerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             progressive_camera,
             "get_camera_from_entity_id",
-            return_value=SimpleNamespace(frame_interval=0.5),
+            return_value=SimpleNamespace(frame_interval=0.5, supported_features=CameraEntityFeature(0)),
         ):
             queue = manager.async_subscribe("patio")
             manager._async_publish(cache, b"fresh-one")

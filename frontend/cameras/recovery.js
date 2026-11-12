@@ -1,22 +1,31 @@
 /* Camera recovery and its shared HA stream hook. */
+import { watchVideoStart } from './video-fallback.js'
 import { openControlledStream, stopControlledStream } from './stream-cleanup.js'
 
-export function installCameraRecovery({ recovery = true, cleanup = true, hideControls = false } = {}) {
+export function installCameraRecovery({ recovery = true, cleanup = true, hideControls = false, automaticVideo = false } = {}) {
 	const CHECK_INTERVAL = 2000
 	const LOAD_TIMEOUT = 20000
 	const BACKGROUND_RESTART_DELAY = 60000
 	const MAX_RETRY_DELAY = 30000
 	const NO_CHANGE = Symbol.for('lit-noChange')
 	const STREAM_PATH = '/api/hippos_toolbox/camera_stream/'
-	const trackStreams = recovery || cleanup
+	const trackStreams = recovery || cleanup || automaticVideo
 
 	const streams = new Map()
 	const players = new Map()
+	const previews = new Map()
+	const replacementViews = new WeakSet()
 	let disposed = false
 	let timer
 	let prototype
 	let originalRender
 	let patchedRender
+	let originalViewRender
+	let originalToggleMicrophone
+	let originalMicrophoneTrack
+	let renderReplacement
+	let toggleReplacementMicrophone
+	let replacementMicrophoneTrack
 	let hiddenAt = document.hidden ? Date.now() : null
 
 	function detachPlayer(player, state) {
@@ -67,6 +76,53 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 		player._handleVisibilityChange = handler
 		document.addEventListener('visibilitychange', handler)
 		players.set(player, { original, handler })
+	}
+
+	function usesDashboardPreview(stream) {
+		return recovery && stream.getRootNode().host?.localName === 'hui-image'
+	}
+
+	function onFirstVideoFrame(video, callback) {
+		const frame = video.requestVideoFrameCallback?.(callback)
+		if (frame !== undefined) return () => video.cancelVideoFrameCallback?.(frame)
+		video.addEventListener('loadeddata', callback, { once: true })
+		return () => video.removeEventListener('loadeddata', callback)
+	}
+
+	function watchDashboardPreview(stream) {
+		if (!usesDashboardPreview(stream)) return
+		const player = stream.shadowRoot?.querySelector('ha-web-rtc-player:not(.hidden)')
+		if (!player?.posterUrl) return
+
+		void player.updateComplete.then(() => {
+			if (disposed || !player.isConnected || player.classList.contains('hidden')) return
+			const video = player.shadowRoot?.querySelector('video')
+			const existing = previews.get(player)
+			if (existing && existing.video !== video) existing.remove()
+			if (!video || video.readyState >= video.HAVE_CURRENT_DATA || !player.posterUrl) return
+			if (existing?.video === video) {
+				if (existing.image.getAttribute('src') !== player.posterUrl) existing.image.src = player.posterUrl
+				return
+			}
+
+			// WebRTC can cover the native poster before it paints a frame. Keep the
+			// same HA thumbnail visible in a separate image until video is presented.
+			const image = document.createElement('img')
+			image.alt = ''
+			image.setAttribute('data-hippo-camera-cache-preview', '')
+			image.style.cssText = 'position:absolute; inset:0; width:100%; height:auto; pointer-events:none;'
+			image.style.aspectRatio = String(stream.aspectRatio ?? 16 / 9)
+			image.style.objectFit = stream.fitMode ?? 'cover'
+			image.src = player.posterUrl
+			const remove = () => {
+				cancelFrame()
+				image.remove()
+				previews.delete(player)
+			}
+			const cancelFrame = onFirstVideoFrame(video, remove)
+			previews.set(player, { video, image, remove })
+			player.shadowRoot.prepend(image)
+		})
 	}
 
 	function hlsFallback(stream, image) {
@@ -182,6 +238,7 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 		if (!state) {
 			state = {
 				image: null,
+				imageStyle: null,
 				attempts: 0,
 				nextRetryAt: 0,
 				lastAttemptAt: Date.now(),
@@ -195,6 +252,9 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 				interval: null,
 				onError: null,
 				onLoad: null,
+				videoFallback: null,
+				replacementView: null,
+				primaryEntity: null,
 			}
 			state.onError = () => {
 				state.failed = true
@@ -214,6 +274,14 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 		}
 
 		const image = stream.shadowRoot?.querySelector('img') ?? null
+		if (image && !state.imageStyle?.isConnected) {
+			// Keep HA's accessible image label while hiding the browser's
+			// visual alt-text placeholder until the first JPEG arrives.
+			const style = document.createElement('style')
+			style.textContent = 'img { color: transparent; font-size: 0; }'
+			stream.shadowRoot.prepend(style)
+			state.imageStyle = style
+		}
 		if (image !== state.image) {
 			if (state.managedEntity && state.image) stopControlledStream(stream, state)
 			state.image?.removeEventListener('error', state.onError)
@@ -222,6 +290,58 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 			image?.addEventListener('error', state.onError)
 		}
 		hookPlayer(stream.shadowRoot?.querySelector('ha-hls-player'))
+		watchDashboardPreview(stream)
+		if (renderReplacement && !replacementViews.has(stream)) {
+			const entityId = stream.stateObj?.attributes?.hippos_toolbox_replacement_camera
+			const replacement = document.querySelector('home-assistant')?.hass?.states?.[entityId]
+			const primary = stream.stateObj?.entity_id
+			if (state.replacementView && (state.primaryEntity !== primary || state.replacementView.stateObj?.entity_id !== replacement?.entity_id)) {
+				state.replacementView = null
+				stream.requestUpdate()
+			}
+			if (state.replacementView && state.replacementView.stateObj !== replacement) state.replacementView.stateObj = replacement
+			const player = !state.replacementView && replacement && replacement.entity_id !== primary ? stream.shadowRoot?.querySelector('ha-web-rtc-player') : null
+			if ((state.videoFallback?.player ?? null) !== (player ?? null)) {
+				state.videoFallback?.dispose()
+				state.videoFallback = null
+				if (player) {
+					state.videoFallback = watchVideoStart(player, () => {
+						const alternate = document.querySelector('home-assistant')?.hass?.states?.[entityId]
+						if (!alternate || stream.stateObj?.entity_id !== primary || stream.stateObj?.attributes?.hippos_toolbox_replacement_camera !== entityId) return
+						state.videoFallback?.dispose()
+						state.videoFallback = null
+						// Let HA choose and authenticate the replacement's transport. The
+						// replacement view itself cannot activate another replacement.
+						const view = document.createElement('ha-camera-stream')
+						replacementViews.add(view)
+						view.stateObj = alternate
+						if (!window.isSecureContext) {
+							// The app's HTTP microphone bridge uses the dialog's primary entity.
+							view.addEventListener('camera-capabilities-changed', (event) => event.stopPropagation())
+						}
+						const poster = player.posterUrl ?? stream._posterUrl
+						if (poster) {
+							view.style.aspectRatio = String(stream.aspectRatio ?? 16 / 9)
+							view.style.background = `center / contain no-repeat url(${JSON.stringify(poster)})`
+							const removePoster = (event) => {
+								const hasImage = view.shadowRoot?.querySelector('img')?.naturalWidth > 1
+								if (!hasImage && !(event.type === 'streams' && event.detail?.hasVideo)) return
+								view.style.background = ''
+								view.style.removeProperty('aspect-ratio')
+								view.removeEventListener('load', removePoster)
+								view.removeEventListener('streams', removePoster)
+							}
+							view.addEventListener('load', removePoster)
+							view.addEventListener('streams', removePoster)
+						}
+						state.primaryEntity = primary
+						state.replacementView = view
+						stream.dispatchEvent(new CustomEvent('camera-capabilities-changed', { bubbles: true, composed: true, detail: {} }))
+						stream.requestUpdate()
+					})
+				}
+			}
+		}
 		if (state.managedEntity && image && !state.streamId) recover(stream, state)
 		return state
 	}
@@ -235,6 +355,7 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 		const longPause = hiddenAt !== null && Date.now() - hiddenAt >= BACKGROUND_RESTART_DELAY
 		hiddenAt = null
 		for (const [stream, state] of streams) {
+			state.videoFallback?.resetDeadline()
 			const image = stream.shadowRoot?.querySelector('img')
 			if (image && (state.managedEntity || (recovery && longPause) || (recovery && (image.naturalWidth === 0 || hlsFallback(stream, image))))) {
 				// Reopening our deliberately closed response is normal lifecycle work.
@@ -256,6 +377,8 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 		for (const [stream, state] of streams) {
 			if (!stream.isConnected) {
 				releaseDisconnectedImage(stream, state.image)
+				state.videoFallback?.dispose()
+				state.imageStyle?.remove()
 				stream.removeEventListener('load', state.onLoad)
 				state.image?.removeEventListener('error', state.onError)
 				streams.delete(stream)
@@ -263,6 +386,7 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 			}
 			if (document.hidden || navigator.onLine === false) continue
 			watchStream(stream)
+			state.videoFallback?.check()
 			const image = state.image
 			if (!image || !recovery) continue
 			if (hlsFallback(stream, image)) {
@@ -278,6 +402,9 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 		}
 		for (const [player, state] of players) {
 			if (!player.isConnected) detachPlayer(player, state)
+		}
+		for (const [player, preview] of previews) {
+			if (!preview.video.isConnected || player.classList.contains('hidden')) preview.remove()
 		}
 	}
 
@@ -299,16 +426,23 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 		window.removeEventListener('online', onOnline)
 		for (const [stream, state] of streams) {
 			if (state.managedEntity) stopControlledStream(stream, state)
+			state.videoFallback?.dispose()
+			state.imageStyle?.remove()
 			stream.removeEventListener('load', state.onLoad)
 			state.image?.removeEventListener('error', state.onError)
 		}
 		const activeStreams = new Set([...streams.keys()].filter((stream) => stream.isConnected))
 		streams.clear()
 		for (const [player, state] of players) detachPlayer(player, state)
+		for (const preview of previews.values()) preview.remove()
 		if (patchedRender && prototype?._renderStream === patchedRender) {
 			prototype._renderStream = originalRender
 			if (hideControls) for (const stream of cameraStreams()) activeStreams.add(stream)
 		}
+		if (renderReplacement && prototype?.render === renderReplacement) prototype.render = originalViewRender
+		if (toggleReplacementMicrophone && prototype?.toggleMicrophone === toggleReplacementMicrophone) prototype.toggleMicrophone = originalToggleMicrophone
+		if (replacementMicrophoneTrack && Object.getOwnPropertyDescriptor(prototype, 'microphoneTrack')?.get === replacementMicrophoneTrack)
+			Object.defineProperty(prototype, 'microphoneTrack', originalMicrophoneTrack)
 		// Restore native sources after removing our render hook. A disposed module
 		// must not leave a stopped signed URL in an otherwise connected image.
 		for (const stream of activeStreams) stream.requestUpdate()
@@ -336,6 +470,34 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 				// native controls. Removing them from the video later can flash.
 				const index = result?.strings?.findIndex((part) => /[.?]controls=\s*$/.test(part))
 				if (index >= 0 && index < result.values?.length) result.values[index] = false
+			}
+			const transport = args[0]?.type
+			const dashboardPreview = transport === 'web_rtc' && usesDashboardPreview(this)
+			const dialogPreview = recovery && (transport === 'web_rtc' || transport === 'hls') && this.getRootNode().host?.localName === 'more-info-camera'
+			if (dashboardPreview || dialogPreview) {
+				const entityId = this.stateObj?.entity_id
+				const hass = document.querySelector('home-assistant')?.hass
+				const picture = hass?.states?.[entityId]?.attributes?.entity_picture
+				const index = result?.strings?.findIndex((part) => /\.posterUrl=\s*$/.test(part))
+				if (
+					(dashboardPreview || hass?.entities?.[entityId]?.platform === 'hippos_toolbox') &&
+					index >= 0 &&
+					index < result.values?.length &&
+					typeof picture === 'string' &&
+					picture.startsWith(`/api/camera_proxy/${entityId}?token=`)
+				) {
+					// Use the current cached picture in HA's native poster binding,
+					// even while the dialog's own signed thumbnail is pending.
+					const tile = dialogPreview && [...streams.keys()].find((stream) => stream.isConnected && stream.stateObj?.entity_id === entityId && usesDashboardPreview(stream))
+					const preview = tile || this
+					const url = new URL(picture, location.href)
+					const width = Math.round((preview.clientWidth || (dialogPreview ? window.innerWidth : 0)) * window.devicePixelRatio)
+					if (width > 0) {
+						url.searchParams.set('width', width)
+						url.searchParams.set('height', Math.max(1, Math.round(width / (preview.aspectRatio || 16 / 9))))
+					}
+					result.values[index] = url.pathname + url.search
+				}
 			}
 			const source = result?.values?.[0]
 			if (
@@ -375,6 +537,42 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 			return result
 		}
 		prototype._renderStream = patchedRender
+		if (automaticVideo && typeof prototype.render === 'function') {
+			originalViewRender = prototype.render
+			renderReplacement = function () {
+				const state = streams.get(this)
+				const view = state?.replacementView
+				if (view && state.primaryEntity === this.stateObj?.entity_id && view.stateObj?.entity_id === this.stateObj.attributes?.hippos_toolbox_replacement_camera) {
+					view.aspectRatio = this.aspectRatio
+					view.fitMode = this.fitMode
+					view.controls = this.controls
+					view.muted = this.muted
+					view.allowExoPlayer = this.allowExoPlayer
+					// Lit accepts the native element as the render value and tears down
+					// the old player through its usual disconnected callback.
+					return view
+				}
+				return originalViewRender.call(this)
+			}
+			prototype.render = renderReplacement
+			if (typeof prototype.toggleMicrophone === 'function') {
+				originalToggleMicrophone = prototype.toggleMicrophone
+				toggleReplacementMicrophone = function () {
+					const view = streams.get(this)?.replacementView
+					if (view?.isConnected) return view.toggleMicrophone()
+					return originalToggleMicrophone.call(this)
+				}
+				prototype.toggleMicrophone = toggleReplacementMicrophone
+			}
+			originalMicrophoneTrack = Object.getOwnPropertyDescriptor(prototype, 'microphoneTrack')
+			if (originalMicrophoneTrack?.get && originalMicrophoneTrack.configurable) {
+				replacementMicrophoneTrack = function () {
+					const view = streams.get(this)?.replacementView
+					return view?.isConnected ? view.microphoneTrack : originalMicrophoneTrack.get.call(this)
+				}
+				Object.defineProperty(prototype, 'microphoneTrack', { ...originalMicrophoneTrack, get: replacementMicrophoneTrack })
+			}
+		}
 		if (trackStreams) {
 			document.addEventListener('visibilitychange', onVisibility)
 			window.addEventListener('online', onOnline)
@@ -386,7 +584,7 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 			if (trackStreams) watchStream(element)
 			const image = element.shadowRoot?.querySelector('img')
 			const source = image?.getAttribute('src') ?? ''
-			if (hideControls || source.includes('/api/camera_proxy_stream/') || source.includes(STREAM_PATH)) element.requestUpdate()
+			if (hideControls || usesDashboardPreview(element) || source.includes('/api/camera_proxy_stream/') || source.includes(STREAM_PATH)) element.requestUpdate()
 		}
 	})
 

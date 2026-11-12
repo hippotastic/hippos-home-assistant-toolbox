@@ -85,10 +85,11 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 	const finishConnection = () => Object.assign(w, { hassConnection: Promise.resolve({ conn }) })
 	if (!deferConnection) finishConnection()
 	class CameraStream extends w.HTMLElement {
-		stateObj = { entity_id: 'camera.front_door' }
+		stateObj: { entity_id: string; attributes?: Record<string, unknown> } = { entity_id: 'camera.front_door' }
 		controls = true
 		_capabilities = { frontend_stream_types: [] as string[] }
 		_posterUrl: string | undefined
+		aspectRatio: number | undefined
 		updateComplete = Promise.resolve()
 		fitMode = 'cover'
 		_connection = { hassUrl: (path: string) => new URL(path, 'http://ha.example/').href }
@@ -113,12 +114,27 @@ async function fixture({ deferOpen = false, deferSubscription = false, rejectSub
 		}
 		_renderStream(transport: { type: string }) {
 			if (transport.type === 'hls' || transport.type === 'web_rtc') {
-				return { strings: ['<ha-player .muted=', ' .controls=', ' .entityid=', '></ha-player>'], values: [false, this.controls, this.stateObj.entity_id] as unknown[] }
+				return {
+					strings: ['<ha-player .muted=', ' .controls=', ' .entityid=', ' .posterUrl=', '></ha-player>'],
+					values: [false, this.controls, this.stateObj.entity_id, this._posterUrl] as unknown[],
+				}
 			}
 			return { strings: ['<img .src=', '>'], values: [`/api/camera_proxy_stream/${this.stateObj.entity_id}?token=old`] as unknown[] }
 		}
+		render(): unknown {
+			return undefined
+		}
+		toggleMicrophone() {
+			return this.stateObj.entity_id
+		}
 		requestUpdate() {
 			queueMicrotask(() => {
+				const view = this.render()
+				if (view instanceof w.HTMLElement) {
+					if (this.shadowRoot!.firstChild !== view) this.shadowRoot!.replaceChildren(view)
+					return
+				}
+				if (this.shadowRoot!.querySelector('ha-camera-stream')) this.shadowRoot!.replaceChildren(w.document.createElement('img'))
 				const result = this._renderStream({ type: 'mjpeg' })
 				const image = this.shadowRoot!.querySelector('img')
 				if (image && result.values[0] !== Symbol.for('lit-noChange')) image.src = result.values[0] as string
@@ -384,6 +400,58 @@ describe('camera bottom sheet gestures', () => {
 })
 
 describe('camera double-tap zoom', () => {
+	test('keeps an in-progress preview zoom when the first live frame changes the fit', async () => {
+		const f = await zoomFixture({ ios: true, playerTag: 'ha-web-rtc-player', mediaWidth: 0, mediaHeight: 0, viewportHeight: 400 })
+		const video = f.media as HTMLVideoElement
+		video.poster = '/camera-preview.jpg'
+		await flush()
+		const preview = (video.getRootNode() as ShadowRoot).querySelector('img[data-hippo-camera-video-preview]')!
+		Object.defineProperties(preview, { naturalWidth: { value: 800 }, naturalHeight: { value: 400 } })
+		preview.dispatchEvent(new f.w.Event('load'))
+		f.tap(350, 400)
+		f.tap(350, 400)
+		f.frame(45)
+		expect(f.view().scale).toBeGreaterThan(1)
+		expect(f.view().scale).toBeLessThan(2)
+
+		Object.defineProperties(video, { videoWidth: { value: 1920 }, videoHeight: { value: 1440 }, readyState: { value: video.HAVE_CURRENT_DATA } })
+		video.dispatchEvent(new f.w.Event('loadeddata'))
+		f.frame()
+		expect(f.view()).toEqual({ scale: 2, x: -100, y: 0 })
+	})
+
+	test.each(['hidden', 'removed'])('hands the chosen zoom and position to WebRTC when HLS is %s', async (outgoing) => {
+		const f = await zoomFixture({ playerTag: 'ha-hls-player' })
+		const oldPlayer = (f.media.getRootNode() as ShadowRoot).host
+		const player = f.w.document.createElement('ha-web-rtc-player')
+		const video = f.w.document.createElement('video')
+		const Rect = f.w.DOMRect as typeof DOMRect
+		Object.defineProperties(video, { videoWidth: { value: 800 }, videoHeight: { value: 400 }, readyState: { value: video.HAVE_CURRENT_DATA } })
+		video.getBoundingClientRect = () => {
+			const scale = Number(/scale\(([^)]+)\)/.exec(video.style.transform)?.[1] ?? 1)
+			return new Rect(100, 200, 400 * scale, 200 * scale)
+		}
+		player.classList.add('hidden')
+		player.attachShadow({ mode: 'open' }).append(video)
+		f.camera.shadowRoot!.append(player)
+		await flush()
+
+		f.tap(350, 320)
+		f.tap(350, 320)
+		f.frame(45)
+		expect(f.view().scale).toBeLessThan(2)
+		if (outgoing === 'hidden') oldPlayer.classList.add('hidden')
+		else oldPlayer.remove()
+		player.classList.remove('hidden')
+		f.camera.dispatchEvent(new f.w.Event('stream-type-changed'))
+		expect(video.style.transform).toBe('translate3d(-100px, -40px, 0) scale(2)')
+
+		f.dialog.dispatchEvent(new f.w.Event('closed'))
+		f.dialog.showDialog({ entityId: 'camera.front_door' })
+		f.frame()
+		expect(video.style.transform).toBe('translate3d(0px, 0px, 0) scale(1)')
+	})
+
 	test('zooms the iOS WebRTC preview and recognizes a pair of taps across the switch to live video', async () => {
 		const f = await zoomFixture({ ios: true, playerTag: 'ha-web-rtc-player', mediaWidth: 0, mediaHeight: 0, viewportHeight: 400, reducedMotion: true })
 		const video = f.media as HTMLVideoElement
@@ -609,6 +677,8 @@ describe('camera double-tap zoom', () => {
 
 	test('interrupts zoom when new video dimensions change the fitted image size', async () => {
 		const f = await zoomFixture({ playerTag: 'ha-web-rtc-player' })
+		Object.defineProperty(f.media, 'readyState', { value: (f.media as HTMLVideoElement).HAVE_CURRENT_DATA })
+		f.media.dispatchEvent(new f.w.Event('loadeddata'))
 		f.tap()
 		f.tap()
 		f.frame(110)
@@ -1061,14 +1131,104 @@ describe('camera frontend', () => {
 		await f.settings(false, false, false)
 		expect(f.intervals.size).toBe(0)
 		for (const type of ['hls', 'web_rtc']) {
-			expect(f.camera._renderStream({ type }).values).toEqual([false, !ios, 'camera.front_door'])
+			expect(f.camera._renderStream({ type }).values).toEqual([false, !ios, 'camera.front_door', undefined])
 		}
 		expect(f.camera.controls).toBe(true)
 		f.camera.stateObj = { entity_id: 'media_player.living_room' }
-		expect(f.camera._renderStream({ type: 'hls' }).values).toEqual([false, true, 'media_player.living_room'])
+		expect(f.camera._renderStream({ type: 'hls' }).values).toEqual([false, true, 'media_player.living_room', undefined])
 		f.camera.stateObj = { entity_id: 'camera.front_door' }
 		f.dispose()
-		expect(f.camera._renderStream({ type: 'web_rtc' }).values).toEqual([false, true, 'camera.front_door'])
+		expect(f.camera._renderStream({ type: 'web_rtc' }).values).toEqual([false, true, 'camera.front_door', undefined])
+	})
+
+	test.each([
+		{ supportsFrameCallback: true, pixelRatio: 1 },
+		{ supportsFrameCallback: false, pixelRatio: 3 },
+	])('shows the dashboard thumbnail at the display pixel density until WebRTC presents a frame (%j)', async ({ supportsFrameCallback, pixelRatio }) => {
+		const f = await fixture()
+		Object.defineProperty(f.w, 'devicePixelRatio', { value: pixelRatio })
+		const path = '/api/camera_proxy/camera.front_door'
+		const app = Object.assign(f.w.document.createElement('home-assistant'), {
+			hass: { states: { 'camera.front_door': { attributes: { entity_picture: `${path}?token=current` } } } },
+		})
+		f.w.document.body.append(app)
+		const dashboard = f.w.document.createElement('hui-image')
+		f.w.document.body.append(dashboard)
+		dashboard.attachShadow({ mode: 'open' }).append(f.camera)
+		f.camera.stateObj.attributes = { entity_picture: `${path}?token=old` }
+		f.camera._posterUrl = `${path}?authSig=expired`
+		f.camera.aspectRatio = 32 / 9
+		Object.defineProperty(f.camera, 'clientWidth', { value: 640 })
+		const player = Object.assign(f.w.document.createElement('ha-web-rtc-player'), {
+			posterUrl: undefined as string | undefined,
+			updateComplete: Promise.resolve(),
+		})
+		const root = player.attachShadow({ mode: 'open' })
+		const video = f.w.document.createElement('video')
+		let presentFrame: (() => void) | undefined
+		if (supportsFrameCallback)
+			Object.assign(video, {
+				requestVideoFrameCallback: (callback: () => void) => {
+					presentFrame = callback
+					return 1
+				},
+				cancelVideoFrameCallback: () => undefined,
+			})
+		root.append(video)
+		f.camera.shadowRoot!.append(player)
+		await f.settings(false, true, false)
+		player.posterUrl = f.camera._renderStream({ type: 'web_rtc' }).values[3] as string
+		expect(player.posterUrl).toBe(`${path}?token=current&width=${640 * pixelRatio}&height=${180 * pixelRatio}`)
+		await f.tick()
+
+		const selector = '[data-hippo-camera-cache-preview]'
+		const preview = root.querySelector<HTMLImageElement>(selector)!
+		expect(preview.getAttribute('src')).toBe(player.posterUrl)
+		Object.defineProperty(preview, 'complete', { value: true })
+		await f.tick(6000)
+		expect(root.querySelectorAll(selector)).toHaveLength(1)
+		expect(root.querySelector(selector)?.getAttribute('src')).toBe(player.posterUrl)
+		Object.defineProperty(video, 'readyState', { value: video.HAVE_CURRENT_DATA })
+		video.dispatchEvent(new f.w.Event('loadeddata'))
+		if (supportsFrameCallback) {
+			expect(root.querySelector(selector)).not.toBeNull()
+			presentFrame!()
+		}
+		expect(root.querySelector(selector)).toBeNull()
+		await f.tick()
+		expect(root.querySelector(selector)).toBeNull()
+		f.dispose()
+	})
+
+	test('uses the progressive camera cache as the native More Info poster', async () => {
+		const f = await fixture()
+		const path = '/api/camera_proxy/camera.front_door'
+		const entry = { platform: 'hippos_toolbox' }
+		const app = Object.assign(f.w.document.createElement('home-assistant'), {
+			hass: {
+				states: { 'camera.front_door': { attributes: { entity_picture: `${path}?token=current` } } },
+				entities: { 'camera.front_door': entry },
+			},
+		})
+		f.w.document.body.append(app)
+		const details = f.w.document.createElement('more-info-camera')
+		f.dialog.append(details)
+		details.attachShadow({ mode: 'open' }).append(f.camera)
+		const dashboard = f.w.document.createElement('hui-image')
+		f.w.document.body.append(dashboard)
+		const tile = Object.assign(f.w.document.createElement('ha-camera-stream'), { aspectRatio: 32 / 9 })
+		dashboard.attachShadow({ mode: 'open' }).append(tile)
+		Object.defineProperty(tile, 'clientWidth', { value: 640 })
+		Object.defineProperty(f.w, 'devicePixelRatio', { value: 2 })
+		await f.settings(false, true, false)
+
+		for (const type of ['web_rtc', 'hls']) {
+			expect(f.camera._renderStream({ type }).values[3]).toBe(`${path}?token=current&width=1280&height=360`)
+		}
+		entry.platform = 'generic'
+		f.camera._posterUrl = '/native-poster.jpg'
+		expect(f.camera._renderStream({ type: 'web_rtc' }).values[3]).toBe('/native-poster.jpg')
+		f.dispose()
 	})
 
 	test.each([
@@ -1582,6 +1742,78 @@ describe('camera frontend', () => {
 		f.dispose()
 		f.w.document.dispatchEvent(new f.w.Event('visibilitychange'))
 		expect(nativeCalls).toBe(2)
+	})
+
+	test.each(['snapshot', 'video'])('switches only the failed view to the native replacement camera (%s)', async (kind) => {
+		const f = await fixture()
+		const replacement = {
+			entity_id: 'camera.front_door_backup',
+			attributes: {
+				supported_features: kind === 'video' ? 2 : 0,
+				hippos_toolbox_replacement_camera: f.camera.stateObj.entity_id,
+			},
+		}
+		const app = Object.assign(f.w.document.createElement('home-assistant'), { hass: { states: { [replacement.entity_id]: replacement } } })
+		f.w.document.body.append(app)
+		f.camera.stateObj.attributes = { hippos_toolbox_replacement_camera: replacement.entity_id }
+		const primary = f.w.document.createElement('ha-camera-stream') as typeof f.camera
+		primary.stateObj = f.camera.stateObj
+		f.w.document.body.append(primary)
+		const attach = (stream: typeof f.camera, hasVideo: boolean) => {
+			const player = Object.assign(f.w.document.createElement('ha-web-rtc-player'), { microphoneState: 'off', posterUrl: '/main-cache.jpg' })
+			const video = f.w.document.createElement('video')
+			if (hasVideo) Object.defineProperties(video, { videoWidth: { value: 1920 }, readyState: { value: 2 } })
+			player.attachShadow({ mode: 'open' }).append(video)
+			stream.shadowRoot!.replaceChildren(player)
+			return player
+		}
+		const failed = attach(f.camera, false)
+		const working = attach(primary, true)
+		await f.send({ protocol: 1, camera_zoom: false, camera_recovery: false, camera_stream_cleanup: false, automatic_video: true })
+
+		await f.tick(14000)
+		expect(failed.isConnected).toBe(true)
+		failed.microphoneState = 'connecting'
+		await f.tick(2000)
+		expect(failed.isConnected).toBe(true)
+		failed.microphoneState = 'off'
+		await f.tick()
+
+		const view = f.camera.shadowRoot!.querySelector('ha-camera-stream') as typeof f.camera
+		expect(view.stateObj).toBe(replacement)
+		expect(view.controls).toBe(f.camera.controls)
+		expect(failed.isConnected).toBe(false)
+		expect(working.isConnected).toBe(true)
+		if (kind === 'video') expect(f.camera.toggleMicrophone()).toBe(replacement.entity_id)
+		expect(view.style.backgroundImage).toContain('/main-cache.jpg')
+		view.dispatchEvent(new f.w.CustomEvent('streams', { detail: { hasVideo: false } }))
+		expect(view.style.backgroundImage).toContain('/main-cache.jpg')
+		if (kind === 'snapshot') {
+			const image = view.shadowRoot!.querySelector('img')!
+			Object.defineProperty(image, 'naturalWidth', { value: 3840 })
+			view.dispatchEvent(new f.w.Event('load'))
+		} else {
+			view.dispatchEvent(new f.w.CustomEvent('streams', { detail: { hasVideo: true } }))
+		}
+		expect(view.style.backgroundImage).toBe('')
+		expect(view.style.aspectRatio).toBe('')
+
+		// Two cameras may name each other as replacement. A fallback view only
+		// uses HA's native playback, so its failure cannot start another fallback.
+		const alternatePlayer = attach(view, false)
+		alternatePlayer.dispatchEvent(new f.w.CustomEvent('streams', { detail: { hasVideo: false } }))
+		await f.tick(17000)
+		expect(view.shadowRoot!.querySelector('ha-camera-stream')).toBeNull()
+		expect(working.isConnected).toBe(true)
+
+		working.dispatchEvent(new f.w.CustomEvent('streams', { detail: { hasVideo: false } }))
+		await flush()
+		expect((primary.shadowRoot!.querySelector('ha-camera-stream') as typeof f.camera).stateObj).toBe(replacement)
+
+		f.dispose()
+		await flush()
+		expect(view.isConnected).toBe(false)
+		expect(f.camera.stateObj.entity_id).toBe('camera.front_door')
 	})
 
 	test('releases detached zoom media and can enhance the same media when reinserted', async () => {

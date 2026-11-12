@@ -21,16 +21,12 @@
           "data": {
             "name": "Name",
             "source_entity_id": "Source camera",
-            "preview_entity_id": "Separate preview camera",
-            "transcode_h264": "Convert video to H.264 when needed",
-            "pace_video": "Smooth video delivery",
+            "fallback_entity_id": "Replacement camera",
             "repack_pcmu": "Apply PCMU audio compatibility"
           },
           "data_description": {
-            "source_entity_id": "Provides the live view and, by default, the preview image.",
-            "preview_entity_id": "Optional source for faster or lower-resolution preview images.",
-            "transcode_h264": "Use browser-compatible H.264 for RTSP video served by go2rtc.",
-            "pace_video": "Reduce bursts of frames from RTSP sources. This can add a small delay.",
+            "source_entity_id": "Provides the live view and the preview image.",
+            "fallback_entity_id": "Optional camera to show when the main camera's video fails. The replacement uses its own live stream or snapshots.",
             "repack_pcmu": "Group 8 kHz PCMU packets for compatible RTSP camera speakers."
           },
           "description": "Show a cached preview first, then use WebRTC or JPEG updates according to the source camera.",
@@ -40,16 +36,12 @@
           "data": {
             "name": "Name",
             "source_entity_id": "Source camera",
-            "preview_entity_id": "Separate preview camera",
-            "transcode_h264": "Convert video to H.264 when needed",
-            "pace_video": "Smooth video delivery",
+            "fallback_entity_id": "Replacement camera",
             "repack_pcmu": "Apply PCMU audio compatibility"
           },
           "data_description": {
-            "source_entity_id": "Provides the live view and, by default, the preview image.",
-            "preview_entity_id": "Optional source for faster or lower-resolution preview images.",
-            "transcode_h264": "Use browser-compatible H.264 for RTSP video served by go2rtc.",
-            "pace_video": "Reduce bursts of frames from RTSP sources. This can add a small delay.",
+            "source_entity_id": "Provides the live view and the preview image.",
+            "fallback_entity_id": "Optional camera to show when the main camera's video fails. The replacement uses its own live stream or snapshots.",
             "repack_pcmu": "Group 8 kHz PCMU packets for compatible RTSP camera speakers."
           },
           "title": "Configure progressive snapshot camera"
@@ -59,6 +51,7 @@
         "duplicate_source": "A progressive snapshot camera already uses this source.",
         "invalid_name": "Enter a name.",
         "invalid_source": "Select an existing camera entity.",
+        "same_fallback_source": "Choose a replacement other than this camera or its main source.",
         "source_is_progressive_camera": "Select an original camera entity, not another progressive snapshot camera."
       }
     },

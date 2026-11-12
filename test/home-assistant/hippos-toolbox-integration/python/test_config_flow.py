@@ -35,12 +35,11 @@ from custom_components.hippos_toolbox.const import (
     CONF_RESOLVED_WARNING_NOTIFICATIONS,
     CONF_RESOLVED_ALARM_NOTIFICATIONS,
     MONITORING_SUBENTRY_TYPE,
-    CONF_PACE_VIDEO,
-    CONF_PREVIEW_ENTITY_ID,
+    CONF_FALLBACK_ENTITY_ID,
+    CONF_REPACK_PCMU,
     CONF_SOURCE_ENTITY_ID,
     CONF_UPDATE_CHANNEL,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
-    PROGRESSIVE_CAMERA_OPTIMIZATIONS,
     UPDATE_CHANNEL_DEVELOPMENT,
     UPDATE_CHANNEL_STABLE,
 )
@@ -116,24 +115,36 @@ class ProgressiveCameraSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             {CONF_SOURCE_ENTITY_ID: "camera.front_door_snapshot"},
         )
 
-    async def test_optimizations_default_on_and_save_only_explicit_overrides(self) -> None:
+    async def test_accepts_another_toolbox_camera_as_replacement(self) -> None:
         flow, entry = self._flow_and_entry()
         source = {CONF_NAME: "Porch", CONF_SOURCE_ENTITY_ID: "camera.porch"}
         with (
             patch.object(flow, "_get_entry", return_value=entry),
             patch.object(flow, "_source_validation_error", return_value=None),
+            patch(
+                "custom_components.hippos_toolbox.config_flow.er.async_get",
+                return_value=SimpleNamespace(async_get=lambda _: SimpleNamespace(platform="hippos_toolbox", unique_id="other")),
+            ),
         ):
             form = await flow.async_step_user()
             values = form["data_schema"](source)
-            self.assertTrue(all(values[key] for key in PROGRESSIVE_CAMERA_OPTIMIZATIONS))
+            self.assertNotIn("pace_video", values)
+            self.assertNotIn("transcode_h264", values)
+            self.assertNotIn("webrtc_tcp", values)
+            self.assertTrue(values[CONF_REPACK_PCMU])
             result = await flow.async_step_user(
-                values | {CONF_PACE_VIDEO: False, CONF_PREVIEW_ENTITY_ID: "camera.porch_preview"}
+                values | {
+                    CONF_FALLBACK_ENTITY_ID: "camera.porch_low",
+                }
+            )
+            duplicate = await flow.async_step_user(
+                values | {CONF_FALLBACK_ENTITY_ID: "camera.porch"}
             )
         self.assertEqual(result["data"], {
             CONF_SOURCE_ENTITY_ID: "camera.porch",
-            CONF_PREVIEW_ENTITY_ID: "camera.porch_preview",
-            CONF_PACE_VIDEO: False,
+            CONF_FALLBACK_ENTITY_ID: "camera.porch_low",
         })
+        self.assertEqual(duplicate["errors"], {CONF_FALLBACK_ENTITY_ID: "same_fallback_source"})
 
     async def test_rejects_duplicate_and_toolbox_sources(self) -> None:
         existing = config_entries.ConfigSubentry(
@@ -180,10 +191,31 @@ class ProgressiveCameraSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             {CONF_SOURCE_ENTITY_ID: "source_is_progressive_camera"},
         )
 
-    async def test_reconfigure_allows_current_source_and_updates_title(self) -> None:
+    async def test_accepts_a_snapshot_camera_without_a_registry_entry(self) -> None:
+        flow, entry = self._flow_and_entry()
+        flow.hass.states = {"camera.porch_still": object()}
+        with (
+            patch.object(flow, "_get_entry", return_value=entry),
+            patch.object(flow, "_source_validation_error", return_value=None),
+            patch("custom_components.hippos_toolbox.config_flow.er.async_get",
+                  return_value=SimpleNamespace(async_get=lambda _: None)),
+        ):
+            result = await flow.async_step_user({
+                CONF_NAME: "Porch",
+                CONF_SOURCE_ENTITY_ID: "camera.porch",
+                CONF_FALLBACK_ENTITY_ID: "camera.porch_still",
+            })
+        self.assertEqual(result["type"], FlowResultType.CREATE_ENTRY)
+        self.assertEqual(result["data"][CONF_FALLBACK_ENTITY_ID], "camera.porch_still")
+
+    async def test_reconfigure_drops_legacy_settings_and_keeps_source(self) -> None:
         existing = config_entries.ConfigSubentry(
             data=MappingProxyType(
-                {CONF_SOURCE_ENTITY_ID: "camera.front_door_snapshot"}
+                {
+                    CONF_SOURCE_ENTITY_ID: "camera.front_door_snapshot",
+                    "preview_entity_id": "camera.front_door_preview",
+                    "webrtc_tcp": True,
+                }
             ),
             subentry_id="existing",
             subentry_type=PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
@@ -209,6 +241,9 @@ class ProgressiveCameraSubentryFlowTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(flow, "_source_validation_error", return_value=None),
         ):
+            form = await flow.async_step_reconfigure()
+            self.assertNotIn("preview_entity_id", form["data_schema"].schema)
+            self.assertNotIn("webrtc_tcp", form["data_schema"].schema)
             result = await flow.async_step_reconfigure(
                 {
                     CONF_NAME: "New name",
