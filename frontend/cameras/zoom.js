@@ -733,7 +733,7 @@ export function installCameraZoom() {
 		return null
 	}
 
-	function fitMediaToViewport(media, previewImage) {
+	function fitMediaToViewport(media, previewImage, previousAspectRatio) {
 		const viewport = getCameraViewport(media)
 		if (!viewport) return null
 
@@ -777,7 +777,8 @@ export function installCameraZoom() {
 		}
 
 		const previewAspectRatio = previewImage?.naturalWidth / previewImage?.naturalHeight || 0
-		const { width, height } = calculateContainedSize(viewport.rect.width, viewport.rect.height, getUsableMediaAspectRatio(media) || previewAspectRatio)
+		const aspectRatio = (media.naturalWidth === 1 ? 0 : getUsableMediaAspectRatio(media)) || previewAspectRatio || previousAspectRatio
+		const { width, height } = calculateContainedSize(viewport.rect.width, viewport.rect.height, aspectRatio)
 
 		if (!width || !height) {
 			// Let object-fit contain the image or poster in the stage before its dimensions are known.
@@ -852,11 +853,14 @@ export function installCameraZoom() {
 		const pointers = new Map()
 		const dialog = findComposedAncestor(media, 'HA-MORE-INFO-DIALOG')
 		const cameraStream = findComposedAncestor(media, 'HA-CAMERA-STREAM')
-		const entityId = cameraStream.stateObj?.entity_id ?? dialog?._entityId
-		let view = cameraViews.get(cameraStream)
+		const replacement = cameraStream.hasAttribute('data-hippo-camera-replacement')
+		// The nested replacement player is still part of the same open view.
+		const viewStream = (replacement && findComposedAncestor(composedParent(cameraStream), 'HA-CAMERA-STREAM')) || cameraStream
+		const entityId = viewStream.stateObj?.entity_id ?? dialog?._entityId
+		let view = cameraViews.get(viewStream)
 		if (!view || view.entityId !== entityId) {
 			view = { entityId }
-			cameraViews.set(cameraStream, view)
+			cameraViews.set(viewStream, view)
 		}
 		const mediaRoot = media.getRootNode()
 		const previewRoot = IS_IOS_WEBKIT && media.tagName === 'VIDEO' && PLAYER_TAGS.has(mediaRoot.host?.tagName) ? mediaRoot : null
@@ -895,7 +899,13 @@ export function installCameraZoom() {
 		if (media.tagName === 'VIDEO' && !IS_IOS_WEBKIT) media.controls = false
 		const isVisible = (element) => element?.isConnected && !element.getRootNode().host?.classList.contains('hidden')
 		const saveView = () => {
-			if (view.owner === media && isVisible(media)) view.current = { state: zoomDestination ?? state, width: fittedWidth, height: fittedHeight }
+			if (view.owner !== media || !isVisible(media)) return
+			view.current = { state: zoomDestination ?? state, width: fittedWidth, height: fittedHeight }
+			// The replacement keeps showing the primary cache while its media loads.
+			if (fittedWidth && fittedHeight) {
+				viewStream.style.setProperty('--hippo-camera-preview-size', `${fittedWidth * state.scale}px ${fittedHeight * state.scale}px`)
+				viewStream.style.setProperty('--hippo-camera-preview-position', `calc(50% + ${state.x}px) calc(50% + ${state.y}px)`)
+			}
 		}
 
 		const renderState = () => {
@@ -959,9 +969,10 @@ export function installCameraZoom() {
 			const previousWidth = media.style.width
 			const previousHeight = media.style.height
 			const previousFit = { width: fittedWidth, height: fittedHeight }
-			const startingVideo = media.tagName === 'VIDEO' && !sawLiveFrame
-			sawLiveFrame ||= media.readyState >= 2 && media.videoWidth > 0
-			const viewport = fitMediaToViewport(media, previewImage)
+			const startingMedia = !sawLiveFrame && (media.tagName === 'VIDEO' || replacement)
+			sawLiveFrame ||= media.tagName === 'VIDEO' ? media.readyState >= 2 && media.videoWidth > 0 : media.naturalWidth > 1
+			const previousAspectRatio = replacement && view.current?.width / view.current?.height
+			const viewport = fitMediaToViewport(media, previewImage, previousAspectRatio)
 			const nextRect = viewport?.rect ?? null
 			const geometryChanged =
 				media.style.width !== previousWidth || media.style.height !== previousHeight || viewportRect?.width !== nextRect?.width || viewportRect?.height !== nextRect?.height
@@ -978,7 +989,7 @@ export function installCameraZoom() {
 			// Playback events also refit the media. Preserve ongoing motion unless
 			// fitting changes the video size or the available travel at the edge.
 			if (geometryChanged) {
-				if (!carriedView && startingVideo && (zoomDestination || state.scale > MIN_SCALE)) carriedView = { ...previousFit, state: zoomDestination ?? state }
+				if (!carriedView && startingMedia && (zoomDestination || state.scale > MIN_SCALE)) carriedView = { ...previousFit, state: zoomDestination ?? state }
 				if (panOrigin) {
 					panOrigin.bounds = null
 					if (panOrigin.samples) panOrigin.samples.length = 0
@@ -1385,7 +1396,7 @@ export function installCameraZoom() {
 			dialog,
 			'closed',
 			() => {
-				cameraViews.delete(cameraStream)
+				cameraViews.delete(viewStream)
 				cleanup()
 			},
 			{ once: true }

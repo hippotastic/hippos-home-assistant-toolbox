@@ -314,6 +314,7 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 						// replacement view itself cannot activate another replacement.
 						const view = document.createElement('ha-camera-stream')
 						replacementViews.add(view)
+						view.setAttribute('data-hippo-camera-replacement', '')
 						view.stateObj = alternate
 						if (!window.isSecureContext) {
 							// The app's HTTP microphone bridge uses the dialog's primary entity.
@@ -322,7 +323,10 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 						const poster = player.posterUrl ?? stream._posterUrl
 						if (poster) {
 							view.style.aspectRatio = String(stream.aspectRatio ?? 16 / 9)
-							view.style.background = `center / contain no-repeat url(${JSON.stringify(poster)})`
+							view.style.backgroundImage = `url(${JSON.stringify(poster)})`
+							view.style.backgroundRepeat = 'no-repeat'
+							view.style.backgroundSize = 'var(--hippo-camera-preview-size, contain)'
+							view.style.backgroundPosition = 'var(--hippo-camera-preview-position, center)'
 							const removePoster = (event) => {
 								const hasImage = view.shadowRoot?.querySelector('img')?.naturalWidth > 1
 								if (!hasImage && !(event.type === 'streams' && event.detail?.hasVideo)) return
@@ -339,6 +343,7 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 						stream.dispatchEvent(new CustomEvent('camera-capabilities-changed', { bubbles: true, composed: true, detail: {} }))
 						stream.requestUpdate()
 					})
+					state.videoFallback.check()
 				}
 			}
 		}
@@ -366,6 +371,7 @@ export function installCameraRecovery({ recovery = true, cleanup = true, hideCon
 
 	function onOnline() {
 		for (const [stream, state] of streams) {
+			state.videoFallback?.resetDeadline()
 			const image = stream.shadowRoot?.querySelector('img')
 			if (image && (state.managedEntity || (recovery && (image.naturalWidth === 0 || hlsFallback(stream, image))))) {
 				recover(stream, state, state.managedEntity ? undefined : 'Network online again')

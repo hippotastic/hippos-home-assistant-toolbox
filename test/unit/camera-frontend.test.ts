@@ -400,6 +400,42 @@ describe('camera bottom sheet gestures', () => {
 })
 
 describe('camera double-tap zoom', () => {
+	test('carries the zoomed iOS preview through the replacement camera’s first JPEG', async () => {
+		const f = await zoomFixture({ ios: true, playerTag: 'ha-web-rtc-player', reducedMotion: true })
+		const replacement = { entity_id: 'camera.front_door_backup', attributes: {} }
+		const app = Object.assign(f.w.document.createElement('home-assistant'), { hass: { states: { [replacement.entity_id]: replacement } } })
+		f.w.document.body.append(app)
+		f.camera.stateObj.attributes = { hippos_toolbox_replacement_camera: replacement.entity_id }
+		const player = Object.assign((f.media.getRootNode() as ShadowRoot).host, { posterUrl: '/main-cache.jpg' })
+		await f.send({ protocol: 1, camera_zoom: true, camera_recovery: false, camera_stream_cleanup: false, automatic_video: true })
+		f.tap(350, 320)
+		f.tap(350, 320)
+		expect(f.view()).toEqual({ scale: 2, x: -100, y: -40 })
+
+		const originalRect = f.w.HTMLImageElement.prototype.getBoundingClientRect
+		const Rect = f.w.DOMRect as typeof DOMRect
+		f.w.HTMLImageElement.prototype.getBoundingClientRect = function () {
+			if (!(this.getRootNode() as ShadowRoot).host?.hasAttribute('data-hippo-camera-replacement')) return originalRect.call(this)
+			const scale = Number(/scale\(([^)]+)\)/.exec(this.style.transform)?.[1] ?? 1)
+			return new Rect(100, 200, parseFloat(this.style.width) * scale, parseFloat(this.style.height) * scale)
+		}
+		player.dispatchEvent(new f.w.CustomEvent('streams', { detail: { hasVideo: false } }))
+		await flush()
+		const view = f.camera.shadowRoot!.querySelector('ha-camera-stream') as typeof f.camera
+		const image = view.shadowRoot!.querySelector('img')!
+		expect(view.style.backgroundImage).toContain('/main-cache.jpg')
+		expect(view.style.backgroundSize).toContain('--hippo-camera-preview-size')
+		expect(f.camera.style.getPropertyValue('--hippo-camera-preview-size')).toBe('800px 400px')
+		expect(image.style.transform).toBe('translate(-100px, -40px) scale(2)')
+
+		// A narrower replacement needs a proportionally smaller offset to show the same point.
+		Object.defineProperties(image, { naturalWidth: { value: 1500 }, naturalHeight: { value: 1000 } })
+		image.dispatchEvent(new f.w.Event('load'))
+		expect(image.style.transform).toBe('translate(-75px, -40px) scale(2)')
+		f.dialog.dispatchEvent(new f.w.Event('closed'))
+		expect(image.style.transform).toBe('')
+	})
+
 	test('keeps an in-progress preview zoom when the first live frame changes the fit', async () => {
 		const f = await zoomFixture({ ios: true, playerTag: 'ha-web-rtc-player', mediaWidth: 0, mediaHeight: 0, viewportHeight: 400 })
 		const video = f.media as HTMLVideoElement
@@ -1814,6 +1850,31 @@ describe('camera frontend', () => {
 		await flush()
 		expect(view.isConnected).toBe(false)
 		expect(f.camera.stateObj.entity_id).toBe('camera.front_door')
+	})
+
+	test.each(['failed', 'checking', 'connected'])('handles WebRTC startup with ICE %s', async (iceState) => {
+		const f = await fixture({ ios: true })
+		const replacement = { entity_id: 'camera.front_door_backup', attributes: {} }
+		const app = Object.assign(f.w.document.createElement('home-assistant'), { hass: { states: { [replacement.entity_id]: replacement } } })
+		f.w.document.body.append(app)
+		f.camera.stateObj.attributes = { hippos_toolbox_replacement_camera: replacement.entity_id }
+		const peer = Object.assign(new f.w.EventTarget(), { iceConnectionState: 'checking' })
+		const player = Object.assign(f.w.document.createElement('ha-web-rtc-player'), { _peerConnection: peer })
+		f.camera.shadowRoot!.replaceChildren(player)
+		await f.send({ protocol: 1, camera_zoom: false, camera_recovery: false, camera_stream_cleanup: false, automatic_video: true })
+		peer.iceConnectionState = iceState
+		peer.dispatchEvent(new f.w.Event('iceconnectionstatechange'))
+		await flush()
+		expect(player.isConnected).toBe(iceState !== 'failed')
+		await f.tick(4999)
+		expect(player.isConnected).toBe(iceState !== 'failed')
+		await f.tick(1)
+		expect(player.isConnected).toBe(iceState === 'connected')
+		if (iceState === 'connected') {
+			await f.tick(10000)
+			expect(player.isConnected).toBe(false)
+		}
+		expect((f.camera.shadowRoot!.querySelector('ha-camera-stream') as typeof f.camera).stateObj).toBe(replacement)
 	})
 
 	test('releases detached zoom media and can enhance the same media when reinserted', async () => {
