@@ -1,5 +1,17 @@
 # hippos-home-assistant-toolbox
 
+## 0.19.0
+
+### Minor Changes
+
+- 643ed14: Progressive cameras now use the main camera for their cached preview. Existing entries switch to their main camera automatically, and the separate preview camera setting has been removed.
+
+### Patch Changes
+
+- 643ed14: Use frames from the source camera's video stream for cached previews so colors and contrast better match the live picture. Native MJPEG and still-only cameras continue to use the JPEG images provided by their source.
+- 643ed14: Size cached JPEG previews for the dashboard card and the display's pixel density. Show the cached image while live video starts in the More Info dialog and preserve the zoom and position as the live image takes over.
+- 643ed14: Progressive cameras use the source camera's video codec and let WebRTC negotiate its connection. The video conversion, smoothing, and TCP-only settings have been removed. Configure a replacement camera to show its live stream or JPEG updates in a view where the main WebRTC video fails.
+
 ## 0.18.2
 
 ### Patch Changes
