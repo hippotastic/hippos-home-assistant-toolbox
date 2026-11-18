@@ -4,28 +4,27 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { parseCatalog, serializeCatalog, synchronizedCatalog, validateCatalogCompatibility } from './catalog.ts'
+import { BLUEPRINT_DIRECTORY, parseCatalog, serializeCatalog, synchronizedCatalog, validateCatalogCompatibility } from './catalog.ts'
 
 type Mode = 'check' | 'sync'
+
+const catalogPathInRepo = `${BLUEPRINT_DIRECTORY}/catalog.json`
 
 function usage(): string {
 	return `Usage: node tools/blueprint-catalog/cli.ts <sync|check> [--base GIT_REF]\n`
 }
 
 function baseCatalog(repoRoot: string, reference: string): ReturnType<typeof parseCatalog> {
-	const result = spawnSync('git', ['show', `${reference}:blueprints/catalog.json`], {
-		cwd: repoRoot,
-		encoding: 'utf8',
-	})
-
-	if (result.error) {
-		throw result.error
-	}
-	if (result.status !== 0) {
-		throw new Error(`Unable to read blueprint catalog from ${reference}: ${result.stderr.trim()}`)
+	let error = ''
+	// Existing branches and releases store the same catalog at the repository root.
+	for (const path of [catalogPathInRepo, 'blueprints/catalog.json']) {
+		const result = spawnSync('git', ['show', `${reference}:${path}`], { cwd: repoRoot, encoding: 'utf8' })
+		if (result.error) throw result.error
+		if (result.status === 0) return parseCatalog(result.stdout, `${reference}:${path}`)
+		error = result.stderr.trim()
 	}
 
-	return parseCatalog(result.stdout, `${reference}:blueprints/catalog.json`)
+	throw new Error(`Unable to read blueprint catalog from ${reference}: ${error}`)
 }
 
 function main(): void {
@@ -50,7 +49,7 @@ function main(): void {
 
 	const toolDirectory = dirname(fileURLToPath(import.meta.url))
 	const repoRoot = join(toolDirectory, '..', '..')
-	const catalogPath = join(repoRoot, 'blueprints', 'catalog.json')
+	const catalogPath = join(repoRoot, catalogPathInRepo)
 	const source = existsSync(catalogPath) ? readFileSync(catalogPath, 'utf8') : undefined
 	const current = source === undefined ? undefined : parseCatalog(source, catalogPath)
 	const expectedSource = serializeCatalog(synchronizedCatalog(repoRoot, current))

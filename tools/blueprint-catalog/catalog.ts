@@ -4,6 +4,7 @@ import { basename, extname, join, relative, sep } from 'node:path'
 import { parseDocument } from 'yaml'
 
 export const CATALOG_SCHEMA_VERSION = 1
+export const BLUEPRINT_DIRECTORY = 'custom_components/hippos_toolbox/blueprints'
 export const SUPPORTED_BLUEPRINT_DOMAINS = ['automation', 'script', 'template'] as const
 
 export type BlueprintDomain = (typeof SUPPORTED_BLUEPRINT_DOMAINS)[number]
@@ -120,7 +121,7 @@ function parseBlueprint(source: string, path: string): { domain: BlueprintDomain
 }
 
 function scanBlueprints(repoRoot: string): ScannedBlueprint[] {
-	const blueprintRoot = join(repoRoot, 'blueprints')
+	const blueprintRoot = join(repoRoot, BLUEPRINT_DIRECTORY)
 	const result: ScannedBlueprint[] = []
 
 	for (const domain of SUPPORTED_BLUEPRINT_DOMAINS) {
@@ -136,7 +137,7 @@ function scanBlueprints(repoRoot: string): ScannedBlueprint[] {
 			result.push({
 				domain,
 				name: metadata.name,
-				path: posixPath(relative(repoRoot, file)),
+				path: `blueprints/${posixPath(relative(blueprintRoot, file))}`,
 				sha256: blueprintHash(source),
 			})
 		}

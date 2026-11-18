@@ -7,7 +7,6 @@ blueprint:
     each cycle's demand across the available daily start times. Shortly before
     every start time, it asks the zone calculations to prepare the upcoming slot.
   domain: automation
-  source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/irrigation_scheduler.yaml
   author: Hippo
   homeassistant:
     min_version: 2024.6.0

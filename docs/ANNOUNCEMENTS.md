@@ -83,4 +83,4 @@ Audio preparation has a 60-second timeout. Playback is bounded by the audio dura
 
 Use the corresponding Toolbox action in place of a separate playback, volume, and delay sequence. Select the player through the action target and the audio file through `media`. Text announcements take `engine_id` and `message` instead. Both actions include the duration-based wait.
 
-These actions are integration code. Installing an integration release and restarting Home Assistant makes them available; switching the blueprint update channel alone does not install them.
+Install the toolbox and restart Home Assistant to make these actions available.

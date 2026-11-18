@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class CatalogEntry:
-    """A published blueprint catalog entry."""
+    """An entry in the bundled blueprint catalog."""
 
     id: str
     name: str
@@ -15,16 +15,6 @@ class CatalogEntry:
     status: str
     deprecated_message: str | None = None
     replacement: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class RemoteSnapshot:
-    """A catalog and all metadata needed to fetch its exact revision."""
-
-    entries: tuple[CatalogEntry, ...]
-    revision: str
-    commit_sha: str
-    release_url: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,19 +33,3 @@ class AffectedAutomation:
     name: str
     automation_id: str | None
     missing_inputs: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class CoordinatorData:
-    """Current collection state exposed to Home Assistant entities."""
-
-    snapshot: RemoteSnapshot
-    blueprints: tuple[BlueprintState, ...]
-    update_ids: tuple[str, ...]
-    conflict_ids: tuple[str, ...]
-
-    @property
-    def update_available(self) -> bool:
-        """Return whether at least one blueprint can be updated safely."""
-
-        return bool(self.update_ids)

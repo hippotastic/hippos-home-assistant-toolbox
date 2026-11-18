@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { blueprintHash, canonicalizeBlueprintContent, synchronizedCatalog, validateCatalogCompatibility } from '../../tools/blueprint-catalog/catalog.ts'
+import { BLUEPRINT_DIRECTORY, blueprintHash, canonicalizeBlueprintContent, synchronizedCatalog, validateCatalogCompatibility } from '../../tools/blueprint-catalog/catalog.ts'
 
 const temporaryDirectories: string[] = []
 
@@ -14,7 +14,7 @@ function temporaryRepo(): string {
 }
 
 function writeBlueprint(repoRoot: string, domain: string, filename: string, name: string): string {
-	const directory = join(repoRoot, 'blueprints', domain)
+	const directory = join(repoRoot, BLUEPRINT_DIRECTORY, domain)
 	mkdirSync(directory, { recursive: true })
 	const path = join(directory, filename)
 	writeFileSync(path, `blueprint:\n  name: ${name}\n  domain: ${domain}\n`, 'utf8')
@@ -63,7 +63,7 @@ describe('synchronizedCatalog', () => {
 		const repoRoot = temporaryRepo()
 		writeBlueprint(repoRoot, 'automation', 'example.yaml', 'Example')
 		const catalog = synchronizedCatalog(repoRoot)
-		rmSync(join(repoRoot, 'blueprints', 'automation', 'example.yaml'))
+		rmSync(join(repoRoot, BLUEPRINT_DIRECTORY, 'automation', 'example.yaml'))
 
 		expect(() => synchronizedCatalog(repoRoot, catalog)).toThrow(/mark it deprecated/)
 	})
@@ -74,7 +74,7 @@ describe('synchronizedCatalog', () => {
 		const catalog = synchronizedCatalog(repoRoot)
 		const entry = catalog.blueprints[0]
 		catalog.blueprints[0] = { ...entry, status: 'deprecated', deprecated_message: 'Use another blueprint.' }
-		rmSync(join(repoRoot, 'blueprints', 'automation', 'example.yaml'))
+		rmSync(join(repoRoot, BLUEPRINT_DIRECTORY, 'automation', 'example.yaml'))
 
 		expect(synchronizedCatalog(repoRoot, catalog)).toEqual(catalog)
 	})

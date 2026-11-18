@@ -10,7 +10,6 @@ from custom_components.hippos_toolbox.const import (
     CAMERA_FRONTEND_PROTOCOL,
     CONF_CAMERA_STREAM_CLEANUP,
     CONF_SOURCE_ENTITY_ID,
-    CONF_UPDATE_CHANNEL,
     MONITORING_SUBENTRY_TYPE,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
 )
@@ -45,7 +44,7 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
             entry_id="toolbox",
             options={},
             subentries={},
-            runtime_data=SimpleNamespace(update_channel="stable", camera_subentries={}, monitoring_subentries={}),
+            runtime_data=SimpleNamespace(camera_subentries={}, monitoring_subentries={}),
         )
 
     def subscribe(self):
@@ -133,9 +132,6 @@ class FrontendTests(unittest.IsolatedAsyncioTestCase):
             await _async_reload_entry(self.hass, self.entry)
             stop.assert_called_once_with(self.hass)
         self.hass.config_entries.async_reload.assert_not_awaited()
-        self.entry.options[CONF_UPDATE_CHANNEL] = "development"
-        await _async_reload_entry(self.hass, self.entry)
-        self.hass.config_entries.async_reload.assert_awaited_once_with("toolbox")
 
     async def test_camera_subentry_changes_still_reload_the_integration(self):
         self.hass.config_entries = SimpleNamespace(async_reload=AsyncMock())

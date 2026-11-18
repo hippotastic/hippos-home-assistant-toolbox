@@ -8,7 +8,7 @@
 
 ## Requirements
 
-Install the [toolbox integration](../README.md#installation) to make the blueprint available, or import it manually. Create or select:
+Install the [toolbox integration](../README.md#installation) to get the [blueprint](../custom_components/hippos_toolbox/blueprints/automation/push_button_music_controller.yaml). Create or select:
 
 - one `binary_sensor`, `input_boolean`, or `switch` for the button;
 - optionally, a distinct second entity from the same domains for dedicated volume-down control;

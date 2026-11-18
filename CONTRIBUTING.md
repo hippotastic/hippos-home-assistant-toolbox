@@ -8,7 +8,7 @@ Install dependencies with:
 pnpm install
 ```
 
-Commit blueprint changes and the synchronized `blueprints/catalog.json` to `main`, then select the Development channel on a test Home Assistant instance. Development users receive those changes directly from `main`; Stable users do not receive them until they are included in a published release. New blueprints and deprecation tombstones follow the same process.
+The blueprint sources and catalog live in `custom_components/hippos_toolbox/blueprints/`. To test unreleased blueprint changes on a test instance, install the integration from the development checkout and restart Home Assistant.
 
 Before creating a commit, run the canonical local validation suite and require it to pass:
 
@@ -16,7 +16,7 @@ Before creating a commit, run the canonical local validation suite and require i
 pnpm validate
 ```
 
-`pnpm validate` is the complete local check. It synchronizes the generated blueprint catalog, then runs ESLint, catalog consistency and compatibility against `origin/main`, TypeScript, and unit tests. Next, the official hassfest and HACS containers validate the integration and repository. Finally, one Vitest run starts a network-isolated Home Assistant container and executes both repository validation and blueprint runtime tests. Every stage must pass before a commit. Commit an updated `blueprints/catalog.json` alongside its blueprint changes. The YAML linter reports lines longer than 140 characters as warnings.
+`pnpm validate` is the complete local check. It synchronizes the generated blueprint catalog, then runs ESLint, catalog consistency and compatibility against `origin/main`, TypeScript, and unit tests. Next, the official hassfest and HACS containers validate the integration and repository. Finally, one Vitest run starts a network-isolated Home Assistant container and executes both repository validation and blueprint runtime tests. Every stage must pass before a commit. Commit the updated catalog alongside its blueprint changes. The YAML linter reports lines longer than 140 characters as warnings.
 
 Reserve full validation for commits, rather than every reply or handoff. During development, use focused checks when needed. Changes to the validation pipeline itself require exercising that pipeline. After a successful validation, do not repeat checks unless the working tree changed or new evidence calls the result into question.
 
@@ -30,4 +30,4 @@ Catalog maintenance and deprecation rules are documented in `tools/blueprint-cat
 
 ## Releases
 
-User-visible changes carry a Changeset. Pushes to `main` maintain a draft release pull request containing the next semantic version and generated changelog. Merging that pull request synchronizes the integration manifest, creates the matching Git tag, and publishes a GitHub Release. The Stable update channel reads blueprint content from that immutable release.
+User-visible changes carry a Changeset. Pushes to `main` maintain a draft release pull request containing the next semantic version and generated changelog. Merging that pull request synchronizes the integration manifest, creates the matching Git tag, and publishes a GitHub Release. Each release includes its matching blueprint sources and catalog.

@@ -8,14 +8,14 @@
 
 ## Before you start
 
-Install the [toolbox integration](../README.md#installation) to make both blueprints available, or import them manually. You need valve switches, a sensor for rain duration over the last 24 hours, and a sensor for the maximum temperature over that period. Rain must be a percentage of time with detected rain, not precipitation in millimetres. Temperature must be in degrees Celsius. Soil moisture and a master pump are optional.
+Install the [toolbox integration](../README.md#installation) to make both blueprints available. You need valve switches, a sensor for rain duration over the last 24 hours, and a sensor for the maximum temperature over that period. Rain must be a percentage of time with detected rain, not precipitation in millimetres. Temperature must be in degrees Celsius. Soil moisture and a master pump are optional.
 
 ## How the two blueprints work together
 
 The irrigation system consists of two cooperating Home Assistant blueprints:
 
-- [Irrigation Zone Calculation](../blueprints/automation/irrigation_zone_calculation.yaml) calculates one zone's total watering demand.
-- [Irrigation Scheduler](../blueprints/automation/irrigation_scheduler.yaml) turns the demands of all zones into sequential valve runs.
+- [Irrigation Zone Calculation](../custom_components/hippos_toolbox/blueprints/automation/irrigation_zone_calculation.yaml) calculates one zone's total watering demand.
+- [Irrigation Scheduler](../custom_components/hippos_toolbox/blueprints/automation/irrigation_scheduler.yaml) turns the demands of all zones into sequential valve runs.
 
 ## Setup
 

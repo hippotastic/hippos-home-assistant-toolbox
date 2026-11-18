@@ -90,7 +90,7 @@ failure output. There are currently no warning exemptions.
 The generated Home Assistant configuration contains:
 
 - a separate validator config that instantiates every published blueprint;
-- the published blueprints from `blueprints/automation`;
+- the bundled blueprints from `custom_components/hippos_toolbox/blueprints/automation`;
 - one automation instance per runtime scenario;
 - dedicated entities for every scenario;
 - deterministic test implementations for covers, lights, and switches.

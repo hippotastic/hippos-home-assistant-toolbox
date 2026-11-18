@@ -30,14 +30,11 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.util import yaml as yaml_util
 
-from .api import ToolboxApi
+from .catalog import load_catalog, read_blueprint
 from .const import (
     ADOPTABLE_BLUEPRINT_DIRECTORIES,
     BACKUP_COUNT,
     DOMAIN,
-    DEVELOPMENT_BRANCH,
-    GITHUB_RAW_ROOT,
-    GITHUB_WEB_ROOT,
     MANAGED_DIRECTORY,
     STORAGE_KEY,
     STORAGE_VERSION,
@@ -47,8 +44,6 @@ from .models import (
     AffectedAutomation,
     BlueprintState,
     CatalogEntry,
-    CoordinatorData,
-    RemoteSnapshot,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,7 +51,12 @@ _LOGGER = logging.getLogger(__name__)
 STATUS_CURRENT = "current"
 STATUS_MISSING = "missing"
 STATUS_MODIFIED = "modified"
-STATUS_UPDATE_AVAILABLE = "update_available"
+STATUS_OUTDATED = "outdated"
+
+_LEGACY_SOURCE_ROOTS = (
+    "https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main",
+    "https://raw.githubusercontent.com/hippotastic/hippos-home-assistant-toolbox/main",
+)
 
 _USE_BLUEPRINT_PATTERN = re.compile(
     r"^(?P<indent> *)(?:-\s+)?use_blueprint\s*:\s*(?:#.*)?$"
@@ -71,40 +71,31 @@ _BLUEPRINT_PATH_PATTERN = re.compile(
 class BlueprintManager:
     """Compare, install, back up, and restore managed blueprints."""
 
-    def __init__(self, hass: HomeAssistant, api: ToolboxApi) -> None:
+    def __init__(self, hass: HomeAssistant) -> None:
         """Initialize the manager."""
 
         self.hass = hass
-        self.api = api
         self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-        self._state: dict[str, Any] = {"blueprints": {}, "installed_revision": None}
-        self.snapshot: RemoteSnapshot | None = None
+        self._state: dict[str, Any] = {"blueprints": {}}
+        self._entries: tuple[CatalogEntry, ...] = ()
 
-    async def async_load(self) -> None:
-        """Load persistent ownership state."""
+    async def async_setup(self) -> None:
+        """Load ownership records and synchronize the blueprints from this release."""
 
         stored = await self._store.async_load()
         if isinstance(stored, dict) and isinstance(stored.get("blueprints"), dict):
             self._state = stored
+        self._entries = await self.hass.async_add_executor_job(load_catalog)
+        await self._async_synchronize()
 
-    async def async_fetch_and_evaluate(self) -> CoordinatorData:
-        """Fetch the latest catalog and evaluate local files."""
-
-        self.snapshot = await self.api.async_fetch_snapshot()
-        data = await self.async_evaluate(self.snapshot)
-        self._sync_issues(data)
-        return data
-
-    async def async_evaluate(self, snapshot: RemoteSnapshot) -> CoordinatorData:
-        """Evaluate local files against a fetched snapshot."""
+    async def _async_evaluate(self) -> tuple[BlueprintState, ...]:
+        """Compare installed files with the bundle and their last installed hashes."""
 
         managed = self._managed_state
         states: list[BlueprintState] = []
-        update_ids: list[str] = []
-        conflict_ids: list[str] = []
         changed_state = False
 
-        for entry in snapshot.entries:
+        for entry in self._entries:
             if entry.status != "active":
                 continue
 
@@ -140,10 +131,8 @@ class BlueprintManager:
 
             if legacy_conflict:
                 status = STATUS_MODIFIED
-                conflict_ids.append(entry.id)
             elif actual_hash is None:
                 status = STATUS_MISSING
-                update_ids.append(entry.id)
             elif actual_hash == entry.sha256:
                 status = STATUS_CURRENT
                 if record is None and path == canonical_path:
@@ -156,11 +145,9 @@ class BlueprintManager:
                     managed[entry.id] = {"hash": entry.sha256, "path": entry.path}
                     changed_state = True
             elif recorded_hash is not None and actual_hash == recorded_hash:
-                status = STATUS_UPDATE_AVAILABLE
-                update_ids.append(entry.id)
+                status = STATUS_OUTDATED
             else:
                 status = STATUS_MODIFIED
-                conflict_ids.append(entry.id)
 
             states.append(
                 BlueprintState(
@@ -173,95 +160,48 @@ class BlueprintManager:
         if changed_state:
             await self._store.async_save(self._state)
 
-        return CoordinatorData(
-            snapshot=snapshot,
-            blueprints=tuple(states),
-            update_ids=tuple(update_ids),
-            conflict_ids=tuple(conflict_ids),
-        )
+        return tuple(states)
 
-    async def async_install_initial(self, data: CoordinatorData) -> CoordinatorData:
-        """Install missing blueprints during first setup and adopt exact matches."""
-
-        managed = self._managed_state
-        missing_ids = [
-            state.entry.id
-            for state in data.blueprints
-            if state.status == STATUS_MISSING and state.entry.id not in managed
-        ]
+    async def _async_synchronize(self) -> None:
+        states = await self._async_evaluate()
+        install_ids: list[str] = []
         adopted_paths: dict[str, Path] = {}
-        legacy_import_ids: list[str] = []
 
-        for state in data.blueprints:
-            if state.entry.id in managed:
+        for state in states:
+            entry = state.entry
+            if state.status in (STATUS_MISSING, STATUS_OUTDATED):
+                install_ids.append(entry.id)
+                continue
+            if entry.id in self._managed_state:
                 continue
 
-            state_path = Path(state.installed_path)
-            if state_path in self._adoptable_paths(state.entry):
-                if state.status == STATUS_CURRENT:
-                    adopted_paths[state.entry.id] = state_path
-                    continue
-
-                if state.status == STATUS_MODIFIED:
-                    is_managed_import = await self.hass.async_add_executor_job(
-                        self._is_matching_legacy_import,
-                        state_path,
-                        state.entry,
-                    )
-                    if is_managed_import:
-                        adopted_paths[state.entry.id] = state_path
+            path = Path(state.installed_path)
+            if state.status == STATUS_MODIFIED and not await self.hass.async_add_executor_job(
+                self._is_matching_legacy_import, path, entry
+            ):
                 continue
+            if path in self._adoptable_paths(entry):
+                adopted_paths[entry.id] = path
+            install_ids.append(entry.id)
 
-            if state.status != STATUS_MODIFIED:
-                continue
+        if install_ids:
+            await self._async_install_ids(install_ids, adopted_paths=adopted_paths)
+            states = await self._async_evaluate()
 
-            is_managed_import = await self.hass.async_add_executor_job(
-                self._is_matching_legacy_import,
-                state_path,
-                state.entry,
-            )
-            if is_managed_import:
-                legacy_import_ids.append(state.entry.id)
-
-        initial_install_ids = [*missing_ids, *adopted_paths]
-        if initial_install_ids:
-            await self._async_install_ids(
-                data.snapshot,
-                initial_install_ids,
-                adopted_paths=adopted_paths,
-            )
-        if legacy_import_ids:
-            await self._async_install_ids(
-                data.snapshot, legacy_import_ids, allow_modified=True
-            )
-        if not initial_install_ids and not legacy_import_ids:
-            await self._store.async_save(self._state)
-
-        evaluated = await self.async_evaluate(data.snapshot)
-        self._sync_issues(evaluated)
-        return evaluated
-
-    async def async_install_updates(self, data: CoordinatorData) -> None:
-        """Install every currently safe update from one catalog snapshot."""
-
-        if not data.update_ids:
-            return
-
-        await self._async_install_ids(data.snapshot, list(data.update_ids))
+        self._sync_issues(states)
 
     async def async_check_restore_compatibility(
         self, blueprint_id: str
     ) -> tuple[AffectedAutomation, ...]:
         """Predict missing inputs before replacing a modified blueprint."""
 
-        snapshot = self.snapshot or await self.api.async_fetch_snapshot()
-        entry = self._active_entry(snapshot, blueprint_id)
+        entry = self._active_entry(blueprint_id)
         if entry.domain != "automation":
             raise HomeAssistantError(
                 f"Compatibility checks do not support {entry.domain} blueprints"
             )
 
-        source = await self.api.async_fetch_blueprint(snapshot, entry)
+        source = await self.hass.async_add_executor_job(read_blueprint, entry)
         blueprint = await self.hass.async_add_executor_job(
             self._load_candidate_blueprint, source, entry
         )
@@ -356,36 +296,34 @@ class BlueprintManager:
         )
 
     async def async_restore_blueprint(self, blueprint_id: str) -> bool:
-        """Explicitly replace a modified local file with the published version."""
+        """Explicitly replace a modified local file with the bundled version."""
 
-        snapshot = self.snapshot or await self.api.async_fetch_snapshot()
-        entry = self._active_entry(snapshot, blueprint_id)
+        entry = self._active_entry(blueprint_id)
 
         adoptable_path = await self.hass.async_add_executor_job(
             self._find_adoptable_path, entry
         )
         adopted_paths = (
-            {blueprint_id: adoptable_path} if adoptable_path is not None else None
+            {blueprint_id: adoptable_path} if adoptable_path is not None else {}
         )
         await self._async_install_ids(
-            snapshot,
             [blueprint_id],
             allow_modified=True,
             adopted_paths=adopted_paths,
         )
 
-        evaluated = await self.async_evaluate(snapshot)
+        states = await self._async_evaluate()
+        self._sync_issues(states)
         restored_state = next(
-            state for state in evaluated.blueprints if state.entry.id == blueprint_id
+            state for state in states if state.entry.id == blueprint_id
         )
         return restored_state.status == STATUS_CURRENT
 
-    @staticmethod
-    def _active_entry(snapshot: RemoteSnapshot, blueprint_id: str) -> CatalogEntry:
+    def _active_entry(self, blueprint_id: str) -> CatalogEntry:
         entry = next(
             (
                 candidate
-                for candidate in snapshot.entries
+                for candidate in self._entries
                 if candidate.id == blueprint_id and candidate.status == "active"
             ),
             None,
@@ -408,75 +346,68 @@ class BlueprintManager:
 
     async def _async_install_ids(
         self,
-        snapshot: RemoteSnapshot,
         blueprint_ids: list[str],
         *,
         allow_modified: bool = False,
-        adopted_paths: dict[str, Path] | None = None,
+        adopted_paths: dict[str, Path],
     ) -> None:
-        """Download, verify, and atomically install selected blueprints."""
+        """Verify all selected sources before replacing any installed files."""
 
-        entries = {
-            entry.id: entry for entry in snapshot.entries if entry.status == "active"
+        entries = [self._active_entry(blueprint_id) for blueprint_id in blueprint_ids]
+        sources = {
+            entry.id: await self.hass.async_add_executor_job(read_blueprint, entry)
+            for entry in entries
         }
-        sources: dict[str, str] = {}
-
-        for blueprint_id in blueprint_ids:
-            entry = entries.get(blueprint_id)
-            if entry is None:
-                raise HomeAssistantError(f"Unknown active blueprint {blueprint_id}")
-            sources[blueprint_id] = await self.api.async_fetch_blueprint(snapshot, entry)
 
         changed_domains: set[str] = set()
-        for blueprint_id in blueprint_ids:
-            entry = entries[blueprint_id]
+        for entry in entries:
             path = self._installed_path(entry)
             actual_hash = await self.hass.async_add_executor_job(self._hash_file, path)
-            record = self._managed_state.get(blueprint_id)
+            record = self._managed_state.get(entry.id)
             recorded_hash = record.get("hash") if isinstance(record, dict) else None
+            adopted_path = adopted_paths.get(entry.id)
 
-            if (
-                not allow_modified
-                and actual_hash is not None
-                and actual_hash != entry.sha256
-                and actual_hash != recorded_hash
-            ):
-                continue
+            if not allow_modified:
+                # Recheck before writing in case someone edited a file since evaluation.
+                if (
+                    actual_hash not in (None, entry.sha256, recorded_hash)
+                    and not await self.hass.async_add_executor_job(
+                        self._is_matching_legacy_import, path, entry
+                    )
+                ):
+                    continue
+                if adopted_path is not None:
+                    adopted_hash = await self.hass.async_add_executor_job(
+                        self._hash_file, adopted_path
+                    )
+                    if adopted_hash != entry.sha256 and not await self.hass.async_add_executor_job(
+                        self._is_matching_legacy_import, adopted_path, entry
+                    ):
+                        continue
 
-            await self.hass.async_add_executor_job(
-                self._write_blueprint,
-                path,
-                entry,
-                sources[blueprint_id],
-            )
-            if adopted_path := (adopted_paths or {}).get(blueprint_id):
-                migration_complete = await self.hass.async_add_executor_job(
-                    self._migrate_adopted_blueprint,
-                    adopted_path,
-                    path,
-                    entry,
+            if actual_hash != entry.sha256:
+                await self.hass.async_add_executor_job(
+                    self._write_blueprint, path, entry, sources[entry.id]
                 )
+                changed_domains.add(entry.domain)
+
+            updated_record = {"hash": entry.sha256, "path": entry.path}
+            if record != updated_record:
+                self._managed_state[entry.id] = updated_record
+                await self._store.async_save(self._state)
+
+            if adopted_path is not None:
+                migration_complete = await self.hass.async_add_executor_job(
+                    self._migrate_adopted_blueprint, adopted_path, path, entry
+                )
+                changed_domains.add(entry.domain)
                 if migration_complete:
                     await self._async_remove_blueprint_consumers(
                         entry.domain,
                         self._blueprint_reference(adopted_path, entry),
                     )
-            self._managed_state[blueprint_id] = {
-                "hash": entry.sha256,
-                "path": entry.path,
-            }
-            changed_domains.add(entry.domain)
 
-        self._state["installed_revision"] = snapshot.revision
-        await self._store.async_save(self._state)
         await self._async_reload_domains(changed_domains)
-
-    @property
-    def installed_revision(self) -> str | None:
-        """Return the most recently installed remote revision."""
-
-        value = self._state.get("installed_revision")
-        return value if isinstance(value, str) else None
 
     @property
     def _managed_state(self) -> dict[str, dict[str, str]]:
@@ -527,23 +458,26 @@ class BlueprintManager:
 
     @staticmethod
     def _is_matching_legacy_import(path: Path, entry: CatalogEntry) -> bool:
-        """Identify an unmanaged file imported from this repository by HA."""
+        """Recognize old imports whose content still matches the bundled blueprint."""
 
         try:
-            value = yaml_util.load_yaml_dict(path)
-        except HomeAssistantError:
+            local = yaml_util.load_yaml_dict(path)
+        except (HomeAssistantError, FileNotFoundError):
             return False
 
-        blueprint = value.get("blueprint")
-        if not isinstance(blueprint, dict):
+        metadata = local.get("blueprint")
+        if not isinstance(metadata, dict):
+            return False
+        source_url = metadata.get("source_url")
+        if not isinstance(source_url, str) or source_url not in {
+            f"{root}/{entry.path}" for root in _LEGACY_SOURCE_ROOTS
+        }:
             return False
 
-        source_url = blueprint.get("source_url")
-        expected_urls = {
-            f"{GITHUB_WEB_ROOT}/blob/{DEVELOPMENT_BRANCH}/{entry.path}",
-            f"{GITHUB_RAW_ROOT}/{DEVELOPMENT_BRANCH}/{entry.path}",
-        }
-        return source_url in expected_urls
+        # Home Assistant can reformat imports. Compare YAML content after removing
+        # the old import URL so installation never mistakes local edits for metadata.
+        metadata.pop("source_url")
+        return local == yaml_util.parse_yaml(read_blueprint(entry))
 
     def _backup_file(self, path: Path, entry: CatalogEntry) -> None:
         if not path.exists():
@@ -787,13 +721,12 @@ class BlueprintManager:
         for entity_id in entity_ids:
             await component.async_remove_entity(entity_id)
 
-    def _sync_issues(self, data: CoordinatorData) -> None:
-        conflicts = set(data.conflict_ids)
-        entries_by_id = {entry.id: entry for entry in data.snapshot.entries}
+    def _sync_issues(self, states: tuple[BlueprintState, ...]) -> None:
+        entries_by_id = {entry.id: entry for entry in self._entries}
 
-        for state in data.blueprints:
+        for state in states:
             issue_id = f"local_modified_{state.entry.id}"
-            if state.entry.id not in conflicts:
+            if state.status != STATUS_MODIFIED:
                 ir.async_delete_issue(self.hass, DOMAIN, issue_id)
                 continue
 
@@ -835,10 +768,3 @@ class BlueprintManager:
                     "path": str(self._installed_path(entry)),
                 },
             )
-
-        _LOGGER.debug(
-            "Evaluated %d active blueprints: %d updates, %d conflicts",
-            len(data.blueprints),
-            len(data.update_ids),
-            len(data.conflict_ids),
-        )

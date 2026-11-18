@@ -22,10 +22,8 @@ class RepairFlowTests(unittest.IsolatedAsyncioTestCase):
             async_check_restore_compatibility=AsyncMock(return_value=()),
             async_restore_blueprint=AsyncMock(return_value=True),
         )
-        self.coordinator = SimpleNamespace(async_request_refresh=AsyncMock())
         runtime_data = SimpleNamespace(
             manager=self.manager,
-            coordinator=self.coordinator,
         )
         config_entries = SimpleNamespace(
             async_entries=Mock(return_value=[SimpleNamespace(runtime_data=runtime_data)])
@@ -99,7 +97,6 @@ class RepairFlowTests(unittest.IsolatedAsyncioTestCase):
         self.manager.async_restore_blueprint.assert_awaited_once_with(
             "cover_automation"
         )
-        self.coordinator.async_request_refresh.assert_awaited_once()
 
     async def test_direct_restore_submission_cannot_bypass_the_check(self) -> None:
         with patch(
@@ -191,7 +188,6 @@ class RepairFlowTests(unittest.IsolatedAsyncioTestCase):
             "invalid YAML at automations.yaml, line 12",
         )
         self.manager.async_restore_blueprint.assert_not_awaited()
-        self.coordinator.async_request_refresh.assert_not_awaited()
 
     async def test_keep_local_version_ignores_the_issue_without_restoring(self) -> None:
         with (

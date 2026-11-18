@@ -141,7 +141,7 @@ export default [
 		},
 	},
 	{
-		files: ['blueprints/automation/**/*.yaml', 'blueprints/automation/**/*.yml'],
+		files: ['custom_components/hippos_toolbox/blueprints/automation/**/*.{yaml,yml}'],
 		plugins: {
 			hippos: hipposEslintPlugin,
 		},

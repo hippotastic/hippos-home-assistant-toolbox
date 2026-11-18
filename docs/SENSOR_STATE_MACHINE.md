@@ -8,7 +8,7 @@
 
 ## Before you start
 
-Install the [toolbox integration](../README.md#installation) or import the [blueprint](../blueprints/automation/sensor_state_machine.yaml) manually. Select existing input entities from `binary_sensor`, `input_boolean`, `light`, or `switch`. The output can be a light, switch, or Toggle helper (`input_boolean`).
+Install the [toolbox integration](../README.md#installation) to get the [blueprint](../custom_components/hippos_toolbox/blueprints/automation/sensor_state_machine.yaml). Select existing input entities from `binary_sensor`, `input_boolean`, `light`, or `switch`. The output can be a light, switch, or Toggle helper (`input_boolean`).
 
 The blueprint also takes a Home Assistant Uptime sensor for its startup guard. Its default is `sensor.uptime`; configure the Uptime integration if needed and select the actual entity ID from your installation.
 

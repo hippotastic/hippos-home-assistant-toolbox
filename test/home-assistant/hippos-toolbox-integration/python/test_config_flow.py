@@ -1,4 +1,4 @@
-"""Regression tests for update-channel options."""
+"""Regression tests for toolbox configuration flows."""
 
 import unittest
 from tempfile import TemporaryDirectory
@@ -38,17 +38,14 @@ from custom_components.hippos_toolbox.const import (
     CONF_FALLBACK_ENTITY_ID,
     CONF_REPACK_PCMU,
     CONF_SOURCE_ENTITY_ID,
-    CONF_UPDATE_CHANNEL,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
-    UPDATE_CHANNEL_DEVELOPMENT,
-    UPDATE_CHANNEL_STABLE,
 )
 
 
 class ToolboxOptionsFlowTests(unittest.IsolatedAsyncioTestCase):
-    """Verify the opt-in channel selection."""
+    """Verify camera settings in the options flow."""
 
-    async def test_defaults_to_stable(self) -> None:
+    async def test_only_offers_camera_options(self) -> None:
         flow = ToolboxOptionsFlow()
         flow.handler = "test-entry"
         flow.hass = SimpleNamespace(
@@ -62,20 +59,7 @@ class ToolboxOptionsFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], FlowResultType.FORM)
         self.assertEqual(
             result["data_schema"]({}),
-            {CONF_UPDATE_CHANNEL: UPDATE_CHANNEL_STABLE, **dict.fromkeys(CAMERA_FRONTEND_OPTIONS, True)},
-        )
-
-    async def test_accepts_development_selection(self) -> None:
-        flow = ToolboxOptionsFlow()
-
-        result = await flow.async_step_init(
-            {CONF_UPDATE_CHANNEL: UPDATE_CHANNEL_DEVELOPMENT}
-        )
-
-        self.assertEqual(result["type"], FlowResultType.CREATE_ENTRY)
-        self.assertEqual(
-            result["data"],
-            {CONF_UPDATE_CHANNEL: UPDATE_CHANNEL_DEVELOPMENT},
+            dict.fromkeys(CAMERA_FRONTEND_OPTIONS, True),
         )
 
 

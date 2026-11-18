@@ -1,8 +1,9 @@
 import { join } from 'node:path'
 import { ESLint } from 'eslint'
 import { describe, expect, test } from 'vitest'
+import { BLUEPRINT_DIRECTORY } from '../../tools/blueprint-catalog/catalog.ts'
 
-const BLUEPRINT_FILE = join(process.cwd(), 'blueprints', 'automation', 'description-style-test.yaml')
+const BLUEPRINT_FILE = join(process.cwd(), BLUEPRINT_DIRECTORY, 'automation', 'description-style-test.yaml')
 const RULE_ID = 'hippos/description-block-style'
 
 describe('Blueprint description block style ESLint rule', () => {

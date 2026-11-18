@@ -8,7 +8,7 @@
 
 ## Before you start
 
-Install the [toolbox integration](../README.md#installation) or import the [blueprint](../blueprints/automation/cover_automation.yaml) manually. You need a cover entity and a dedicated Text helper for its automation state. Sun protection, privacy, night mode, and lockout prevention take optional input entities; the blueprint does not create those inputs.
+Install the [toolbox integration](../README.md#installation) to get the [blueprint](../custom_components/hippos_toolbox/blueprints/automation/cover_automation.yaml). You need a cover entity and a dedicated Text helper for its automation state. Sun protection, privacy, night mode, and lockout prevention take optional input entities; the blueprint does not create those inputs.
 
 ## Setup
 

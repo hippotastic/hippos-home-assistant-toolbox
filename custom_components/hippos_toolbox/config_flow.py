@@ -18,8 +18,6 @@ from .const import (
     CONF_FALLBACK_ENTITY_ID,
     CONF_REPACK_PCMU,
     CONF_SOURCE_ENTITY_ID,
-    CONF_UPDATE_CHANNEL,
-    DEFAULT_UPDATE_CHANNEL,
     DOMAIN,
     NAME,
     MONITORING_AUTOMATIC_OPTIONS,
@@ -28,9 +26,6 @@ from .const import (
     MONITORING_NOTIFICATION_DEFAULTS,
     MONITORING_SUBENTRY_TYPE,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
-    UPDATE_CHANNEL_DEVELOPMENT,
-    UPDATE_CHANNEL_STABLE,
-    normalize_update_channel,
 )
 from .monitoring_notifications import _notification_settings
 
@@ -39,6 +34,7 @@ class ToolboxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Create the single toolbox config entry."""
 
     VERSION = 1
+    MINOR_VERSION = 2
 
     @classmethod
     @callback
@@ -76,41 +72,25 @@ class ToolboxConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class ToolboxOptionsFlow(config_entries.OptionsFlow):
-    """Configure blueprint updates and camera frontend features."""
+    """Configure camera frontend features."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Select the update channel and reload after changes."""
+        """Select camera frontend features."""
 
         if user_input is not None:
             return self.async_create_entry(data=user_input)
-
-        current_channel = normalize_update_channel(
-            self.config_entry.options.get(
-                CONF_UPDATE_CHANNEL, DEFAULT_UPDATE_CHANNEL
-            )
-        )
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required(
-                        CONF_UPDATE_CHANNEL, default=current_channel
-                    ): vol.In(
-                        {
-                            UPDATE_CHANNEL_STABLE: "Stable",
-                            UPDATE_CHANNEL_DEVELOPMENT: "Development",
-                        }
-                    ),
-                    **{
-                        vol.Required(
-                            option,
-                            default=self.config_entry.options.get(option, True),
-                        ): selector.BooleanSelector()
-                        for option in CAMERA_FRONTEND_OPTIONS
-                    },
+                        option,
+                        default=self.config_entry.options.get(option, True),
+                    ): selector.BooleanSelector()
+                    for option in CAMERA_FRONTEND_OPTIONS
                 }
             ),
         )

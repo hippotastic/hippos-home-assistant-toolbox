@@ -5,7 +5,7 @@
     },
     "step": {
       "user": {
-        "description": "Install and keep the published blueprint collection up to date.",
+        "description": "Install the blueprint collection included with this version of the toolbox.",
         "title": "Set up Hippo's Home Assistant Toolbox"
       }
     }
@@ -255,18 +255,16 @@
     "step": {
       "init": {
         "data": {
-          "update_channel": "Update channel",
           "camera_zoom": "Camera zoom",
           "camera_recovery": "Automatically restore camera streams",
           "camera_stream_cleanup": "Reliably close abandoned camera streams"
         },
         "data_description": {
-          "update_channel": "Stable checks published releases once a day. Development checks the main branch every two hours and may include changes that have not been released yet.",
           "camera_zoom": "Enlarge camera dialogs and enable zoom and pan.",
           "camera_recovery": "Restore interrupted streams when returning to the frontend or after loading errors.",
           "camera_stream_cleanup": "Close individual MJPEG connections when leaving a camera view or putting the app in the background."
         },
-        "description": "Configure blueprint updates and camera features.",
+        "description": "Configure camera features.",
         "title": "Configure toolbox"
       }
     }
@@ -313,16 +311,6 @@
     }
   },
   "entity": {
-    "button": {
-      "check_for_updates": {
-        "name": "Check for updates"
-      }
-    },
-    "update": {
-      "blueprints": {
-        "name": "Blueprints"
-      }
-    },
     "sensor": {
       "problems": {
         "name": "Open problems"
@@ -357,30 +345,30 @@
         "abort": {
           "compatibility_check_failed": "The compatibility check could not be completed:\n\n```\n{error}\n```\n\nCorrect the problem and retry this Repair.",
           "integration_not_configured": "The integration is no longer configured.",
-          "issue_ignored": "The local file for **{blueprint_name}** was left unchanged, and this Repair has been ignored. The integration will not overwrite this file while it differs from the published version.",
-          "migration_incomplete": "The published version of **{blueprint_name}** was installed, but at least one reference to `{path}` could not be migrated safely. The old file was kept, and the Repair remains open. Update the remaining `use_blueprint.path` reference manually and check for updates again."
+          "issue_ignored": "The local file for **{blueprint_name}** was left unchanged, and this Repair has been ignored. The integration will not overwrite this file while it differs from the bundled version.",
+          "migration_incomplete": "The bundled version of **{blueprint_name}** was installed, but at least one reference to `{path}` could not be migrated safely. The old file was kept, and the Repair remains open. Update the remaining `use_blueprint.path` reference manually and reload the toolbox."
         },
         "error": {
           "confirmation_required": "Confirmation is required."
         },
         "step": {
           "init": {
-            "description": "The local file for **{blueprint_name}** at `{path}` differs from the published version. The integration has not overwritten it and cannot update this blueprint until you choose how to handle the local changes.",
+            "description": "The local file for **{blueprint_name}** at `{path}` differs from the bundled version. The integration has not overwritten it and cannot update this blueprint until you choose how to handle the local changes.",
             "menu_options": {
               "ignore": "Keep the local version and ignore this Repair",
-              "restore": "Replace it with the published version"
+              "restore": "Replace it with the bundled version"
             },
             "title": "Resolve local changes in {blueprint_name}"
           },
           "restore": {
-            "description": "The current file at `{path}` will be backed up and replaced with the latest published version of **{blueprint_name}**. Local edits cannot be merged.\n\nIf the file is still located under `hippo/`, existing YAML `use_blueprint.path` references will be migrated to `hippotastic/`. If any reference cannot be migrated safely, the old file will be kept.\n\nSelect **Submit** to confirm the replacement.",
+            "description": "The current file at `{path}` will be backed up and replaced with the bundled version of **{blueprint_name}**. Local edits cannot be merged.\n\nIf the file is still located under `hippo/`, existing YAML `use_blueprint.path` references will be migrated to `hippotastic/`. If any reference cannot be migrated safely, the old file will be kept.\n\nSelect **Submit** to confirm the replacement.",
             "title": "Replace local {blueprint_name}"
           },
           "restore_with_compatibility_warning": {
             "data": {
               "confirm_compatibility": "I understand that the affected automations will require repair after replacement."
             },
-            "description": "**Compatibility warning**\n\nThe published blueprint would cause **{affected_automation_count} existing {affected_automation_noun} to fail** because required inputs are not stored in their YAML:\n\n{affected_automations}",
+            "description": "**Compatibility warning**\n\nThe bundled blueprint would cause **{affected_automation_count} existing {affected_automation_noun} to fail** because required inputs are not stored in their YAML:\n\n{affected_automations}",
             "submit": "Replace anyway",
             "title": "Replace local {blueprint_name}"
           }

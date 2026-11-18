@@ -24,7 +24,7 @@
   ],
   "documentation": "https://github.com/hippotastic/hippos-home-assistant-toolbox",
   "integration_type": "service",
-  "iot_class": "cloud_polling",
+  "iot_class": "local_push",
   "issue_tracker": "https://github.com/hippotastic/hippos-home-assistant-toolbox/issues",
   "requirements": [],
   "single_config_entry": true,

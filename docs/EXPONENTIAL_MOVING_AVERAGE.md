@@ -8,7 +8,7 @@
 
 ## Before you start
 
-Install the [toolbox integration](../README.md#installation) or import the [blueprint](../blueprints/automation/exponential_moving_average.yaml) manually. You need a numeric sensor and a dedicated `input_number` helper for the result.
+Install the [toolbox integration](../README.md#installation) to get the [blueprint](../custom_components/hippos_toolbox/blueprints/automation/exponential_moving_average.yaml). You need a numeric sensor and a dedicated `input_number` helper for the result.
 
 ## Setup
 

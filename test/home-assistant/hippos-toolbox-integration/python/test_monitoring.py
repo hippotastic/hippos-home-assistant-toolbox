@@ -661,9 +661,8 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
             await platform.async_setup_entry(self.hass, entry, add)
             add.assert_not_called()
 
-    async def test_monitor_registration_preserves_main_device_and_existing_entities(self):
-        from custom_components.hippos_toolbox.button import ToolboxCheckUpdatesButton
-        from custom_components.hippos_toolbox.update import ToolboxBlueprintUpdate
+    async def test_migration_removes_only_blueprint_updater_settings_and_entities(self):
+        from custom_components.hippos_toolbox import async_migrate_entry
         from custom_components.hippos_toolbox.sensor import ToolboxProblemsSensor, ToolboxAlarmsSensor
         from custom_components.hippos_toolbox.event import ToolboxProblemEvent
 
@@ -672,14 +671,15 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.hass.config_entries = ConfigEntries(self.hass, {})
         await self.hass.config_entries.async_initialize()
         entry = ConfigEntry(
-            domain="hippos_toolbox", entry_id="toolbox", data={}, options={},
+            domain="hippos_toolbox", entry_id="toolbox", data={},
+            options={"update_channel": "development", "camera_zoom": False},
             source="user", title="Toolbox", unique_id=None, version=1,
             minor_version=1, discovery_keys={}, subentries_data=[{
                 "subentry_id": "monitor", "subentry_type": "monitoring",
                 "title": "Monitoring", "data": self.options, "unique_id": None,
             }],
         )
-        # Register the fixture without running the integration's GitHub setup.
+        # Register the fixture without starting the toolbox.
         self.hass.config_entries._entries[entry.entry_id] = entry
         devices = self.hass.data[dr.DATA_REGISTRY] = dr.DeviceRegistry(self.hass)
         if hasattr(devices, "async_setup"):
@@ -687,17 +687,15 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
         await devices.async_load(load_empty=True)
         entities = monitoring.er.async_get(self.hass)
         await entities.async_load(load_empty=True)
-        coordinator = Mock()
-        root_entities = []
-        root_device = None
-        for domain, entity in (("button", ToolboxCheckUpdatesButton(coordinator)), ("update", ToolboxBlueprintUpdate(coordinator))):
-            root_device = devices.async_get_or_create(
-                config_entry_id=entry.entry_id, config_subentry_id=None, **entity.device_info,
+        retired_entities = [
+            entities.async_get_or_create(
+                domain, "hippos_toolbox", unique_id, config_entry=entry,
+            ).entity_id
+            for domain, unique_id in (
+                ("button", "hippos_toolbox_check_for_updates"),
+                ("update", "hippos_toolbox_blueprints"),
             )
-            root_entities.append(entities.async_get_or_create(
-                domain, "hippos_toolbox", entity.unique_id, config_entry=entry,
-                device_id=root_device.id,
-            ).entity_id)
+        ]
         monitor_devices = set()
         for domain, entity in (("sensor", ToolboxProblemsSensor(self.monitor)), ("sensor", ToolboxAlarmsSensor(self.monitor)), ("event", ToolboxProblemEvent(self.monitor))):
             device = devices.async_get_or_create(
@@ -708,14 +706,18 @@ class ProblemMonitorTests(unittest.IsolatedAsyncioTestCase):
                 domain, "hippos_toolbox", entity.unique_id, config_entry=entry,
                 config_subentry_id="monitor", device_id=device.id,
             )
+        self.assertTrue(await async_migrate_entry(self.hass, entry))
         await self.hass.async_block_till_done()
+
+        self.assertEqual(entry.minor_version, 2)
+        self.assertEqual(dict(entry.options), {"camera_zoom": False})
+        self.assertIn("monitor", entry.subentries)
         self.assertEqual(len(monitor_devices), 1)
-        self.assertNotIn(root_device.id, monitor_devices)
-        for entity_id in root_entities:
-            self.assertIsNotNone(entities.async_get(entity_id))
+        for entity_id in retired_entities:
+            self.assertIsNone(entities.async_get(entity_id))
         registered = [item for item in entities.entities.values() if item.platform == "hippos_toolbox"]
-        self.assertEqual(len(registered), 5)
-        self.assertEqual(sum(item.config_subentry_id == "monitor" for item in registered), 3)
+        self.assertEqual(len(registered), 3)
+        self.assertTrue(all(item.config_subentry_id == "monitor" for item in registered))
         await self.hass.async_stop()
 
     async def test_real_source_listener_starts_after_ha_and_is_removed_on_unload(self):

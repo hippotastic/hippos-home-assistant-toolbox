@@ -283,9 +283,8 @@ def _serializable(value: Any) -> Any:
 async def _run_blueprint_adoption(hass: HomeAssistant) -> dict[str, Any]:
     """Exercise production adoption against a loaded legacy automation."""
 
-    from custom_components.hippos_toolbox.hashing import blueprint_hash
+    from custom_components.hippos_toolbox.catalog import load_catalog
     from custom_components.hippos_toolbox.manager import BlueprintManager
-    from custom_components.hippos_toolbox.models import CatalogEntry, RemoteSnapshot
 
     blueprint_id = "cover_automation"
     legacy_reference = "hippo/cover_automation.yaml"
@@ -296,32 +295,11 @@ async def _run_blueprint_adoption(hass: HomeAssistant) -> dict[str, Any]:
     managed_path = Path(
         hass.config.path("blueprints", "automation", managed_reference)
     )
-    source = await hass.async_add_executor_job(_read_utf8, managed_path)
-    entry = CatalogEntry(
-        id=blueprint_id,
-        name="Hippo's Cover Automation",
-        domain="automation",
-        path="blueprints/automation/cover_automation.yaml",
-        sha256=blueprint_hash(source),
-        status="active",
-    )
-    snapshot = RemoteSnapshot(
-        entries=(entry,),
-        revision="integration-test",
-        commit_sha="a" * 40,
-        release_url="https://example.invalid/integration-test",
-    )
     automation_component = hass.data["automation"]
     automation_entity_ids = (
         "automation.fixture_legacy_blueprint_adoption_one",
         "automation.fixture_legacy_blueprint_adoption_two",
     )
-
-    class StaticApi:
-        async def async_fetch_blueprint(
-            self, _snapshot: RemoteSnapshot, _entry: CatalogEntry
-        ) -> str:
-            return source
 
     def referenced_blueprints() -> list[str | None]:
         entities = (
@@ -347,8 +325,8 @@ async def _run_blueprint_adoption(hass: HomeAssistant) -> dict[str, Any]:
         "managed_in_use": in_use(managed_reference),
         "references": referenced_blueprints(),
     }
-    manager = BlueprintManager(hass, StaticApi())
-    manager.snapshot = snapshot
+    manager = BlueprintManager(hass)
+    manager._entries = await hass.async_add_executor_job(load_catalog)
     restored = await manager.async_restore_blueprint(blueprint_id)
     automations_path = Path(hass.config.path("automations.yaml"))
     automations_source = await hass.async_add_executor_job(

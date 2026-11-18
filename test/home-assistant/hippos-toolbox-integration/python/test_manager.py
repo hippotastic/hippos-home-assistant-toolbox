@@ -1,5 +1,7 @@
 """Regression tests that run inside the Home Assistant container."""
 
+from dataclasses import asdict
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -9,7 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from repository import find_repository_root
 
-from custom_components.hippos_toolbox.api import _parse_catalog
+from custom_components.hippos_toolbox import catalog
 from custom_components.hippos_toolbox.hashing import blueprint_hash
 from custom_components.hippos_toolbox.manager import (
     BlueprintManager,
@@ -20,7 +22,6 @@ from custom_components.hippos_toolbox.manager import (
 from custom_components.hippos_toolbox.models import (
     AffectedAutomation,
     CatalogEntry,
-    RemoteSnapshot,
 )
 
 
@@ -54,23 +55,15 @@ class FakeServices:
         return False
 
 
-class FakeApi:
-    """Return one published blueprint source without making a network request."""
-
-    def __init__(self, source: str) -> None:
-        self.source = source
-
-    async def async_fetch_blueprint(
-        self, remote_snapshot: RemoteSnapshot, entry: CatalogEntry
-    ) -> str:
-        return self.source
-
-
 class FakeStore:
     """Capture storage writes without a running Home Assistant instance."""
 
     def __init__(self) -> None:
+        self.loaded = None
         self.saved = None
+
+    async def async_load(self):
+        return self.loaded
 
     async def async_save(self, value) -> None:
         self.saved = value
@@ -86,17 +79,6 @@ def catalog_entry(source: str) -> CatalogEntry:
         path="blueprints/automation/example.yaml",
         sha256=blueprint_hash(source),
         status="active",
-    )
-
-
-def snapshot(entry: CatalogEntry) -> RemoteSnapshot:
-    """Create a remote snapshot containing one blueprint."""
-
-    return RemoteSnapshot(
-        entries=(entry,),
-        revision="2026.08.06.abcdef0",
-        commit_sha="a" * 40,
-        release_url="https://github.com/example/commit/abcdef0",
     )
 
 
@@ -128,11 +110,14 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.temporary_directory.name)
         self.manager = object.__new__(BlueprintManager)
         self.manager.hass = FakeHass(self.root)
-        self.manager.api = None
         self.manager._store = FakeStore()
-        self.manager._state = {"blueprints": {}, "installed_revision": None}
-        self.manager.snapshot = None
-        self.manager._sync_issues = lambda data: None
+        self.manager._state = {"blueprints": {}}
+        self.manager._entries = ()
+        self.manager._sync_issues = lambda states: None
+        self.package = self.root / "package"
+        patcher = patch.object(catalog, "_PACKAGE_ROOT", self.package)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
@@ -149,20 +134,32 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
     def adoptable_path(self) -> Path:
         return self.root / "blueprints" / "automation" / "hippo" / "example.yaml"
 
-    def test_published_catalog_matches_python_hash_contract(self) -> None:
-        repo_root = find_repository_root(Path(__file__))
-        entries = _parse_catalog(
-            (repo_root / "blueprints" / "catalog.json").read_text(encoding="utf-8")
+    def bundle(self, source: str) -> CatalogEntry:
+        entry = catalog_entry(source)
+        path = self.package / entry.path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+        (self.package / "blueprints" / "catalog.json").write_text(
+            json.dumps({"schema_version": 1, "blueprints": [asdict(entry)]}),
+            encoding="utf-8",
         )
+        self.manager._entries = (entry,)
+        return entry
 
-        for entry in entries:
-            if entry.status == "active":
-                source = (repo_root / entry.path).read_text(encoding="utf-8")
-                self.assertEqual(blueprint_hash(source), entry.sha256, entry.path)
+    def test_bundled_catalog_matches_python_hash_contract(self) -> None:
+        package = find_repository_root(Path(__file__)) / "custom_components" / "hippos_toolbox"
+        with patch.object(catalog, "_PACKAGE_ROOT", package):
+            entries = catalog.load_catalog()
+            self.assertTrue(entries)
+            for entry in entries:
+                if entry.status == "active":
+                    source = catalog.read_blueprint(entry)
+                    self.assertEqual(blueprint_hash(source), entry.sha256, entry.path)
+                    self.assertNotIn("source_url:", source)
 
     async def test_line_endings_and_boundary_whitespace_are_current(self) -> None:
         source = "blueprint:\n  name: Example\n  domain: automation"
-        entry = catalog_entry(source)
+        entry = self.bundle(source)
         path = self.installed_path()
         path.parent.mkdir(parents=True)
         crlf_source = source.replace("\n", "\r\n")
@@ -172,39 +169,73 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
             "path": entry.path,
         }
 
-        data = await self.manager.async_evaluate(snapshot(entry))
+        data = await self.manager._async_evaluate()
 
-        self.assertEqual(data.blueprints[0].status, STATUS_CURRENT)
-        self.assertEqual(data.update_ids, ())
-        self.assertEqual(data.conflict_ids, ())
+        self.assertEqual(data[0].status, STATUS_CURRENT)
 
     async def test_missing_file_is_a_safe_update(self) -> None:
-        entry = catalog_entry("blueprint:\n  name: Example\n  domain: automation")
+        source = "blueprint:\n  name: Example\n  domain: automation\n"
+        entry = self.bundle(source)
 
-        data = await self.manager.async_evaluate(snapshot(entry))
+        data = await self.manager._async_evaluate()
 
-        self.assertEqual(data.blueprints[0].status, STATUS_MISSING)
-        self.assertEqual(data.update_ids, (entry.id,))
+        self.assertEqual(data[0].status, STATUS_MISSING)
+        await self.manager.async_setup()
+        self.assertEqual(self.installed_path().read_text(), source)
+        self.assertEqual(self.manager._store.saved["blueprints"][entry.id]["hash"], entry.sha256)
+
+    async def test_setup_replaces_a_previously_managed_file_at_the_same_path(self) -> None:
+        source = "blueprint:\n  name: Example\n  domain: automation\n"
+        entry = self.bundle(source)
+        previous_source = source.replace("name: Example", "name: Previous version")
+        path = self.installed_path()
+        path.parent.mkdir(parents=True)
+        path.write_text(previous_source, encoding="utf-8")
+        self.manager._store.loaded = {
+            "blueprints": {entry.id: {"path": entry.path, "hash": blueprint_hash(previous_source)}},
+            "installed_revision": "main-before-bundling",
+        }
+        automations_path = self.root / "automations.yaml"
+        automations_source = "- use_blueprint:\n    path: hippotastic/example.yaml\n"
+        automations_path.write_text(automations_source, encoding="utf-8")
+        backup_dir = self.root / "blueprints" / ".hippos_toolbox_backups" / "automation" / entry.id
+
+        with patch.object(self.manager, "_async_reload_domains", new_callable=AsyncMock) as reload:
+            await self.manager.async_setup()
+            reload.assert_awaited_once_with({"automation"})
+            reload.reset_mock()
+            await self.manager.async_setup()
+            reload.assert_not_awaited()
+
+        self.assertEqual(path.read_text(), source)
+        self.assertEqual(automations_path.read_text(), automations_source)
+        self.assertEqual([file.read_text() for file in backup_dir.glob("*.bak")], [previous_source])
+        self.assertEqual(self.manager._store.saved["blueprints"][entry.id]["hash"], entry.sha256)
+
+    async def test_setup_rejects_a_bundle_whose_content_does_not_match_its_catalog(self) -> None:
+        entry = self.bundle("blueprint:\n  name: Example\n  domain: automation\n")
+        (self.package / entry.path).write_text("unexpected content", encoding="utf-8")
+
+        with self.assertRaisesRegex(HomeAssistantError, "Hash mismatch"):
+            await self.manager.async_setup()
+
+        self.assertFalse(self.installed_path().exists())
 
     async def test_unexpected_local_content_is_a_conflict(self) -> None:
-        entry = catalog_entry("blueprint:\n  name: Example\n  domain: automation")
+        entry = self.bundle("blueprint:\n  name: Example\n  domain: automation")
         path = self.installed_path()
         path.parent.mkdir(parents=True)
         path.write_text("locally changed", encoding="utf-8")
 
-        data = await self.manager.async_evaluate(snapshot(entry))
+        data = await self.manager._async_evaluate()
 
-        self.assertEqual(data.blueprints[0].status, STATUS_MODIFIED)
-        self.assertEqual(data.update_ids, ())
-        self.assertEqual(data.conflict_ids, (entry.id,))
+        self.assertEqual(data[0].status, STATUS_MODIFIED)
 
     async def test_restore_compatibility_reports_missing_required_inputs(
         self,
     ) -> None:
         source = compatibility_blueprint_source()
-        entry = catalog_entry(source)
-        self.manager.api = FakeApi(source)
-        self.manager.snapshot = snapshot(entry)
+        entry = self.bundle(source)
         config = {
             "automation": [
                 {
@@ -259,9 +290,7 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         source = "blueprint: ["
-        entry = catalog_entry(source)
-        self.manager.api = FakeApi(source)
-        self.manager.snapshot = snapshot(entry)
+        entry = self.bundle(source)
 
         with self.assertRaises(HomeAssistantError):
             await self.manager.async_check_restore_compatibility(entry.id)
@@ -270,9 +299,7 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         source = compatibility_blueprint_source()
-        entry = catalog_entry(source)
-        self.manager.api = FakeApi(source)
-        self.manager.snapshot = snapshot(entry)
+        entry = self.bundle(source)
         config = {
             "automation": [
                 {
@@ -296,31 +323,29 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_finds_an_exact_blueprint_in_hippo_for_adoption(self) -> None:
         source = "blueprint:\n  name: Example\n  domain: automation\n"
-        entry = catalog_entry(source)
+        entry = self.bundle(source)
         path = self.adoptable_path()
         path.parent.mkdir(parents=True)
         path.write_text(source, encoding="utf-8")
 
-        data = await self.manager.async_evaluate(snapshot(entry))
+        data = await self.manager._async_evaluate()
 
-        self.assertEqual(data.blueprints[0].status, STATUS_CURRENT)
-        self.assertEqual(data.blueprints[0].installed_path, str(path))
+        self.assertEqual(data[0].status, STATUS_CURRENT)
+        self.assertEqual(data[0].installed_path, str(path))
         self.assertEqual(self.manager._state["blueprints"], {})
 
     async def test_does_not_adopt_unrecognized_content_from_hippo(self) -> None:
         source = "blueprint:\n  name: Example\n  domain: automation\n"
-        entry = catalog_entry(source)
+        entry = self.bundle(source)
         path = self.adoptable_path()
         path.parent.mkdir(parents=True)
         path.write_text("locally changed", encoding="utf-8")
-        self.manager.api = FakeApi(source)
 
-        initial = await self.manager.async_evaluate(snapshot(entry))
-        result = await self.manager.async_install_initial(initial)
+        await self.manager.async_setup()
+        result = await self.manager._async_evaluate()
 
-        self.assertEqual(result.blueprints[0].status, STATUS_MODIFIED)
-        self.assertEqual(result.blueprints[0].installed_path, str(path))
-        self.assertEqual(result.conflict_ids, (entry.id,))
+        self.assertEqual(result[0].status, STATUS_MODIFIED)
+        self.assertEqual(result[0].installed_path, str(path))
         self.assertFalse(self.installed_path().exists())
         self.assertEqual(path.read_text(encoding="utf-8"), "locally changed")
 
@@ -328,7 +353,7 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         source = "blueprint:\n  name: Example\n  domain: automation\n"
-        entry = catalog_entry(source)
+        entry = self.bundle(source)
         installed_path = self.installed_path()
         installed_path.parent.mkdir(parents=True)
         installed_path.write_text(source, encoding="utf-8")
@@ -340,15 +365,14 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
             "path": entry.path,
         }
 
-        data = await self.manager.async_evaluate(snapshot(entry))
+        data = await self.manager._async_evaluate()
 
-        self.assertEqual(data.blueprints[0].status, STATUS_MODIFIED)
-        self.assertEqual(data.blueprints[0].installed_path, str(adopted_path))
-        self.assertEqual(data.conflict_ids, (entry.id,))
+        self.assertEqual(data[0].status, STATUS_MODIFIED)
+        self.assertEqual(data[0].installed_path, str(adopted_path))
 
     async def test_restore_migrates_a_legacy_conflict_and_its_references(self) -> None:
         source = "blueprint:\n  name: Example\n  domain: automation\n"
-        entry = catalog_entry(source)
+        entry = self.bundle(source)
         installed_path = self.installed_path()
         installed_path.parent.mkdir(parents=True)
         installed_path.write_text(source, encoding="utf-8")
@@ -366,8 +390,6 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
             "hash": entry.sha256,
             "path": entry.path,
         }
-        self.manager.api = FakeApi(source)
-        self.manager.snapshot = snapshot(entry)
 
         restored = await self.manager.async_restore_blueprint(entry.id)
 
@@ -382,7 +404,7 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         source = "blueprint:\n  name: Example\n  domain: automation\n"
-        entry = catalog_entry(source)
+        entry = self.bundle(source)
         adopted_path = self.adoptable_path()
         adopted_path.parent.mkdir(parents=True)
         adopted_path.write_text("locally changed", encoding="utf-8")
@@ -392,8 +414,6 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
             "  use_blueprint: {path: hippo/example.yaml, input: {}}\n",
             encoding="utf-8",
         )
-        self.manager.api = FakeApi(source)
-        self.manager.snapshot = snapshot(entry)
 
         with self.assertLogs(
             "custom_components.hippos_toolbox.manager", level="WARNING"
@@ -411,15 +431,15 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
             "blueprint:\n"
             "  name: Example\n"
             "  domain: automation\n"
-            "  source_url: https://github.com/hippotastic/"
-            "hippos-home-assistant-toolbox/blob/main/"
-            "blueprints/automation/example.yaml\n"
         )
-        entry = catalog_entry(source)
+        self.bundle(source)
         adopted_path = self.adoptable_path()
         adopted_path.parent.mkdir(parents=True)
         adopted_path.write_text(
-            source.replace("  name:", "  # Imported by Home Assistant\n  name:"),
+            source.replace("  name:", "  # Imported by Home Assistant\n  name:")
+            + "  source_url: https://github.com/hippotastic/"
+            "hippos-home-assistant-toolbox/blob/main/"
+            "blueprints/automation/example.yaml\n",
             encoding="utf-8",
         )
         automations_path = self.root / "automations.yaml"
@@ -438,12 +458,11 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
             '      path: "hippo/example.yaml"\n',
             encoding="utf-8",
         )
-        self.manager.api = FakeApi(source)
 
-        initial = await self.manager.async_evaluate(snapshot(entry))
-        result = await self.manager.async_install_initial(initial)
+        await self.manager.async_setup()
+        result = await self.manager._async_evaluate()
 
-        self.assertEqual(result.blueprints[0].status, STATUS_CURRENT)
+        self.assertEqual(result[0].status, STATUS_CURRENT)
         self.assertEqual(self.installed_path().read_text(encoding="utf-8"), source)
         self.assertFalse(adopted_path.exists())
         self.assertIn(
@@ -461,7 +480,7 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_keeps_adopted_file_for_an_unmigrated_reference(self) -> None:
         source = "blueprint:\n  name: Example\n  domain: automation\n"
-        entry = catalog_entry(source)
+        entry = self.bundle(source)
         adopted_path = self.adoptable_path()
         adopted_path.parent.mkdir(parents=True)
         adopted_path.write_text(source, encoding="utf-8")
@@ -471,15 +490,14 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
             "  use_blueprint: {path: hippo/example.yaml, input: {}}\n",
             encoding="utf-8",
         )
-        self.manager.api = FakeApi(source)
 
-        initial = await self.manager.async_evaluate(snapshot(entry))
         with self.assertLogs(
             "custom_components.hippos_toolbox.manager", level="WARNING"
         ):
-            result = await self.manager.async_install_initial(initial)
+            await self.manager.async_setup()
+        result = await self.manager._async_evaluate()
 
-        self.assertEqual(result.blueprints[0].status, STATUS_CURRENT)
+        self.assertEqual(result[0].status, STATUS_CURRENT)
         self.assertTrue(adopted_path.exists())
         self.assertTrue(self.installed_path().exists())
         self.assertIn(
@@ -502,7 +520,7 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(list(backup_directory.glob("*.bak"))), 3)
 
     async def test_recognizes_a_legacy_home_assistant_import(self) -> None:
-        entry = catalog_entry("blueprint:\n  name: Example\n  domain: automation")
+        entry = self.bundle("blueprint:\n  name: Example\n  domain: automation")
         path = self.installed_path()
         path.parent.mkdir(parents=True)
         path.write_text(
@@ -516,9 +534,15 @@ class BlueprintManagerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(self.manager._is_matching_legacy_import(path, entry))
+        path.write_text(path.read_text().replace("name: Example", "name: Local edit"))
+
+        await self.manager.async_setup()
+
+        self.assertEqual((await self.manager._async_evaluate())[0].status, STATUS_MODIFIED)
+        self.assertIn("name: Local edit", path.read_text())
 
     async def test_only_three_backups_are_retained(self) -> None:
-        entry = catalog_entry("blueprint:\n  name: Example\n  domain: automation")
+        entry = self.bundle("blueprint:\n  name: Example\n  domain: automation")
         path = self.installed_path()
 
         for version in range(5):

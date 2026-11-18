@@ -9,6 +9,7 @@ import voluptuous as vol
 from homeassistant.components.repairs import RepairsFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir, selector
 
 from .const import DOMAIN
@@ -64,7 +65,7 @@ class RestoreBlueprintRepairFlow(RepairsFlow):
     async def async_step_restore(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Restore the published blueprint after explicit confirmation."""
+        """Restore the bundled blueprint after explicit confirmation."""
 
         if user_input is not None:
             # A submitted restore must never bypass the compatibility step,
@@ -160,7 +161,6 @@ class RestoreBlueprintRepairFlow(RepairsFlow):
         restored = await runtime_data.manager.async_restore_blueprint(
             self._blueprint_id
         )
-        await runtime_data.coordinator.async_request_refresh()
         if not restored:
             return self.async_abort(
                 reason="migration_incomplete",

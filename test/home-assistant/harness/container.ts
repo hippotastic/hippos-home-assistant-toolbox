@@ -7,6 +7,7 @@ import { requestHomeAssistant, type BlueprintRuntimeDiagnostics } from './client
 import { applyBlueprintTestValueOverrides } from './blueprint-test-overrides.ts'
 import { expectedAutomationStates, expectedFixtureStateEntityIds, generatedFixtureFiles } from './generated-config.ts'
 import { formatHomeAssistantLogIssues, unexpectedHomeAssistantLogIssues } from './log-validation.ts'
+import { BLUEPRINT_DIRECTORY, blueprintHash, parseCatalog, serializeCatalog } from '../../../tools/blueprint-catalog/catalog.ts'
 
 type HarnessOptions = {
 	image: string
@@ -90,13 +91,21 @@ function prepareConfig(repoRoot: string): string {
 	})
 	renameSync(join(targetTestIntegrationDir, 'manifest.fixture.json'), join(targetTestIntegrationDir, 'manifest.json'))
 
-	for (const file of readdirSync(join(repoRoot, 'blueprints', 'automation'))
+	for (const file of readdirSync(join(repoRoot, BLUEPRINT_DIRECTORY, 'automation'))
 		.filter((name) => name.endsWith('.yaml'))
 		.sort()) {
-		copyRuntimeBlueprint(join(repoRoot, 'blueprints', 'automation', file), join(targetBlueprintDir, basename(file)))
+		copyRuntimeBlueprint(join(repoRoot, BLUEPRINT_DIRECTORY, 'automation', file), join(targetBlueprintDir, basename(file)))
 	}
-	const legacyCoverSourcePath = join(repoRoot, 'blueprints', 'automation', 'cover_automation.yaml')
+	const legacyCoverSourcePath = join(repoRoot, BLUEPRINT_DIRECTORY, 'automation', 'cover_automation.yaml')
 	const legacyCoverSource = applyBlueprintTestValueOverrides(readFileSync(legacyCoverSourcePath, 'utf8'), legacyCoverSourcePath)
+	// The adoption test installs the test-timed cover blueprint from the bundled catalog.
+	const fixtureCatalogPath = join(targetToolboxIntegrationDir, 'blueprints', 'catalog.json')
+	const fixtureCatalog = parseCatalog(readFileSync(fixtureCatalogPath, 'utf8'), fixtureCatalogPath)
+	const fixtureCover = fixtureCatalog.blueprints.find((entry) => entry.id === 'cover_automation')
+	if (!fixtureCover) throw new Error('The bundled catalog is missing the cover automation blueprint')
+	fixtureCover.sha256 = blueprintHash(legacyCoverSource)
+	writeFileSync(join(targetToolboxIntegrationDir, fixtureCover.path), legacyCoverSource, 'utf8')
+	writeFileSync(fixtureCatalogPath, serializeCatalog(fixtureCatalog), 'utf8')
 	writeFileSync(join(targetLegacyBlueprintDir, 'cover_automation.yaml'), `${legacyCoverSource.trimEnd()}\n\n# Local pre-integration version\n`, 'utf8')
 	for (const [file, source] of Object.entries(generatedFixtureFiles())) {
 		writeFileSync(join(configDir, file), source, 'utf8')
@@ -120,10 +129,10 @@ function prepareValidatorConfig(repoRoot: string, configDir: string): void {
 	cpSync(join(validatorFixtureDir, 'configuration.yaml'), join(validatorDir, 'configuration.yaml'))
 	cpSync(join(validatorFixtureDir, 'automations.yaml'), join(validatorDir, 'automations.yaml'))
 
-	for (const file of readdirSync(join(repoRoot, 'blueprints', 'automation'))
+	for (const file of readdirSync(join(repoRoot, BLUEPRINT_DIRECTORY, 'automation'))
 		.filter((name) => name.endsWith('.yaml'))
 		.sort()) {
-		cpSync(join(repoRoot, 'blueprints', 'automation', file), join(validatorBlueprintDir, basename(file)))
+		cpSync(join(repoRoot, BLUEPRINT_DIRECTORY, 'automation', file), join(validatorBlueprintDir, basename(file)))
 	}
 }
 

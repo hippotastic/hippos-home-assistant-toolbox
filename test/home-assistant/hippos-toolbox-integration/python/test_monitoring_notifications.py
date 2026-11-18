@@ -450,10 +450,7 @@ class MonitoringNotificationLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 monitor = SimpleNamespace(async_load=AsyncMock(), async_start=Mock(), async_stop=AsyncMock())
                 notifier = SimpleNamespace(async_stop=AsyncMock())
                 cameras = SimpleNamespace(async_start=AsyncMock(), async_stop=AsyncMock())
-                manager = SimpleNamespace(async_install_initial=AsyncMock(return_value={}))
-                coordinator = SimpleNamespace(
-                    async_config_entry_first_refresh=AsyncMock(), async_set_updated_data=Mock(), data={},
-                )
+                manager = SimpleNamespace(async_setup=AsyncMock())
                 subentry = SimpleNamespace(subentry_type="monitoring", subentry_id="fixture_monitor", data={})
                 entry = SimpleNamespace(
                     options={}, subentries={} if mode == "disabled" else {"fixture_monitor": subentry},
@@ -468,10 +465,7 @@ class MonitoringNotificationLifecycleTests(unittest.IsolatedAsyncioTestCase):
                         raise HomeAssistantError("fixture start failed")
                 monitor.async_start.side_effect = start
                 with (
-                    patch.object(toolbox, "async_get_clientsession"),
-                    patch.object(toolbox, "ToolboxApi"),
                     patch.object(toolbox, "BlueprintManager", return_value=manager),
-                    patch.object(toolbox, "ToolboxCoordinator", return_value=coordinator),
                     patch.object(toolbox, "_ProgressiveCameraManager", return_value=cameras),
                     patch.object(toolbox, "_ProblemMonitor", return_value=monitor),
                     patch.object(toolbox, "_MonitoringNotifications", return_value=notifier) as constructor,

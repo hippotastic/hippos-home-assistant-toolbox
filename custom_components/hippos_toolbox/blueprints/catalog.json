@@ -5,7 +5,7 @@
       "id": "cover_automation",
       "name": "Hippo's Cover Automation",
       "path": "blueprints/automation/cover_automation.yaml",
-      "sha256": "4a8073d18912b2eb03fa906291f355df30bd762fcec40f70c1fedf6c878e7bc1",
+      "sha256": "74bfb53708f929eb2e15f96deb24f098a443b22af238a411b5032e9d18b715df",
       "status": "active"
     },
     {
@@ -13,7 +13,7 @@
       "id": "exponential_moving_average",
       "name": "Hippo's Time-Based Exponential Moving Average (EMA)",
       "path": "blueprints/automation/exponential_moving_average.yaml",
-      "sha256": "c24f9cd07663db2da73cd0ce873c6cc4305a61b3693d9b574a6f8ae0817c330f",
+      "sha256": "4b60ef2c91bc71d8ff85afcbfba826ed45f6035cb578ad329634c0dc97d098d0",
       "status": "active"
     },
     {
@@ -21,7 +21,7 @@
       "id": "irrigation_scheduler",
       "name": "Hippo's Irrigation Scheduler",
       "path": "blueprints/automation/irrigation_scheduler.yaml",
-      "sha256": "1ac80bf4870e6d272e76b2bf99c8e0fd31aeb890ab1090eb971c2c772b701d68",
+      "sha256": "6f235992860e6466e814a6f466843cbea92372317fc1b9f8b32105476e5c4c45",
       "status": "active"
     },
     {
@@ -29,7 +29,7 @@
       "id": "irrigation_zone_calculation",
       "name": "Hippo's Irrigation Zone Calculation",
       "path": "blueprints/automation/irrigation_zone_calculation.yaml",
-      "sha256": "586e35dfd08c303570c82bd046065884b2c9aa99a6506a7b17f96a2eb5b06e48",
+      "sha256": "12964b28816098758dbddbbd5d644d52ef87c580fefe6573002aab48e9374bd8",
       "status": "active"
     },
     {
@@ -37,7 +37,7 @@
       "id": "push_button_music_controller",
       "name": "Hippo's Push-Button Music Controller",
       "path": "blueprints/automation/push_button_music_controller.yaml",
-      "sha256": "851b8ef55692e3e91be4945834333a14c5d547395107538d4a99bf2dac402ce8",
+      "sha256": "9adf28cc9d323208b0c5d2de6ded61306b07f00c6de0ac5d588ddc9a828a4c7e",
       "status": "active"
     },
     {
@@ -45,7 +45,7 @@
       "id": "sensor_state_machine",
       "name": "Hippo's Sensor-based State Machine",
       "path": "blueprints/automation/sensor_state_machine.yaml",
-      "sha256": "71ec0c1fd0b060e12497e52a27f86190c07340412411a26792df38968805ae2d",
+      "sha256": "d566b56e3d800eacf7c7c53d5b11d6758b1576a6eb3e87b2e31c139301821e65",
       "status": "active"
     }
   ],

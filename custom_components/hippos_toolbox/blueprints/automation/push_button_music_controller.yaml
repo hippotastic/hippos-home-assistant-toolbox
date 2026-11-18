@@ -8,7 +8,6 @@ blueprint:
     Failed favorites are skipped automatically. Requires one dedicated Text helper
     with a maximum length of 255 characters. (V1.2)
   domain: automation
-  source_url: https://github.com/hippotastic/hippos-home-assistant-toolbox/blob/main/blueprints/automation/push_button_music_controller.yaml
   author: Hippo
   homeassistant:
     min_version: 2025.7.0

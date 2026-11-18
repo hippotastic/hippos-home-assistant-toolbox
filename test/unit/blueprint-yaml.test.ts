@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { parseDocument } from 'yaml'
+import { BLUEPRINT_DIRECTORY } from '../../tools/blueprint-catalog/catalog.ts'
 
 const HOME_ASSISTANT_YAML_TAGS = [
 	'!env_var',
@@ -31,7 +32,7 @@ describe('Blueprint YAML', () => {
 	})
 
 	test('defines the intended music controller defaults', () => {
-		const document = parseDocument(readFileSync(join(process.cwd(), 'blueprints', 'automation', 'push_button_music_controller.yaml'), 'utf8'), {
+		const document = parseDocument(readFileSync(join(process.cwd(), BLUEPRINT_DIRECTORY, 'automation', 'push_button_music_controller.yaml'), 'utf8'), {
 			customTags: HOME_ASSISTANT_YAML_TAGS,
 		})
 
@@ -42,7 +43,7 @@ describe('Blueprint YAML', () => {
 	})
 
 	test('excludes only standard Home Assistant error states in cover input triggers', () => {
-		const document = parseDocument(readFileSync(join(process.cwd(), 'blueprints', 'automation', 'cover_automation.yaml'), 'utf8'), {
+		const document = parseDocument(readFileSync(join(process.cwd(), BLUEPRINT_DIRECTORY, 'automation', 'cover_automation.yaml'), 'utf8'), {
 			customTags: HOME_ASSISTANT_YAML_TAGS,
 		})
 		const { triggers } = document.toJS() as { triggers: { id: string; not_to?: string[] }[] }
@@ -58,7 +59,7 @@ describe('Blueprint YAML', () => {
 
 function validationYamlFiles(): string[] {
 	const repoRoot = process.cwd()
-	return [join(repoRoot, 'blueprints', 'automation'), join(repoRoot, 'test', 'home-assistant', 'blueprint-loading', 'fixtures')].flatMap((directory) =>
+	return [join(repoRoot, BLUEPRINT_DIRECTORY, 'automation'), join(repoRoot, 'test', 'home-assistant', 'blueprint-loading', 'fixtures')].flatMap((directory) =>
 		readdirSync(directory)
 			.filter((file) => file.endsWith('.yaml'))
 			.sort()

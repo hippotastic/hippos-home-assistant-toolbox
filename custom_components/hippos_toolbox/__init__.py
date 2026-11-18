@@ -4,26 +4,22 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
 from .announcements import async_setup_announcements
-from .api import ToolboxApi
 from .camera_stream import async_stop_camera_streams
 from .const import (
     CONF_SOURCE_ENTITY_ID,
     CONF_CAMERA_STREAM_CLEANUP,
-    CONF_UPDATE_CHANNEL,
-    DEFAULT_UPDATE_CHANNEL,
     DOMAIN,
     MONITORING_SUBENTRY_TYPE,
     PLATFORMS,
     PROGRESSIVE_CAMERA_SUBENTRY_TYPE,
-    normalize_update_channel,
 )
-from .coordinator import ToolboxCoordinator
 from .frontend import (
     async_setup_frontend,
     async_setup_entry_frontend,
@@ -43,9 +39,7 @@ class ToolboxRuntimeData:
     """Runtime objects shared by the integration platforms."""
 
     manager: BlueprintManager
-    coordinator: ToolboxCoordinator
     progressive_camera_manager: _ProgressiveCameraManager
-    update_channel: str
     camera_subentries: dict[str, tuple[str, dict[str, Any]]]
     monitor: _ProblemMonitor | None
     monitor_notifications: _MonitoringNotifications | None
@@ -67,19 +61,10 @@ async def async_setup_entry(
     hass: HomeAssistant,
     entry: ToolboxConfigEntry,
 ) -> bool:
-    """Set up the toolbox and install missing blueprints."""
+    """Set up the toolbox with its bundled blueprints."""
 
-    update_channel = normalize_update_channel(
-        entry.options.get(CONF_UPDATE_CHANNEL, DEFAULT_UPDATE_CHANNEL)
-    )
-
-    api = ToolboxApi(async_get_clientsession(hass), update_channel)
-    manager = BlueprintManager(hass, api)
-    coordinator = ToolboxCoordinator(hass, entry, manager)
-    await coordinator.async_config_entry_first_refresh()
-    coordinator.async_set_updated_data(
-        await manager.async_install_initial(coordinator.data)
-    )
+    manager = BlueprintManager(hass)
+    await manager.async_setup()
 
     camera_subentries = {
         subentry.subentry_id: (subentry.title, dict(subentry.data))
@@ -107,9 +92,7 @@ async def async_setup_entry(
     await progressive_camera_manager.async_start()
     entry.runtime_data = ToolboxRuntimeData(
         manager=manager,
-        coordinator=coordinator,
         progressive_camera_manager=progressive_camera_manager,
-        update_channel=update_channel,
         camera_subentries=camera_subentries,
         monitor=monitor,
         monitor_notifications=None,
@@ -132,6 +115,31 @@ async def async_setup_entry(
         if entry.runtime_data.monitor_notifications is not None:
             await entry.runtime_data.monitor_notifications.async_stop()
         raise
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ToolboxConfigEntry) -> bool:
+    """Remove the retired blueprint updater from existing config entries."""
+
+    if entry.version != 1:
+        return False
+    if entry.minor_version >= 2:
+        return True
+
+    registry = er.async_get(hass)
+    for platform, unique_id in (
+        (Platform.BUTTON, f"{DOMAIN}_check_for_updates"),
+        (Platform.UPDATE, f"{DOMAIN}_blueprints"),
+    ):
+        entity_id = registry.async_get_entity_id(platform, DOMAIN, unique_id)
+        if entity_id is not None:
+            registered = registry.async_get(entity_id)
+            if registered is not None and registered.config_entry_id == entry.entry_id:
+                registry.async_remove(entity_id)
+
+    options = dict(entry.options)
+    options.pop("update_channel", None)
+    hass.config_entries.async_update_entry(entry, options=options, minor_version=2)
     return True
 
 
@@ -161,9 +169,6 @@ async def _async_reload_entry(
     async_update_frontend(hass, entry)
     if not entry.options.get(CONF_CAMERA_STREAM_CLEANUP, True):
         async_stop_camera_streams(hass)
-    update_channel = normalize_update_channel(
-        entry.options.get(CONF_UPDATE_CHANNEL, DEFAULT_UPDATE_CHANNEL)
-    )
     camera_subentries = {
         subentry.subentry_id: (subentry.title, dict(subentry.data))
         for subentry in entry.subentries.values()
@@ -174,8 +179,7 @@ async def _async_reload_entry(
         if item.subentry_type == MONITORING_SUBENTRY_TYPE
     }
     if (
-        update_channel != entry.runtime_data.update_channel
-        or camera_subentries != entry.runtime_data.camera_subentries
+        camera_subentries != entry.runtime_data.camera_subentries
         or monitoring_subentries != entry.runtime_data.monitoring_subentries
     ):
         await hass.config_entries.async_reload(entry.entry_id)
