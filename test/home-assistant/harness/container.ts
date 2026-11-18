@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import type { TestProject } from 'vitest/node'
 import { requestHomeAssistant, type BlueprintRuntimeDiagnostics } from './client.ts'
 import { applyBlueprintTestValueOverrides } from './blueprint-test-overrides.ts'
@@ -45,7 +45,7 @@ export async function setupRuntimeFixture(project: TestProject, repoRoot: string
 
 	try {
 		await waitForFixture(fixture)
-		requestHomeAssistant(containerName, 'run_blueprint_adoption', {}, 'POST')
+		requestHomeAssistant(containerName, 'run_blueprint_sync', {}, 'POST')
 		requestHomeAssistant(containerName, 'clear_events', {}, 'POST')
 		fixture.runtimeLogStart = completeLogs(fixture).length
 		project.provide('haBlueprintContainerName', containerName)
@@ -77,12 +77,9 @@ function prepareConfig(repoRoot: string): string {
 	const configDir = mkdtempSync(join(tmpdir(), 'ha-blueprint-runtime-test.'))
 	const runtimeFixtureDir = join(repoRoot, 'test', 'home-assistant', 'runtime', 'fixtures')
 	const targetBlueprintDir = join(configDir, 'blueprints', 'automation', 'hippotastic')
-	const targetLegacyBlueprintDir = join(configDir, 'blueprints', 'automation', 'hippo')
 	const targetTestIntegrationDir = join(configDir, 'custom_components', 'blueprint_test')
 	const targetToolboxIntegrationDir = join(configDir, 'custom_components', 'hippos_toolbox')
 
-	mkdirSync(targetBlueprintDir, { recursive: true })
-	mkdirSync(targetLegacyBlueprintDir, { recursive: true })
 	cpSync(join(runtimeFixtureDir, 'configuration.yaml'), join(configDir, 'configuration.yaml'))
 	cpSync(join(runtimeFixtureDir, 'custom_components', 'blueprint_test'), targetTestIntegrationDir, { recursive: true })
 	cpSync(join(repoRoot, 'custom_components', 'hippos_toolbox'), targetToolboxIntegrationDir, {
@@ -91,33 +88,27 @@ function prepareConfig(repoRoot: string): string {
 	})
 	renameSync(join(targetTestIntegrationDir, 'manifest.fixture.json'), join(targetTestIntegrationDir, 'manifest.json'))
 
-	for (const file of readdirSync(join(repoRoot, BLUEPRINT_DIRECTORY, 'automation'))
-		.filter((name) => name.endsWith('.yaml'))
-		.sort()) {
-		copyRuntimeBlueprint(join(repoRoot, BLUEPRINT_DIRECTORY, 'automation', file), join(targetBlueprintDir, basename(file)))
+	// Match the installed test timings to the bundle that the sync checks against.
+	const catalogPath = join(targetToolboxIntegrationDir, 'blueprints', 'catalog.json')
+	const catalog = parseCatalog(readFileSync(catalogPath, 'utf8'), catalogPath)
+	for (const entry of catalog.blueprints) {
+		if (entry.status !== 'active' || entry.domain !== 'automation') continue
+		const bundledPath = join(targetToolboxIntegrationDir, entry.path)
+		const source = applyBlueprintTestValueOverrides(readFileSync(bundledPath, 'utf8'), bundledPath)
+		entry.sha256 = blueprintHash(source)
+		writeFileSync(bundledPath, source, 'utf8')
+		const installedPath = join(targetBlueprintDir, entry.path.slice('blueprints/automation/'.length))
+		mkdirSync(dirname(installedPath), { recursive: true })
+		const installedSource = entry.id === 'cover_automation' ? `${source.trimEnd()}\n# Local fixture edit\n` : source
+		writeFileSync(installedPath, installedSource, 'utf8')
 	}
-	const legacyCoverSourcePath = join(repoRoot, BLUEPRINT_DIRECTORY, 'automation', 'cover_automation.yaml')
-	const legacyCoverSource = applyBlueprintTestValueOverrides(readFileSync(legacyCoverSourcePath, 'utf8'), legacyCoverSourcePath)
-	// The adoption test installs the test-timed cover blueprint from the bundled catalog.
-	const fixtureCatalogPath = join(targetToolboxIntegrationDir, 'blueprints', 'catalog.json')
-	const fixtureCatalog = parseCatalog(readFileSync(fixtureCatalogPath, 'utf8'), fixtureCatalogPath)
-	const fixtureCover = fixtureCatalog.blueprints.find((entry) => entry.id === 'cover_automation')
-	if (!fixtureCover) throw new Error('The bundled catalog is missing the cover automation blueprint')
-	fixtureCover.sha256 = blueprintHash(legacyCoverSource)
-	writeFileSync(join(targetToolboxIntegrationDir, fixtureCover.path), legacyCoverSource, 'utf8')
-	writeFileSync(fixtureCatalogPath, serializeCatalog(fixtureCatalog), 'utf8')
-	writeFileSync(join(targetLegacyBlueprintDir, 'cover_automation.yaml'), `${legacyCoverSource.trimEnd()}\n\n# Local pre-integration version\n`, 'utf8')
+	writeFileSync(catalogPath, serializeCatalog(catalog), 'utf8')
 	for (const [file, source] of Object.entries(generatedFixtureFiles())) {
 		writeFileSync(join(configDir, file), source, 'utf8')
 	}
 	prepareValidatorConfig(repoRoot, configDir)
 
 	return configDir
-}
-
-function copyRuntimeBlueprint(sourcePath: string, targetPath: string): void {
-	const source = readFileSync(sourcePath, 'utf8')
-	writeFileSync(targetPath, applyBlueprintTestValueOverrides(source, sourcePath), 'utf8')
 }
 
 function prepareValidatorConfig(repoRoot: string, configDir: string): void {

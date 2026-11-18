@@ -26,7 +26,7 @@ from .frontend import (
     async_unload_frontend,
     async_update_frontend,
 )
-from .manager import BlueprintManager
+from .manager import async_sync_blueprints
 from .monitoring import _ProblemMonitor
 from .monitoring_notifications import _MonitoringNotifications
 from .progressive_camera import _ProgressiveCameraManager
@@ -38,7 +38,6 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 class ToolboxRuntimeData:
     """Runtime objects shared by the integration platforms."""
 
-    manager: BlueprintManager
     progressive_camera_manager: _ProgressiveCameraManager
     camera_subentries: dict[str, tuple[str, dict[str, Any]]]
     monitor: _ProblemMonitor | None
@@ -63,8 +62,7 @@ async def async_setup_entry(
 ) -> bool:
     """Set up the toolbox with its bundled blueprints."""
 
-    manager = BlueprintManager(hass)
-    await manager.async_setup()
+    await async_sync_blueprints(hass)
 
     camera_subentries = {
         subentry.subentry_id: (subentry.title, dict(subentry.data))
@@ -91,7 +89,6 @@ async def async_setup_entry(
         await monitor.async_load()
     await progressive_camera_manager.async_start()
     entry.runtime_data = ToolboxRuntimeData(
-        manager=manager,
         progressive_camera_manager=progressive_camera_manager,
         camera_subentries=camera_subentries,
         monitor=monitor,
