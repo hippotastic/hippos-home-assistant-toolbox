@@ -50,24 +50,6 @@ function exponentialMovingAverageAutomations(): Automation[] {
 	]
 }
 
-function legacyAdoptionAutomations(): Automation[] {
-	const scenario = COVER_SCENARIOS.default
-	const automation = (id: string): Automation => ({
-		alias: `Fixture legacy blueprint adoption ${id}`,
-		id: `fixture_legacy_blueprint_adoption_${id}`,
-		initial_state: false,
-		use_blueprint: {
-			input: {
-				...scenario.commonInputs,
-				cover_entity: scenario.entities.cover,
-				cover_status_helper_entity: scenario.entities.helper,
-			},
-			path: 'hippo/cover_automation.yaml',
-		},
-	})
-	return [automation('one'), automation('two')]
-}
-
 function sensorAutomations(): Automation[] {
 	return Object.values(SENSOR_SCENARIOS).map((scenario) => {
 		const input: Record<string, unknown> = {
@@ -261,7 +243,7 @@ export function generatedFixtureFiles(): Record<string, string> {
 
 	return {
 		'automations.yaml': stringify(
-			[...coverAutomations(), ...exponentialMovingAverageAutomations(), ...legacyAdoptionAutomations(), ...sensorAutomations(), ...irrigationAutomations(), ...musicAutomations()],
+			[...coverAutomations(), ...exponentialMovingAverageAutomations(), ...sensorAutomations(), ...irrigationAutomations(), ...musicAutomations()],
 			yamlOptions
 		),
 		'fixture_covers.yaml': stringify(covers, yamlOptions),
@@ -299,7 +281,6 @@ export function expectedAutomationStates(): Array<{ entityId: string; state: 'of
 			entityId: `automation.${automation.id}`,
 			state: EMA_SCENARIO.initial.automationEnabled ? ('on' as const) : ('off' as const),
 		})),
-		...legacyAdoptionAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'off' as const })),
 		...irrigationAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'off' as const })),
 		...musicAutomations().map((automation) => ({ entityId: `automation.${automation.id}`, state: 'on' as const })),
 	]

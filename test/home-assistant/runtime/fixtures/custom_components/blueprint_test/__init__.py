@@ -46,8 +46,8 @@ class BlueprintTestView(HomeAssistantView):
         if command == "diagnostics":
             return web.json_response(_diagnostics(hass))
 
-        if command == "blueprint_adoption_result":
-            return web.json_response(hass.data[DOMAIN]["blueprint_adoption_result"])
+        if command == "blueprint_sync_result":
+            return web.json_response(hass.data[DOMAIN]["blueprint_sync_result"])
 
         return web.json_response({"error": "unknown command"}, status=404)
 
@@ -136,9 +136,9 @@ class BlueprintTestView(HomeAssistantView):
             await asyncio.sleep(0)
             return web.json_response({"fired": fired})
 
-        if command == "run_blueprint_adoption":
-            result = await _run_blueprint_adoption(hass)
-            hass.data[DOMAIN]["blueprint_adoption_result"] = result
+        if command == "run_blueprint_sync":
+            result = await _run_blueprint_sync(hass)
+            hass.data[DOMAIN]["blueprint_sync_result"] = result
             return web.json_response(result)
 
         if command == "diagnostics":
@@ -280,79 +280,39 @@ def _serializable(value: Any) -> Any:
     return str(value)
 
 
-async def _run_blueprint_adoption(hass: HomeAssistant) -> dict[str, Any]:
-    """Exercise production adoption against a loaded legacy automation."""
+async def _run_blueprint_sync(hass: HomeAssistant) -> dict[str, Any]:
+    """Update the file used by an already loaded automation."""
+    from custom_components.hippos_toolbox.manager import async_sync_blueprints
 
-    from custom_components.hippos_toolbox.catalog import load_catalog
-    from custom_components.hippos_toolbox.manager import BlueprintManager
+    reference = "hippotastic/cover_automation.yaml"
+    installed = Path(hass.config.path("blueprints", "automation", reference))
+    bundled = Path(hass.config.path(
+        "custom_components", "hippos_toolbox", "blueprints", "automation", "cover_automation.yaml"
+    ))
+    configuration = Path(hass.config.path("automations.yaml"))
+    automation_id = "automation.fixture_cover_default"
+    component = hass.data["automation"]
 
-    blueprint_id = "cover_automation"
-    legacy_reference = "hippo/cover_automation.yaml"
-    managed_reference = "hippotastic/cover_automation.yaml"
-    legacy_path = Path(
-        hass.config.path("blueprints", "automation", legacy_reference)
-    )
-    managed_path = Path(
-        hass.config.path("blueprints", "automation", managed_reference)
-    )
-    automation_component = hass.data["automation"]
-    automation_entity_ids = (
-        "automation.fixture_legacy_blueprint_adoption_one",
-        "automation.fixture_legacy_blueprint_adoption_two",
-    )
+    previous_content = await hass.async_add_executor_job(installed.read_bytes)
+    config_before = await hass.async_add_executor_job(configuration.read_bytes)
+    state_before = hass.states.get(automation_id)
+    entity_before = component.get_entity(automation_id)
+    assert state_before is not None and entity_before is not None
 
-    def referenced_blueprints() -> list[str | None]:
-        entities = (
-            automation_component.get_entity(entity_id)
-            for entity_id in automation_entity_ids
-        )
-        return [
-            None if entity is None else entity.referenced_blueprint
-            for entity in entities
-        ]
+    await async_sync_blueprints(hass)
 
-    def in_use(reference: str) -> int:
-        return sum(
-            entity.referenced_blueprint == reference
-            for entity in automation_component.entities
-        )
-
-    before_states = [hass.states.get(entity_id) for entity_id in automation_entity_ids]
-    assert all(state is not None for state in before_states)
-    before = {
-        "automation_states": [state.state for state in before_states],
-        "legacy_in_use": in_use(legacy_reference),
-        "managed_in_use": in_use(managed_reference),
-        "references": referenced_blueprints(),
-    }
-    manager = BlueprintManager(hass)
-    manager._entries = await hass.async_add_executor_job(load_catalog)
-    restored = await manager.async_restore_blueprint(blueprint_id)
-    automations_path = Path(hass.config.path("automations.yaml"))
-    automations_source = await hass.async_add_executor_job(
-        _read_utf8, automations_path
-    )
-    after_states = [hass.states.get(entity_id) for entity_id in automation_entity_ids]
-    assert all(state is not None for state in after_states)
-    after = {
-        "automation_states": [state.state for state in after_states],
-        "legacy_in_use": in_use(legacy_reference),
-        "managed_in_use": in_use(managed_reference),
-        "references": referenced_blueprints(),
-    }
+    state_after = hass.states.get(automation_id)
+    entity_after = component.get_entity(automation_id)
+    assert state_after is not None and entity_after is not None
+    content = await hass.async_add_executor_job(installed.read_bytes)
     return {
-        "after": after,
-        "automations_use_legacy_path": legacy_reference in automations_source,
-        "automations_use_managed_path": managed_reference in automations_source,
-        "before": before,
-        "legacy_file_exists": await hass.async_add_executor_job(legacy_path.exists),
-        "managed_file_exists": await hass.async_add_executor_job(managed_path.exists),
-        "restored": restored,
+        "file_updated": previous_content != content and content == await hass.async_add_executor_job(bundled.read_bytes),
+        "configuration_unchanged": config_before == await hass.async_add_executor_job(configuration.read_bytes),
+        "reference_before": entity_before.referenced_blueprint,
+        "reference_after": entity_after.referenced_blueprint,
+        "state_before": state_before.state,
+        "state_after": state_after.state,
     }
-
-
-def _read_utf8(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
 
 
 async def _wait_state(hass: HomeAssistant, entity_id: str, expected_state: str, timeout: float) -> dict[str, Any]:

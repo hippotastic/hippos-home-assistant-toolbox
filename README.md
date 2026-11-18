@@ -23,15 +23,9 @@ Files are installed under:
 /config/blueprints/<domain>/hippotastic/
 ```
 
-Before replacing an existing file, the integration keeps up to three copies in:
-
-```text
-/config/blueprints/.hippos_toolbox_backups/
-```
-
 ## Updates
 
-Update the toolbox and restart Home Assistant to apply the blueprints included in the new version. Existing automations keep their blueprint paths and inputs. If you edited a managed blueprint locally, Home Assistant shows a Repair where you can keep your version or restore the bundled file.
+Update the toolbox and restart Home Assistant to apply the blueprints included in the new version. On setup, the toolbox installs the bundled files at their established paths and replaces copies whose contents differ, including local edits. Customize automations through their blueprint inputs.
 
 ## Features
 

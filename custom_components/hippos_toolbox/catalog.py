@@ -1,5 +1,6 @@
 """Read and verify the blueprint files shipped with the integration."""
 
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
@@ -9,9 +10,22 @@ from homeassistant.exceptions import HomeAssistantError
 
 from .const import CATALOG_PATH, CATALOG_SCHEMA_VERSION, SUPPORTED_BLUEPRINT_DOMAINS
 from .hashing import blueprint_hash
-from .models import CatalogEntry
 
 _PACKAGE_ROOT = Path(__file__).parent
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogEntry:
+    """An entry in the bundled blueprint catalog."""
+
+    id: str
+    name: str
+    domain: str
+    path: str
+    sha256: str
+    status: str
+    deprecated_message: str | None = None
+    replacement: str | None = None
 
 
 def load_catalog() -> tuple[CatalogEntry, ...]:

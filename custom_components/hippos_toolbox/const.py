@@ -5,7 +5,6 @@ from homeassistant.const import Platform
 DOMAIN = "hippos_toolbox"
 NAME = "Hippo's Home Assistant Toolbox"
 MANAGED_DIRECTORY = "hippotastic"
-ADOPTABLE_BLUEPRINT_DIRECTORIES = ("hippo",)
 PLATFORMS: list[Platform] = [Platform.CAMERA, Platform.EVENT, Platform.SENSOR]
 CATALOG_PATH = "blueprints/catalog.json"
 
@@ -100,6 +99,3 @@ MONITORING_NOTIFICATION_DEFAULTS = {
 
 CATALOG_SCHEMA_VERSION = 1
 SUPPORTED_BLUEPRINT_DOMAINS = frozenset(("automation", "script", "template"))
-STORAGE_KEY = DOMAIN
-STORAGE_VERSION = 1
-BACKUP_COUNT = 3
